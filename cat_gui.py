@@ -48,37 +48,230 @@ _FREQ_FONT_FAMILY = None   # font family for frequency digits (LO/Tune)
 _GUI_FONT_FAMILY  = None   # font family for all other GUI text
 
 def _load_custom_fonts(root):
+    """Register custom TTF/OTF font files with Tk.
+
+    Works without any third-party packages on Linux/macOS/Windows by:
+      1. Copying the font file into ~/.local/share/fonts/  (Linux/macOS) or
+         C:/Windows/Fonts/ equivalent and refreshing the OS font cache so Tk's
+         underlying fontconfig/FreeType stack picks it up.
+      2. Deriving the PostScript family name from the file using fonttools if
+         available, otherwise falling back to filename-stem heuristics.
+      3. Verifying the family actually appears in tkinter.font.families()
+         after a forced Tk update; if not, logging a clear warning.
+
+    On Windows the font is registered in the user font directory via
+    ctypes / AddFontResourceEx so no admin rights are needed.
+    """
     global _FREQ_FONT_FAMILY, _GUI_FONT_FAMILY
     import tkinter.font as tkfont
+    import shutil, subprocess, platform
+
+    _USER_FONT_DIR_LINUX  = os.path.expanduser("~/.local/share/fonts")
+    _USER_FONT_DIR_MAC    = os.path.expanduser("~/Library/Fonts")
+
+    def _install_font_linux(path):
+        os.makedirs(_USER_FONT_DIR_LINUX, exist_ok=True)
+        dst = os.path.join(_USER_FONT_DIR_LINUX, os.path.basename(path))
+        if not os.path.exists(dst) or os.path.getmtime(path) > os.path.getmtime(dst):
+            shutil.copy2(path, dst)
+        try:
+            subprocess.run(["fc-cache", "-f", _USER_FONT_DIR_LINUX],
+                           check=False, capture_output=True, timeout=10)
+        except Exception:
+            pass
+
+    def _install_font_mac(path):
+        os.makedirs(_USER_FONT_DIR_MAC, exist_ok=True)
+        dst = os.path.join(_USER_FONT_DIR_MAC, os.path.basename(path))
+        if not os.path.exists(dst) or os.path.getmtime(path) > os.path.getmtime(dst):
+            shutil.copy2(path, dst)
+
+    def _install_font_windows(path):
+        import ctypes
+        from ctypes import wintypes
+        # FR_PRIVATE (0x10) | FR_NOT_ENUM (0x20) — private, no admin needed
+        gdi = ctypes.WinDLL("gdi32", use_last_error=True)
+        gdi.AddFontResourceExW(path, 0x10 | 0x20, None)
+
+    def _family_from_fonttools(path):
+        """Return the PostScript family name embedded in the font file."""
+        try:
+            from fontTools.ttLib import TTFont
+            tt = TTFont(path, fontNumber=0)
+            name_table = tt["name"]
+            # nameID 1 = Family name, 16 = Preferred family
+            for nid in (16, 1):
+                rec = name_table.getName(nid, 3, 1, 0x0409)  # Windows/Unicode/EN
+                if rec is None:
+                    rec = name_table.getName(nid, 1, 0, 0)   # Mac
+                if rec:
+                    return rec.toUnicode().strip()
+        except Exception:
+            pass
+        return None
+
+    def _family_from_fc(path):
+        """Ask fontconfig for the family name (Linux/macOS only)."""
+        try:
+            r = subprocess.run(
+                ["fc-query", "--format=%{family}\n", path],
+                capture_output=True, text=True, timeout=5)
+            lines = [l.strip() for l in r.stdout.splitlines() if l.strip()]
+            if lines:
+                # fc-query may return comma-separated or newline-separated names;
+                # take the first token
+                return lines[0].split(",")[0].strip()
+        except Exception:
+            pass
+        return None
+
+    def _family_from_stem(path):
+        stem = os.path.splitext(os.path.basename(path))[0]
+        return stem.replace("_", " ").replace("-", " ").title()
+
+    def _wait_for_family(root, family, retries=6, delay_ms=120):
+        """Return True once family appears in tkfont.families()."""
+        fams = set(tkfont.families(root))
+        if family in fams:
+            return True
+        # Poll: give Tk a moment to ingest the new fontconfig cache
+        for _ in range(retries):
+            root.update()
+            import time; time.sleep(delay_ms / 1000)
+            fams = set(tkfont.families(root))
+            if family in fams:
+                return True
+        return False
+
+    def _register_appfont(path, plat):
+        """Register the font directly with *this process's* live font
+        config so Tk can see it immediately — no root, no waiting.
+
+        Copying the file into ~/.local/share/fonts and running fc-cache
+        (done in _install_font_linux above) only refreshes the on-disk
+        fontconfig cache. The Xft font backend Tk is already using in
+        this running process opened its own in-memory FcConfig at
+        startup, and that in-memory copy has no way to know a new file
+        appeared on disk — fontconfig only rescans after its cache
+        rescan interval (default 30s), and even then only on a cold
+        lookup. That's why the family shows up as "not visible to Tk"
+        right after install, regardless of whether you're root.
+
+        FcConfigAppFontAddFile() mutates that same in-memory FcConfig
+        object in place (this is the identical mechanism GTK/Pango use
+        for "private" application fonts), so the family appears in
+        tkinter.font.families() the instant this call returns. macOS
+        gets the CoreText equivalent, scoped to the process only.
+        """
+        if plat == "Linux":
+            try:
+                import ctypes, ctypes.util
+                libname = ctypes.util.find_library("fontconfig") or "libfontconfig.so.1"
+                fc = ctypes.CDLL(libname)
+                fc.FcConfigAppFontAddFile.restype = ctypes.c_int
+                fc.FcConfigAppFontAddFile.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+                return bool(fc.FcConfigAppFontAddFile(None, path.encode("utf-8")))
+            except Exception:
+                return False
+        elif plat == "Darwin":
+            try:
+                import ctypes
+                cf = ctypes.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+                ct = ctypes.CDLL("/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices")
+                cf.CFStringCreateWithCString.restype  = ctypes.c_void_p
+                cf.CFStringCreateWithCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32]
+                cf.CFURLCreateWithFileSystemPath.restype  = ctypes.c_void_p
+                cf.CFURLCreateWithFileSystemPath.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+                ct.CTFontManagerRegisterFontsForURL.restype  = ctypes.c_int
+                ct.CTFontManagerRegisterFontsForURL.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+                kCFStringEncodingUTF8      = 0x08000100
+                kCFURLPOSIXPathStyle       = 0
+                kCTFontManagerScopeProcess = 1
+                cfstr = cf.CFStringCreateWithCString(None, path.encode("utf-8"), kCFStringEncodingUTF8)
+                cfurl = cf.CFURLCreateWithFileSystemPath(None, cfstr, kCFURLPOSIXPathStyle, False)
+                return bool(ct.CTFontManagerRegisterFontsForURL(cfurl, kCTFontManagerScopeProcess, None))
+            except Exception:
+                return False
+        return False
 
     def _load(path, tag):
         if not path:
             return None
         path = os.path.abspath(path)
         if not os.path.isfile(path):
-            print(f'[font] WARNING: {tag} file not found: {path}')
+            print(f"[font] WARNING: {tag} font file not found: {path}")
             return None
-        try:
-            root.tk.call('font', 'create', f'_custom_{tag}')
-        except Exception:
-            pass
-        try:
-            root.tk.call('font', 'configure', f'_custom_{tag}', '-file', path)
-            fam = root.tk.call('font', 'configure', f'_custom_{tag}', '-family')
-            return fam if fam else None
-        except Exception:
-            pass
-        try:
-            import pyglet
-            pyglet.font.add_file(path)
-        except Exception:
-            pass
-        stem = os.path.splitext(os.path.basename(path))[0]
-        fam = stem.replace('_', ' ').replace('-', ' ').title()
-        return fam
 
-    _FREQ_FONT_FAMILY = _load(_ARGS.freq_font, 'freq')
-    _GUI_FONT_FAMILY  = _load(_ARGS.gui_font,  'gui')
+        plat = platform.system()
+
+        # ── Step 1: install / register the font file with the OS ────────────
+        try:
+            if plat == "Linux":
+                _install_font_linux(path)
+            elif plat == "Darwin":
+                _install_font_mac(path)
+            elif plat == "Windows":
+                _install_font_windows(path)
+        except Exception as e:
+            print(f"[font] WARNING: {tag} OS font install failed: {e}")
+
+        # ── Step 1b: register with *this* process's live font config ────────
+        # The OS-level install above is for persistence (other apps, future
+        # runs); this is what actually makes the family visible to Tk right
+        # now. See _register_appfont() docstring for why this is necessary.
+        if _register_appfont(path, plat):
+            root.update()
+
+        # ── Step 2: determine the PostScript family name ─────────────────────
+        family = None
+
+        # fonttools gives the authoritative embedded name
+        family = _family_from_fonttools(path)
+
+        # fc-query is a reliable second source on Linux/macOS
+        if not family and plat in ("Linux", "Darwin"):
+            family = _family_from_fc(path)
+
+        # fall back to filename stem
+        if not family:
+            family = _family_from_stem(path)
+
+        # ── Step 3: verify Tk can actually see the family ────────────────────
+        if _wait_for_family(root, family):
+            print(f"[font] {tag}: loaded → \"{family}\"")
+            return family
+
+        # Family not found even after waiting — log candidates for debugging
+        fams = sorted(tkfont.families(root))
+        stem = _family_from_stem(path)
+        # try case-insensitive match as a last resort
+        lc_family  = (family or "").lower()
+        lc_stem    = stem.lower()
+        for f in fams:
+            if f.lower() == lc_family or f.lower() == lc_stem:
+                print(f"[font] {tag}: case-insensitive match → \"{f}\"")
+                return f
+
+        print(f"[font] WARNING: {tag}: family \"{family}\" not visible to Tk after install.")
+        print(f"[font]   Install the font system-wide, or: pip install fonttools")
+        return None
+
+    _FREQ_FONT_FAMILY = _load(_ARGS.freq_font, "freq")
+    _GUI_FONT_FAMILY  = _load(_ARGS.gui_font,  "gui")
+
+    # Propagate the gui font into all of Tk's named system fonts so that every
+    # widget using TkDefaultFont / TkTextFont / TkFixedFont etc. picks it up
+    # automatically without needing individual overrides.
+    if _GUI_FONT_FAMILY:
+        for named in ("TkDefaultFont", "TkTextFont", "TkMenuFont",
+                      "TkHeadingFont", "TkCaptionFont", "TkSmallCaptionFont",
+                      "TkIconFont", "TkTooltipFont"):
+            try:
+                tkfont.nametofont(named).configure(family=_GUI_FONT_FAMILY)
+            except Exception:
+                pass
+        print(f'[font] gui font "{_GUI_FONT_FAMILY}" applied to all Tk system fonts')
+
 
 def _freq_font(size, *modifiers):
     fam = _FREQ_FONT_FAMILY or 'TkDefaultFont'
