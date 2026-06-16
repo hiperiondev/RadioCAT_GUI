@@ -13,10 +13,12 @@ simulado a través de un socket TCP plano.
 Consta de dos archivos:
 
 - `cat_server.py` — un servidor TCP que actúa como capa de hardware/backend.
-  Gestiona todo el "estado de la radio" y transmite un entorno RF simulado.
+  Gestiona todo el "estado de la radio", transmite un entorno RF simulado y
+  administra un canal de audio RTP/UDP bidireccional.
 - `cat_gui.py` — un cliente Tkinter que proporciona la ventana principal de la
   Interfaz GUI CAT y envía cada interacción del usuario al servidor,
-  redibujando a partir de los datos que el servidor retransmite.
+  redibujando a partir de los datos que el servidor retransmite. También
+  reproduce el audio RTP recibido y envía audio de micrófono durante PTT.
 
 ---
 
@@ -42,13 +44,15 @@ Definida por Software. Puntos clave:
     directamente sobre el espectro, cuyos bordes definen el ancho de banda
     del demodulador.
   - Botones de modo: **AM, ECSS, FM, LSB, USB, CW, DIG**, cada uno con una
-    banda de paso de filtro predeterminada razonable.
-  - Un único botón de alternancia **AGC Med** (en la segunda fila DSP), más
-    las alternativas **Notch** y **ANotch**.
+    banda de paso de filtro predeterminada razonable. Nota: los modos ECSS y
+    DIG solo cambian la etiqueta del modo — los bordes del filtro no se
+    modifican al seleccionarlos.
   - Botones de alternancia DSP: **NR** (reducción de ruido), **NB RF**
     (cancelador de ruido RF), **NB IF** (cancelador de ruido IF) y **AFC**
     (control automático de frecuencia) en la primera fila; **Silencio**,
-    **AGC Med**, **Notch** y **ANotch** en la segunda fila.
+    **AGC Med**, **Notch** y **ANotch** en la segunda fila. No existe botón
+    "NB" independiente; el indicador `nb` del estado del servidor no tiene
+    control en la GUI.
   - Hasta 6 **botones definidos por el usuario** (3 por fila DSP, alineados
     a la derecha), cuyos etiquetas y tipos (momentáneo o pulsador/alternancia)
     se configuran en el lado del servidor.
@@ -68,7 +72,9 @@ Definida por Software. Puntos clave:
   - Control **Iniciar/Detener** sobre el flujo del receptor.
   - Botones auxiliares del S-meter: **Pico**, **Unidades S**, **Squelch**.
   - Botones de función: **SDR-Device**, **Soundcard**, **Bandwidth**,
-    **Options**, **FreqMgr**.
+    **Options**, **FreqMgr**. Nota: **Soundcard** abre un cuadro de diálogo
+    local de selección de dispositivos de audio y **no** envía ningún comando
+    al servidor.
   - Un **reloj de fecha/hora** en vivo y un botón TCP **Conectar/Desconectar**
     con un indicador de estado de color.
   - Dos barras de herramientas (una entre la cascada RF y el panel de control,
@@ -77,6 +83,21 @@ Definida por Software. Puntos clave:
   - Una superposición persistente **HiDPI +/−** en la esquina inferior derecha
     para ajuste de escala en tiempo real desde el nivel −5 hasta +5
     (factor 1,25 por paso).
+  - Un botón circular **PTT** (en la fila del S-meter) que alterna el modo de
+    transmisión; mientras PTT está activo, la GUI envía audio de micrófono al
+    servidor vía RTP/UDP y deja de reproducir el audio recibido.
+- **Canal de audio RTP/UDP.** Además de la conexión TCP de control, el servidor
+  abre un puerto UDP (predeterminado 5004) para audio bidireccional G.711 µ-law
+  (PCMU). Con PTT desactivado, el servidor transmite un tono sinusoidal de
+  demostración a la GUI; con PTT activado, la GUI captura audio de micrófono y
+  lo transmite al servidor. La reproducción y captura de audio utilizan PyAudio
+  (opcional; la GUI funciona sin él, pero el audio queda silenciosamente
+  desactivado).
+- **Archivos de configuración TOML.** Ambas aplicaciones crean automáticamente
+  un archivo `cat_server.toml` / `cat_gui.toml` en el directorio actual al
+  ejecutarse por primera vez y lo utilizan como fuente persistente de valores
+  predeterminados. Los argumentos de línea de comandos siempre sobrescriben los
+  valores del archivo de configuración.
 - **Protocolo de control TCP personalizado.** La Interfaz GUI CAT define su
   propio protocolo JSON simple delimitado por saltos de línea entre
   `cat_gui.py` y `cat_server.py` (descrito a continuación).
@@ -88,11 +109,10 @@ Definida por Software. Puntos clave:
 | Backend | `cat_server.py` — gestiona todo el estado de la radio, genera un espectro RF simulado |
 | Pantallas de dígitos VFO (LO A, LO B, Sintonía) | `FreqDisp` — desplazar/clic en cada dígito, doble clic para escribir una frecuencia; clic en la etiqueta LO A o LO B cambia el LO activo y recentra la cascada inmediatamente |
 | Espectro RF + superposición de filtro | `SpecCanvas` — bordes de banda de paso arrastrables, clic para sintonizar, desplazamiento para zoom |
-| Cascada RF | `WFCanvas` (resolución interna de 900 bins) |
-| Espectro AF + cascada | segundo par `SpecCanvas` / `WFCanvas`, banda base 0..3000 Hz |
-| Botones de modo (AM/ECSS/FM/LSB/USB/CW/DIG) | Fila de botones de modo, establece la banda de paso del filtro predeterminada por modo |
-| Alternativas DSP (NR / NB RF / NB IF / AFC / Silencio / Notch / ANotch) | Dos filas de botones DSP |
-| AGC | Único botón de alternancia **AGC Med** |
+| Cascada RF | `WFCanvas` (resolución interna de 900 bins; el servidor envía 600 puntos) |
+| Espectro AF + cascada | segundo par `SpecCanvas` / `WFCanvas`, banda base 0..3000 Hz (el servidor envía 256 puntos; la cascada renderiza a 600 bins internamente) |
+| Botones de modo (AM/ECSS/FM/LSB/USB/CW/DIG) | Fila de botones de modo; establece banda de paso predeterminada para AM, FM, LSB, USB, CW. ECSS y DIG cambian solo la etiqueta de modo — el filtro no varía |
+| Alternativas DSP (NR / NB RF / NB IF / AFC / Silencio / AGC Med / Notch / ANotch) | Dos filas de botones DSP. No existe botón NB independiente; el indicador `nb` del servidor no tiene control en la GUI |
 | Botones definidos por el usuario (×6) | Alineados a la derecha en las dos filas DSP; etiquetas y tipos provienen del servidor |
 | S-Meter | Lienzo `SMeter`, escala S1–S9 + S9+20 dB / S9+40 dB de sobrecarga, lectura digital en dBm |
 | Volumen / Umbral AGC | Controles deslizantes en el panel de control izquierdo |
@@ -100,10 +120,13 @@ Definida por Software. Puntos clave:
 | Selección rápida de banda | Columna de botones de banda (160m–6m) junto a las pantallas de frecuencia |
 | Barra de transporte | Botones ● ▶ ⏸ ■ ◀◀ ▶▶ ∞, cada uno envía un comando `transport` |
 | Iniciar/Detener | Botón Iniciar/Detener, controla la transmisión del servidor |
-| PTT | Botón de lienzo circular en la fila del S-meter; envía comando `set_ptt` |
+| PTT | Botón de lienzo circular en la fila del S-meter; envía comando `set_ptt` y cambia el canal de audio RTP entre RX y TX |
+| Canal de audio RTP/UDP | `RTPAudioClient` (GUI) / `UDPAudioChannel` (servidor) — audio G.711 µ-law bidireccional en un puerto UDP; requiere PyAudio |
+| Cuadro de diálogo Soundcard | Diálogo local de selección de dispositivos de audio (micrófono + altavoz de forma independiente); abierto por el botón Soundcard, **no** envía un comando `ui_button` al servidor |
 | Escala HiDPI | Superposición persistente −/+; niveles de escala −5..+5 (×1,25 por paso) |
 | Pantalla completa | Opción `--full-screen`; triple Esc (3 pulsaciones en 1 s) activa/desactiva la pantalla completa |
 | Tema | `--bg dark` (predeterminado) o `--bg light` (fondos #FFECD6) |
+| Configuración TOML | `cat_server.toml` / `cat_gui.toml` creados automáticamente al inicio; `--config PATH` sobreescribe la ubicación |
 
 Todo lo que aparece en la tabla anterior se controla en vivo mediante TCP —
 nada es estático ni prerenderizado.
@@ -127,7 +150,7 @@ Cada mensaje es un objeto JSON terminado con `\n`.
 {"cmd": "set_rf_gain",    "value": 20}              # 0..40 dB
 {"cmd": "set_volume",     "value": 80}              # 0..100
 {"cmd": "set_squelch",    "value": -130}            # umbral en dBm
-{"cmd": "set_nb",         "enabled": true}
+{"cmd": "set_nb",         "enabled": true}          # indicador NB independiente (sin botón en la GUI; solo del lado del servidor)
 {"cmd": "set_nr",         "enabled": true}
 {"cmd": "set_nbrf",       "enabled": true}
 {"cmd": "set_nbif",       "enabled": true}
@@ -135,19 +158,33 @@ Cada mensaje es un objeto JSON terminado con `\n`.
 {"cmd": "set_anf",        "enabled": true}
 {"cmd": "set_notch",      "enabled": true}
 {"cmd": "set_mute",       "enabled": true}
-{"cmd": "set_ptt",        "enabled": true}
+{"cmd": "set_ptt",        "enabled": true, "udp_port": 5010}  # udp_port = puerto UDP RTP de la GUI
 {"cmd": "set_zoom",       "value": 2}              # 1..32
 {"cmd": "start"}
 {"cmd": "stop"}
 {"cmd": "transport",      "action": "rec"}         # rec|play|pause|stop|ff|rw|infinite
-{"cmd": "ui_button",      "name": "FreqMgr"}       # SDR-Device|Soundcard|Bandwidth|Options|FreqMgr|…
+{"cmd": "ui_button",      "name": "FreqMgr"}       # SDR-Device|Bandwidth|Options|FreqMgr
 {"cmd": "ui_display",     "box": "rf", "view": "waterfall"}  # box: rf|af  view: waterfall|spectrum
 {"cmd": "ui_smeter_btn",  "name": "Peak"}          # Peak|S-units|Squelch
 {"cmd": "user_button",    "index": 1}              # pulsación momentánea (tipo normal)
 {"cmd": "user_button",    "index": 2, "enabled": true}  # estado de alternancia pulsador
+{"cmd": "audio_hello",    "udp_port": 5010}        # la GUI registra su puerto UDP RTP en el servidor
 ```
 
+> **Nota:** El botón **Soundcard** abre un cuadro de diálogo local de
+> selección de dispositivos y **no** envía un comando `ui_button` al servidor.
+
+> **Nota:** `set_nb` es gestionado por el servidor y almacenado en el
+> diccionario de estado, pero la GUI actualmente no tiene ningún botón que
+> lo envíe. Úselo desde clientes externos o agregue un botón "NB" en la GUI.
+
 **Servidor → Cliente:**
+
+Enviado una sola vez al conectar (antes de iniciar la transmisión), cuando el
+canal de audio está habilitado:
+```
+{"type": "audio_port", "port": 5004, "sample_rate": 8000, "frame_ms": 20, "codec": "pcmu"}
+```
 
 Respuesta a cada comando:
 ```
@@ -187,6 +224,15 @@ las cascadas.
 
 Requiere Python 3 con Tkinter (`python3-tk` en Debian/Ubuntu).
 
+**Paquetes Python opcionales** (se instalan por separado; las aplicaciones
+funcionan sin ellos pero con funcionalidad reducida):
+
+```bash
+pip install pyaudio       # Reproducción/captura de audio RTP (micrófono/altavoz); desactivado silenciosamente si no está instalado
+pip install tomli         # Soporte de archivos de configuración TOML en Python < 3.11 (3.11+ lo incluye)
+pip install fonttools     # Extracción precisa del nombre de familia PostScript para fuentes personalizadas
+```
+
 ```bash
 # Terminal 1 — iniciar el backend SDR simulado
 python3 cat_server.py            # escucha en 0.0.0.0:50101 por defecto
@@ -201,17 +247,33 @@ python3 cat_server.py \
 python3 cat_gui.py
 ```
 
+### Opciones de línea de comandos del servidor
+
+| Opción | Descripción |
+| --- | --- |
+| `host [puerto]` | Posicional: host/IP y puerto TCP en el que escuchar (predeterminados: `0.0.0.0` `50101`) |
+| `--config PATH` | Cargar configuración TOML desde PATH (predeterminado: `./cat_server.toml`, creado automáticamente al inicio) |
+| `--audio-port PUERTO` | Puerto UDP para el canal de audio RTP (predeterminado: `5004`) |
+| `--no-audio` | Deshabilitar completamente el canal de audio RTP/UDP |
+| `--user-button-label-N TEXTO` | Etiqueta para el botón de usuario N (1–6, máximo 7 caracteres) |
+| `--user-button-type-N TIPO` | Tipo del botón N: `normal` (momentáneo) o `push` (pulsador/alternancia) |
+
 ### Opciones de línea de comandos de la GUI
 
 | Opción | Descripción |
 | --- | --- |
-| `--host HOST --port PORT` | Prerrellena y bloquea la dirección del servidor (ambas requeridas juntas); oculta los campos de entrada de host/puerto en la GUI |
+| `--host HOST --port PUERTO` | Prerrellena y bloquea la dirección del servidor (ambas requeridas juntas); oculta los campos de entrada de host/puerto en la GUI |
+| `--config PATH` | Cargar configuración TOML desde PATH (predeterminado: `./cat_gui.toml`, creado automáticamente al inicio) |
 | `--bg dark\|light` | Tema de color (`dark` es el predeterminado; `light` establece fondos de panel en #FFECD6) |
 | `--scale INT` | Nivel de escala HiDPI inicial, −5..+5 (predeterminado 0; el factor es 1,25^nivel) |
 | `--disable-scale` | Oculta la superposición de escala +/− (requiere que `--scale` también esté definido) |
 | `--full-screen` | Inicia en modo de pantalla completa |
 | `--freq-font PATH` | Archivo TTF/OTF para las pantallas de dígitos de frecuencia LO/Sintonía |
 | `--gui-font PATH` | Archivo TTF/OTF para todo el resto del texto de la GUI |
+| `--audio-list` | Muestra todos los dispositivos de audio de entrada/salida con sus índices y termina |
+| `--audio-mic ÍNDICE` | Selecciona el dispositivo de micrófono por índice (debe usarse junto con `--audio-speaker`) |
+| `--audio-speaker ÍNDICE` | Selecciona el dispositivo de altavoz/auriculares por índice (debe usarse junto con `--audio-mic`) |
+| `--disable-soundcard-select` | Oculta el botón Soundcard en la GUI |
 
 En la GUI, haga clic en **Conectar** (host predeterminado `127.0.0.1`, puerto
 `50101`), luego en **Iniciar** para comenzar la transmisión. Desde ahí:
@@ -227,7 +289,8 @@ En la GUI, haga clic en **Conectar** (host predeterminado `127.0.0.1`, puerto
 - Arrastre los bordes de la superposición de filtro sombreada para cambiar
   la banda de paso.
 - Haga clic en los botones de modo (AM/ECSS/FM/LSB/USB/CW/DIG) para cambiar
-  el modo de demodulación; cada uno establece una banda de paso predeterminada.
+  el modo de demodulación; AM, FM, LSB, USB y CW establecen una banda de paso
+  predeterminada.
 - Active o desactive **NR**, **NB RF**, **NB IF**, **AFC**, **Silencio**,
   **AGC Med**, **Notch** y **ANotch** según sea necesario.
 - Use los controles deslizantes de **Volumen** y **Umbral AGC**.
@@ -238,6 +301,11 @@ En la GUI, haga clic en **Conectar** (host predeterminado `127.0.0.1`, puerto
   de pantalla completa.
 - Use la superposición **+/−** en la esquina inferior derecha para ajustar
   la escala HiDPI en vivo sin reiniciar.
+- Haga clic en el botón **Soundcard** para abrir el cuadro de diálogo local
+  de selección de dispositivos de audio y elegir micrófono y altavoz de forma
+  independiente.
+- Haga clic en el botón **PTT** para alternar la transmisión; el audio se
+  envía al servidor mientras PTT está activo (requiere PyAudio).
 
 ## 5. Limitaciones
 
@@ -247,10 +315,28 @@ Esta es una simulación con fines de demostración/educación:
   sintético determinista de portadoras HF entre 1,8–30 MHz, y los controles
   DSP (NR/NB/ANF/Silencio/Volumen/AGC) afectan a los números mostrados pero
   no procesan audio real.
+- El canal de audio RTP transmite un tono sinusoidal de 440 Hz desde el servidor
+  (PTT desactivado) y descarta el audio de micrófono recibido (PTT activado).
+  El enrutamiento de audio real a hardware SDR TX se deja como un stub en
+  `UDPAudioChannel._rx_loop`.
+- Las funciones de audio requieren `pyaudio`. Si no está instalado, el canal de
+  audio queda silenciosamente desactivado; el resto de la GUI sigue funcionando
+  con normalidad.
+- El espectro RF siempre se calcula a partir de la frecuencia de LO A
+  (`center_freq`) independientemente del LO activo. Seleccionar LO B recentra
+  la pantalla en el lado del cliente, pero los fotogramas de datos posteriores
+  del servidor reflejarán la posición de LO A.
+- Los modos ECSS y DIG no tienen banda de paso de filtro predeterminada: al
+  seleccionarlos se actualiza la etiqueta del modo pero los bordes del filtro
+  permanecen sin cambios.
+- El indicador `nb` (cancelador de ruido independiente) es gestionado por el
+  servidor e incluido en el diccionario de estado, pero ningún botón de la GUI
+  envía `set_nb`. Actívelo desde un cliente externo o agregue un botón "NB"
+  dedicado.
 - El sistema de menús, la base de datos de mapeo de bandas, la grabación,
   la decodificación DRM y la integración OmniRig/CAT no están reproducidos
   — este proyecto se centra en el flujo de trabajo básico de sintonización/
   espectro/cascada/medidor descrito anteriormente.
-- El servidor acepta solo un cliente a la vez por puerto; múltiples
-  conexiones simultáneas son atendidas por hilos `ClientHandler` separados
-  pero comparten la misma instancia de `RadioState`.
+- El servidor acepta múltiples conexiones simultáneas, cada una atendida por
+  un hilo `ClientHandler` separado, pero todos los hilos comparten la misma
+  instancia de `RadioState`.

@@ -5,7 +5,7 @@
     <img src="images/full_gui.png" alt="screenshot">
   </a>
 </div>
-</p>
+
 This project is a Python/Tkinter **CAT GUI Interface** — a simulated SDR
 front-end whose every control is wired to a small simulated "radio" backend
 over a plain TCP socket.
@@ -13,10 +13,12 @@ over a plain TCP socket.
 It consists of two files:
 
 - `cat_server.py` — a TCP server that acts as the hardware/backend layer.
-  It owns all "radio state" and streams a simulated RF environment.
+  It owns all "radio state", streams a simulated RF environment, and manages
+  a bidirectional RTP/UDP audio channel.
 - `cat_gui.py` — a Tkinter client that provides the CAT GUI Interface main
   window and sends every user interaction to the server, redrawing from the
-  data the server streams back.
+  data the server streams back. It also plays received RTP audio and sends
+  microphone audio during PTT.
 
 ---
 
@@ -39,10 +41,9 @@ Radio control. Key points:
     (narrower if "zoomed").
   - A draggable IF/filter passband overlay drawn directly on the spectrum,
     whose edges set the demodulator bandwidth.
-  - Mode buttons: **AM, ECSS, FM, LSB, USB, CW, DIG**, each with a sensible
-    default filter passband.
-  - A single **AGC Med** toggle button (in the second DSP row), plus
-    **Notch** and **ANotch** toggles.
+  - Mode buttons: **AM, ECSS, FM, LSB, USB, CW, DIG**, each with a default
+    filter passband (note: ECSS and DIG do not change the filter on mode
+    switch — only the mode label updates).
   - DSP toggle buttons: **NR** (noise reduction), **NB RF** (noise blanker
     RF), **NB IF** (noise blanker IF), and **AFC** (automatic frequency
     control) on the first row; **Mute**, **AGC Med**, **Notch**, and
@@ -65,7 +66,8 @@ Radio control. Key points:
   - **Start/Stop** control over the receiver stream.
   - S-meter auxiliary buttons: **Peak**, **S-units**, **Squelch**.
   - Function buttons: **SDR-Device**, **Soundcard**, **Bandwidth**,
-    **Options**, **FreqMgr**.
+    **Options**, **FreqMgr**. Note: **Soundcard** opens a local audio device
+    selection dialog and does **not** send a command to the server.
   - A live **date/time clock** and a TCP **Connect/Disconnect** button with
     a coloured status indicator dot.
   - Two toolbar strips (one between the RF waterfall and the control panel,
@@ -73,6 +75,19 @@ Radio control. Key points:
     buttons, RBW readout, Avg, Zoom and Speed labels.
   - A persistent **HiDPI +/−** overlay in the bottom-right corner for
     real-time scaling from level −5 to +5 (factor 1.25 per step).
+  - A **PTT** circular canvas button (in the S-meter row) that toggles
+    transmit mode; while PTT is active the GUI sends microphone audio to the
+    server via RTP/UDP and stops playing received audio.
+- **RTP/UDP audio channel.** In addition to the TCP control connection, the
+  server opens a UDP port (default 5004) for bidirectional G.711 µ-law
+  (PCMU) audio. While PTT is off, the server streams a demo sine tone to the
+  GUI for playback; while PTT is on, the GUI captures microphone audio and
+  streams it to the server. Audio playback and capture use PyAudio (optional;
+  the GUI runs without it but audio is silently disabled).
+- **TOML configuration files.** Both applications auto-create a
+  `cat_server.toml` / `cat_gui.toml` file in the current directory on first
+  run and use it as a persistent source of defaults. CLI flags always override
+  config file values.
 - **Custom TCP control protocol.** The CAT GUI Interface defines its own
   simple newline-delimited JSON protocol between `cat_gui.py` and
   `cat_server.py` (described below).
@@ -84,11 +99,10 @@ Radio control. Key points:
 | Backend | `cat_server.py` — owns all radio state, generates a simulated RF spectrum |
 | VFO digit displays (LO A, LO B, Tune) | `FreqDisp` — scroll/click each digit, double-click to type a frequency; clicking the LO A or LO B label switches the active LO and immediately recentres the waterfall |
 | RF spectrum + filter overlay | `SpecCanvas` — draggable passband edges, click-to-tune, scroll-to-zoom |
-| RF waterfall | `WFCanvas` (900-bin internal resolution) |
-| AF spectrum + waterfall | second `SpecCanvas` / `WFCanvas` pair, baseband 0..3000 Hz |
-| Mode buttons (AM/ECSS/FM/LSB/USB/CW/DIG) | Mode button row, sets default filter passband per mode |
-| DSP toggles (NR / NB RF / NB IF / AFC / Mute / Notch / ANotch) | Two DSP button rows |
-| AGC | Single **AGC Med** toggle button |
+| RF waterfall | `WFCanvas` (900-bin internal render resolution; server streams 600 points) |
+| AF spectrum + waterfall | second `SpecCanvas` / `WFCanvas` pair, baseband 0..3000 Hz (server streams 256 points; waterfall renders at 600 bins internally) |
+| Mode buttons (AM/ECSS/FM/LSB/USB/CW/DIG) | Mode button row; sets default filter passband for AM, FM, LSB, USB, CW. ECSS and DIG change the mode label only — filter is unchanged |
+| DSP toggles (NR / NB RF / NB IF / AFC / Mute / AGC Med / Notch / ANotch) | Two DSP button rows. There is no standalone NB button; the server's `nb` state flag has no GUI control |
 | User-defined buttons (×6) | Right-aligned in the two DSP rows; labels and types come from the server |
 | S-Meter | `SMeter` canvas, S1–S9 + S9+20 dB / S9+40 dB overload scale, digital dBm readout |
 | Volume / AGC Thresh. | Sliders in the left control panel |
@@ -96,10 +110,13 @@ Radio control. Key points:
 | Band quick-select | Column of band buttons (160m–6m) beside the frequency displays |
 | Transport bar | ● ▶ ⏸ ■ ◀◀ ▶▶ ∞ buttons, each sends a `transport` command |
 | Start/Stop | Start/Stop button, controls server streaming |
-| PTT | Circular canvas button in S-meter row; sends `set_ptt` command |
+| PTT | Circular canvas button in S-meter row; sends `set_ptt` command and switches the RTP audio channel between RX and TX |
+| RTP/UDP audio | `RTPAudioClient` (GUI) / `UDPAudioChannel` (server) — bidirectional G.711 µ-law audio on a UDP port; requires PyAudio |
+| Soundcard dialog | Local audio device selection dialog (microphone + speaker independently); opened by the Soundcard button, does **not** send a `ui_button` command to the server |
 | HiDPI scaling | Persistent −/+ overlay; scale levels −5..+5 (×1.25 per step) |
 | Fullscreen | `--full-screen` flag; triple-Esc (3 presses within 1 s) toggles fullscreen on/off |
 | Theme | `--bg dark` (default) or `--bg light` (#FFECD6 backgrounds) |
+| TOML config | `cat_server.toml` / `cat_gui.toml` auto-created on first run; `--config PATH` overrides location |
 
 Everything in the table above is driven live over TCP — nothing is static
 or pre-rendered.
@@ -123,7 +140,7 @@ Each message is one JSON object terminated by `\n`.
 {"cmd": "set_rf_gain",    "value": 20}              # 0..40 dB
 {"cmd": "set_volume",     "value": 80}              # 0..100
 {"cmd": "set_squelch",    "value": -130}            # dBm threshold
-{"cmd": "set_nb",         "enabled": true}
+{"cmd": "set_nb",         "enabled": true}          # standalone NB flag (no GUI button; server-side only)
 {"cmd": "set_nr",         "enabled": true}
 {"cmd": "set_nbrf",       "enabled": true}
 {"cmd": "set_nbif",       "enabled": true}
@@ -131,19 +148,33 @@ Each message is one JSON object terminated by `\n`.
 {"cmd": "set_anf",        "enabled": true}
 {"cmd": "set_notch",      "enabled": true}
 {"cmd": "set_mute",       "enabled": true}
-{"cmd": "set_ptt",        "enabled": true}
+{"cmd": "set_ptt",        "enabled": true, "udp_port": 5010}  # udp_port = GUI's RTP UDP port
 {"cmd": "set_zoom",       "value": 2}              # 1..32
 {"cmd": "start"}
 {"cmd": "stop"}
 {"cmd": "transport",      "action": "rec"}         # rec|play|pause|stop|ff|rw|infinite
-{"cmd": "ui_button",      "name": "FreqMgr"}       # SDR-Device|Soundcard|Bandwidth|Options|FreqMgr|…
+{"cmd": "ui_button",      "name": "FreqMgr"}       # SDR-Device|Bandwidth|Options|FreqMgr
 {"cmd": "ui_display",     "box": "rf", "view": "waterfall"}  # box: rf|af  view: waterfall|spectrum
 {"cmd": "ui_smeter_btn",  "name": "Peak"}          # Peak|S-units|Squelch
 {"cmd": "user_button",    "index": 1}              # momentary press (normal type)
 {"cmd": "user_button",    "index": 2, "enabled": true}  # push-push toggle state
+{"cmd": "audio_hello",    "udp_port": 5010}        # GUI registers its RTP UDP port with the server
 ```
 
+> **Note:** The **Soundcard** button opens a local audio device dialog and does
+> **not** send a `ui_button` command to the server.
+
+> **Note:** `set_nb` is handled by the server and tracked in the state dict,
+> but the GUI currently has no button that sends it. Use it from external
+> clients or extend the GUI to add an "NB" toggle.
+
 **Server → Client:**
+
+Sent once on connect (before streaming starts), when the audio channel is
+enabled:
+```
+{"type": "audio_port", "port": 5004, "sample_rate": 8000, "frame_ms": 20, "codec": "pcmu"}
+```
 
 Reply to every command:
 ```
@@ -182,6 +213,15 @@ AF spectrum, and waterfalls.
 
 Requires Python 3 with Tkinter (`python3-tk` on Debian/Ubuntu).
 
+**Optional Python packages** (installed separately; the apps run without them
+but with reduced functionality):
+
+```bash
+pip install pyaudio       # RTP audio playback/capture (mic/speaker); silently disabled if absent
+pip install tomli         # TOML config file support on Python < 3.11 (3.11+ has it built in)
+pip install fonttools     # Accurate PostScript family-name extraction for custom fonts
+```
+
 ```bash
 # Terminal 1 — start the simulated SDR backend
 python3 cat_server.py            # listens on 0.0.0.0:50101 by default
@@ -196,17 +236,33 @@ python3 cat_server.py \
 python3 cat_gui.py
 ```
 
+### Server command-line options
+
+| Flag | Description |
+| --- | --- |
+| `host [port]` | Positional: host/IP and TCP port to listen on (defaults: `0.0.0.0` `50101`) |
+| `--config PATH` | Load TOML config from PATH (default: `./cat_server.toml`, auto-created on first run) |
+| `--audio-port PORT` | UDP port for the RTP audio channel (default: `5004`) |
+| `--no-audio` | Disable the RTP/UDP audio channel entirely |
+| `--user-button-label-N TEXT` | Label for user button N (1–6, max 7 characters) |
+| `--user-button-type-N TYPE` | Type of user button N: `normal` (momentary) or `push` (push-push/toggle) |
+
 ### GUI command-line options
 
 | Flag | Description |
 | --- | --- |
 | `--host HOST --port PORT` | Pre-fill and lock the server address (both required together); hides the host/port entry fields in the GUI |
+| `--config PATH` | Load TOML config from PATH (default: `./cat_gui.toml`, auto-created on first run) |
 | `--bg dark\|light` | Colour theme (`dark` is default; `light` sets panel backgrounds to #FFECD6) |
 | `--scale INT` | Initial HiDPI scale level, −5..+5 (default 0; factor is 1.25^level) |
 | `--disable-scale` | Hide the +/− scale overlay (requires `--scale` to also be set) |
 | `--full-screen` | Start in full-screen mode |
 | `--freq-font PATH` | TTF/OTF file for the LO/Tune frequency digit displays |
 | `--gui-font PATH` | TTF/OTF file for all other GUI text |
+| `--audio-list` | List all audio input/output devices with their index numbers, then exit |
+| `--audio-mic INDEX` | Select the microphone device by index (must be paired with `--audio-speaker`) |
+| `--audio-speaker INDEX` | Select the speaker/headphone device by index (must be paired with `--audio-mic`) |
+| `--disable-soundcard-select` | Hide the Soundcard button in the GUI |
 
 In the GUI, click **Connect** (default host `127.0.0.1`, port `50101`),
 then **Start** to begin streaming. From there:
@@ -219,7 +275,7 @@ then **Start** to begin streaming. From there:
 - Click anywhere on the RF spectrum to tune the active LO to that frequency.
 - Drag the edges of the shaded filter overlay to change the passband.
 - Click mode buttons (AM/ECSS/FM/LSB/USB/CW/DIG) to change the demodulation
-  mode; each sets a default passband.
+  mode; AM, FM, LSB, USB, and CW each set a default passband.
 - Toggle **NR**, **NB RF**, **NB IF**, **AFC**, **Mute**, **AGC Med**,
   **Notch**, and **ANotch** as needed.
 - Use the **Volume** and **AGC Thresh.** sliders.
@@ -229,6 +285,10 @@ then **Start** to begin streaming. From there:
 - Press Escape three times within one second to toggle fullscreen mode.
 - Use the **+/−** overlay in the bottom-right corner to adjust the HiDPI
   scale live without restarting.
+- Click the **Soundcard** button to open the local audio device selection
+  dialog and choose microphone and speaker devices independently.
+- Click the **PTT** button to toggle transmit; audio streams to the server
+  while PTT is active (requires PyAudio).
 
 ## 5. Limitations
 
@@ -238,9 +298,23 @@ This is a simulation for demonstration/educational purposes:
   deterministic synthetic model of HF carriers across 1.8–30 MHz, and
   DSP controls (NR/NB/ANF/Mute/Volume/AGC) affect the displayed numbers
   but don't process real audio.
+- The RTP audio channel streams a 440 Hz sine tone from the server (PTT off)
+  and discards received microphone audio (PTT on). Real audio routing to SDR
+  TX hardware is left as a stub in `UDPAudioChannel._rx_loop`.
+- Audio features require `pyaudio`. If it is not installed, the audio channel
+  is silently disabled; all other GUI functions still work.
+- The RF spectrum is always computed from LO A's frequency (`center_freq`)
+  regardless of which LO is currently active. Selecting LO B re-centres the
+  display client-side, but subsequent data frames from the server will
+  reflect LO A's position until the server is also updated.
+- ECSS and DIG modes have no default filter passband defined: clicking them
+  changes the mode label but leaves the filter edges unchanged.
+- The `nb` (standalone noise blanker) state flag is handled by the server and
+  included in the state dict, but no GUI button sends `set_nb`. Toggle it
+  from an external client or add a dedicated "NB" button.
 - Menu system, band-mapping database, recording, DRM decoding, and
   OmniRig/CAT integration are not reproduced — this focuses on the
   core tuning/spectrum/waterfall/meter workflow described above.
-- The server accepts only one client at a time per port; multiple
-  simultaneous connections are served by separate `ClientHandler` threads
-  but share the same `RadioState` instance.
+- The server accepts multiple simultaneous connections, each served by a
+  separate `ClientHandler` thread, but all threads share the same
+  `RadioState` instance.
