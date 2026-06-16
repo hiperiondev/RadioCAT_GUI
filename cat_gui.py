@@ -2,7 +2,7 @@
 """
 cat_gui.py
 """
-import argparse, array, collections, json, math, os, queue, socket, struct, sys, threading, time, datetime
+import argparse, array, cmath, collections, json, math, os, queue, socket, struct, sys, threading, time, datetime
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -689,6 +689,52 @@ def _linear16_to_ulaw_gui(samples: bytes) -> bytes:
     return bytes(table[s & 0xFFFF] for s in in_arr)
 
 
+# ── Local AF (audio-frequency) spectrum analysis ─────────────────────────────
+# The AF spectrum/waterfall box is driven from the *actual* decoded RTP audio
+# that the client receives and plays — not from any value the server reports
+# separately — so what's drawn always matches the real received signal.
+_AF_FFT_N            = 512   # FFT window size, samples (power of 2)
+_AF_FFT_HOP          = 256   # samples advanced between successive FFTs (50% overlap)
+_AF_DISPLAY_RANGE_HZ = 3000  # 0..this Hz is shown in the AF spectrum/waterfall
+
+_af_hamming_cache = {}
+def _af_hamming(n):
+    """Cached Hamming window of length n."""
+    w = _af_hamming_cache.get(n)
+    if w is None:
+        w = ([0.54 - 0.46*math.cos(2*math.pi*i/(n-1)) for i in range(n)]
+             if n > 1 else [1.0]*n)
+        _af_hamming_cache[n] = w
+    return w
+
+def _af_fft(x):
+    """Recursive radix-2 Cooley–Tukey FFT. len(x) must be a power of 2."""
+    n = len(x)
+    if n <= 1:
+        return x
+    even = _af_fft(x[0::2])
+    odd  = _af_fft(x[1::2])
+    twiddles = [cmath.exp(-2j*math.pi*k/n) * odd[k] for k in range(n//2)]
+    return [even[k] + twiddles[k] for k in range(n//2)] + \
+           [even[k] - twiddles[k] for k in range(n//2)]
+
+def _af_spectrum_db(samples):
+    """Convert a window of decoded int16 PCM samples (the real received
+    audio) into a one-sided dB spectrum (index 0 = 0 Hz), scaled to the
+    same -150..0 dB range SpecCanvas/WFCanvas already use for display."""
+    n = len(samples)
+    win = _af_hamming(n)
+    x = [complex(samples[i]*win[i], 0.0) for i in range(n)]
+    X = _af_fft(x)
+    win_sum = sum(win) or 1.0
+    out = []
+    for k in range(n//2 + 1):
+        mag = abs(X[k]) * 2.0 / win_sum
+        db = 20.0*math.log10(mag/32768.0 + 1e-9)
+        out.append(max(-150.0, min(0.0, db)))
+    return out
+
+
 class RTPAudioClient:
     """
     Manages the GUI side of the RTP/UDP audio channel.
@@ -723,6 +769,10 @@ class RTPAudioClient:
         self._sample_rate  = AUDIO_SAMPLE_RATE
         self._frame_ms     = AUDIO_FRAME_MS
         self._frame_samps  = AUDIO_FRAME_SAMPS
+        # Rolling buffer of decoded int16 PCM samples (real received audio)
+        # used to compute the AF spectrum/waterfall locally.
+        self._af_ring    = array.array('h')
+        self._af_app     = None   # set externally to the App instance
 
     # ── device enumeration ────────────────────────────────────────────────────
     def get_devices(self):
@@ -791,6 +841,7 @@ class RTPAudioClient:
         self._sample_rate = sample_rate
         self._frame_ms    = frame_ms
         self._frame_samps = int(sample_rate * frame_ms / 1000)
+        self._af_ring     = array.array('h')   # discard any samples from a prior session
 
         # Open UDP socket
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -968,6 +1019,31 @@ class RTPAudioClient:
                 # own pace without ever stalling this receive thread.
                 self._rx_buf.append(pcm)
 
+            # Feed the same decoded samples — the real audio received from
+            # the server — into the local AF spectrum analyzer so the AF
+            # spectrum/waterfall box always reflects the actual received
+            # signal, independent of whether local playback is available.
+            samples = array.array('h')
+            samples.frombytes(pcm)
+            if sys.byteorder != "little":
+                samples.byteswap()
+            self._af_ring.extend(samples)
+            while len(self._af_ring) >= _AF_FFT_N:
+                window = self._af_ring[:_AF_FFT_N]
+                spectrum = _af_spectrum_db(window)
+                bin_hz = self._sample_rate / _AF_FFT_N
+                max_bin = min(len(spectrum)-1, int(_AF_DISPLAY_RANGE_HZ / bin_hz))
+                if self._af_app is not None:
+                    _now = time.monotonic()
+                    if not hasattr(self, '_af_last_put') or _now - self._af_last_put >= 0.05:
+                        self._af_app.q.put({
+                            "type":        "af_local",
+                            "af_spectrum": spectrum[:max_bin+1],
+                            "af_range":    _AF_DISPLAY_RANGE_HZ,
+                        })
+                        self._af_last_put = _now
+                del self._af_ring[:_AF_FFT_HOP]
+
 
 def _print_audio_devices():
     """Print every input- and output-capable audio device on this system,
@@ -1011,7 +1087,7 @@ class Net:
     def connect(self,host,port):
         try: s=socket.create_connection((host,port),timeout=3)
         except OSError as e: return False,str(e)
-        s.settimeout(None); self.sock=s; self.connected=True
+        s.settimeout(5.0); self.sock=s; self.connected=True
         threading.Thread(target=self._rx,daemon=True).start()
         return True,"ok"
 
@@ -1030,7 +1106,7 @@ class Net:
         try:
             with self._lk: self.sock.sendall(d)
             return True
-        except OSError:
+        except (OSError, socket.timeout):
             self.connected=False
             self.app.q.put({"type":"disconnected"})
             return False
@@ -1070,71 +1146,122 @@ class Net:
 # ── Waterfall canvas ──────────────────────────────────────────────────────────
 
 class WFCanvas(tk.Canvas):
+    """Waterfall display using incremental PhotoImage.put() row prepending.
+
+    Instead of rebuilding a full PPM image from all stored rows on every
+    incoming frame (O(rows) work that freezes the GUI once the waterfall
+    fills up), we maintain a single PhotoImage the same size as the canvas
+    and on each new row we:
+      1. Copy the existing image down by one pixel using .put() of a
+         pre-built row string, preceded by a copy_from scroll trick, OR
+         simply use the Tk image's built-in copy+scroll path.
+      2. Write the single new row of pixels into row 0.
+
+    This makes each add_row() call O(canvas_width) instead of O(rows *
+    canvas_width), which eliminates the freeze entirely.
+    """
+
     def __init__(self,master,img_w,af=False,**kw):
         kw.setdefault("bg",C["win_bg"]); kw.setdefault("highlightthickness",0)
         super().__init__(master,**kw)
-        self.img_w=img_w; self.rows=collections.deque(); self._img=None
-        self.af=af
-        self.f0=28_490_000.0; self.f1=28_510_000.0  # updated externally
-        self._app=None   # set by App after construction
-        # Image item placed at top-left; grid overlay items drawn after (on top)
+        self.img_w=img_w; self.af=af
+        self.f0=28_490_000.0; self.f1=28_510_000.0
+        self._app=None
+        self._img=None          # current PhotoImage (canvas-sized)
+        self._img_w=0           # width  of _img in pixels
+        self._img_h=0           # height of _img in pixels
         self._iid=self.create_image(0,0,anchor="nw")
-        self.bind("<Configure>",lambda e:(self._render(),self._draw_overlay()))
+        self.bind("<Configure>",self._on_resize)
+
+    # ── internal helpers ──────────────────────────────────────────────────────
+
+    def _lbl_h(self):
+        sc=getattr(self._app,'_sc',1.0) if self._app else 1.0
+        return max(10,int(round(12*sc)))
+
+    def _alloc_img(self,w,h):
+        """(Re)create the backing PhotoImage at the given pixel size."""
+        self._img=tk.PhotoImage(width=w,height=h)
+        self._img_w=w; self._img_h=h
+        self.itemconfig(self._iid,image=self._img)
+
+    def _on_resize(self,event=None):
+        cw=max(self.winfo_width(),1)
+        ch=max(self.winfo_height(),1)
+        lbl_h=self._lbl_h()
+        img_h=max(1,ch-lbl_h)
+        # Only reallocate if size actually changed
+        if cw!=self._img_w or img_h!=self._img_h:
+            self._alloc_img(cw,img_h)
+        self.coords(self._iid,0,0)
+        self._draw_overlay()
+
+    @staticmethod
+    def _row_to_tk_data(spectrum,out_w,dmin=-150,dmax=0):
+        """Convert a spectrum array to a Tk-compatible color row string.
+
+        Returns a string of space-separated hex colors: "{#rrggbb #rrggbb …}"
+        suitable for PhotoImage.put(data, to=(0, y)).
+        This format lets Tk decode the row natively without building PPM headers.
+        """
+        n=len(spectrum)
+        if n==0:
+            return "{" + " ".join(["#000000"]*out_w) + "}"
+        parts=[]
+        for x in range(out_w):
+            si=min(int(x*n/out_w),n-1)
+            r,g,b=db_to_rgb(spectrum[si],dmin,dmax)
+            parts.append(f"#{r:02x}{g:02x}{b:02x}")
+        return "{" + " ".join(parts) + "}"
+
+    # ── public API ────────────────────────────────────────────────────────────
 
     def set_freq_range(self,f0,f1):
         self.f0=f0; self.f1=f1; self._draw_overlay()
 
     def add_row(self,spectrum,dmin=-150,dmax=0):
-        n=len(spectrum)
-        if n==0: return
-        w=self.img_w; row=bytearray(w*3)
-        for x in range(w):
-            si=min(int(x*n/w),n-1)
-            r,g,b=db_to_rgb(spectrum[si],dmin,dmax)
-            row[x*3]=r; row[x*3+1]=g; row[x*3+2]=b
-        sc=getattr(self._app,'_sc',1.0) if self._app else 1.0
-        lbl_h=max(10,int(round(12*sc)))
-        ch=max(self.winfo_height()-lbl_h,1)
-        self.rows.appendleft(bytes(row))
-        # Keep at most canvas-height rows so history fills exactly the widget
-        while len(self.rows)>ch: self.rows.pop()
-        self._render()
-        self._draw_overlay()
+        """Add one new row at the top of the waterfall (newest = top).
 
-    def _render(self):
-        nrows=len(self.rows)
-        if nrows==0: return
+        Uses PhotoImage.copy() + scroll to shift the existing image down by
+        one row, then writes the new row into row 0 with put().  This is
+        O(canvas_width) regardless of how many rows have accumulated.
+        """
+        if len(spectrum)==0: return
+
+        # Ensure backing image exists and matches current canvas size
         cw=max(self.winfo_width(),1)
         ch=max(self.winfo_height(),1)
-        src_w=self.img_w
+        lbl_h=self._lbl_h()
+        img_h=max(1,ch-lbl_h)
 
-        # Reserve a bottom strip for the frequency axis line/labels so the
-        # waterfall image stops above it instead of being drawn underneath
-        # (and thus overlapped by) the axis overlay.
-        sc=getattr(self._app,'_sc',1.0) if self._app else 1.0
-        lbl_h=max(10,int(round(12*sc)))
-        avail_h=max(1,ch-lbl_h)
+        if self._img is None or cw!=self._img_w or img_h!=self._img_h:
+            self._alloc_img(cw,img_h)
+            self.coords(self._iid,0,0)
 
-        # Build PPM at native row width, native row count
-        hdr=f"P6\n{src_w} {nrows}\n255\n".encode()
-        body=b"".join(self.rows)
-        try:
-            src=tk.PhotoImage(width=src_w,height=nrows,data=hdr+body,format="PPM")
-        except tk.TclError: return
+        img=self._img
+        img_h=self._img_h
+        img_w=self._img_w
 
-        # Scale to canvas width using zoom/subsample (integer ratios only in Tk)
-        zx=max(1,round(cw/src_w)) if cw>=src_w else 1
-        sx=max(1,round(src_w/cw)) if src_w>cw else 1
-        if zx>1: src=src.zoom(zx,1)
-        if sx>1: src=src.subsample(sx,1)
+        if img_h<=1:
+            # Degenerate: just paint the single row
+            row_data=self._row_to_tk_data(spectrum,img_w,dmin,dmax)
+            img.put(row_data,to=(0,0))
+            self._draw_overlay()
+            return
 
-        # Position image so its bottom aligns to the top of the reserved
-        # axis strip; empty space at top remains canvas bg (black) while
-        # filling up.
-        y_off=max(0,avail_h-nrows)
-        self.coords(self._iid,0,y_off)
-        self._img=src
-        self.itemconfig(self._iid,image=self._img)
+        # Scroll existing content down by 1 pixel using Tcl's photo copy
+        # directly.  Python's PhotoImage.copy() accepts no arguments, so we
+        # drop to tk.call().  Tk buffers the read before the write internally,
+        # so a self-copy (src == dst) with overlapping regions is safe.
+        img.tk.call(img, 'copy', img,
+                    '-from', 0, 0, img_w, img_h - 1,
+                    '-to', 0, 1)
+
+        # Write the new row at y=0
+        row_data=self._row_to_tk_data(spectrum,img_w,dmin,dmax)
+        img.put(row_data,to=(0,0))
+
+        self._draw_overlay()
 
     def _draw_overlay(self):
         """Draw frequency axis grid lines and labels on top of the waterfall image."""
@@ -1612,6 +1739,7 @@ class App:
 
         self.net=Net(self); self.q=queue.Queue()
         self.rtp_audio = RTPAudioClient("", 0)   # configured when server sends audio_port
+        self.rtp_audio._af_app = self  # lets it push real-time AF spectrum updates
         # PTT must stay disabled until the RTP socket has actually bound and
         # local_udp_port() can return a real value — otherwise an early click
         # would send {"udp_port": None} to the server (see _ptt_click below).
@@ -2703,11 +2831,14 @@ class App:
             while True:
                 if self.q.qsize() > self._POLL_DROP_THRESHOLD:
                     msg = self.q.get_nowait()
-                    if msg.get("type") == "data":
+                    if msg.get("type") in ("data", "af_local"):
                         continue      # discard stale spectrum frame; grab next
                 else:
                     msg = self.q.get_nowait()
-                self._handle(msg)
+                try:
+                    self._handle(msg)
+                except Exception as _exc:
+                    import traceback; traceback.print_exc()
         except queue.Empty:
             pass
         self.root.after(30, self.poll)
@@ -2740,15 +2871,24 @@ class App:
                 print("[audio] WARNING: RTP socket failed to bind a local UDP "
                       "port — PTT remains disabled.")
         elif t=="data":
-            f0=msg["f_start"]; f1=msg["f_stop"]
-            self.rf_spec.update_data(f0,f1,msg["spectrum"])
-            self.rf_wf.set_freq_range(f0,f1)
-            self.rf_wf.add_row(msg["spectrum"])
-            ar=msg.get("af_range",3000)
-            self.af_spec.update_data(0,ar,msg["af_spectrum"])
-            self.af_wf.set_freq_range(0,ar)
-            self.af_wf.add_row(msg["af_spectrum"])
-            self.smeter.set_value(msg["smeter_dbm"],msg["smeter_text"])
+            f0=msg.get("f_start"); f1=msg.get("f_stop")
+            spec=msg.get("spectrum",[])
+            if f0 is not None and f1 is not None and spec:
+                self.rf_spec.update_data(f0,f1,spec)
+                self.rf_wf.set_freq_range(f0,f1)
+                self.rf_wf.add_row(spec)
+            # AF spectrum/waterfall is updated separately via "af_local"
+            # messages computed from the real decoded RTP audio (see
+            # RTPAudioClient), not from this server-reported message, so it
+            # always reflects the actual received signal.
+            self.smeter.set_value(msg.get("smeter_dbm",-127.0),msg.get("smeter_text",""))
+        elif t=="af_local":
+            ar=msg.get("af_range",_AF_DISPLAY_RANGE_HZ)
+            spec=msg.get("af_spectrum",[])
+            if spec:
+                self.af_spec.update_data(0,ar,spec)
+                self.af_wf.set_freq_range(0,ar)
+                self.af_wf.add_row(spec)
         elif "state" in msg:
             self.state.update(msg["state"]); self._refresh()
 
