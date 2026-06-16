@@ -74,6 +74,7 @@ import json
 import math
 import random
 import socket
+import struct
 import threading
 import time
 
@@ -82,6 +83,15 @@ AF_BINS = 256           # AF spectrum / waterfall bins
 AF_RANGE = 3000.0       # Hz shown on the AF display
 UPDATE_HZ = 10.0        # data pushes per second
 NUM_USER_BUTTONS = 6    # number of user-defined buttons (N = 1..6)
+
+# ── RTP / UDP audio ──────────────────────────────────────────────────────────
+AUDIO_SAMPLE_RATE  = 8000       # Hz
+AUDIO_FRAME_MS     = 20         # milliseconds per RTP packet
+AUDIO_FRAME_SAMPS  = int(AUDIO_SAMPLE_RATE * AUDIO_FRAME_MS / 1000)  # 160
+AUDIO_RTP_TYPE     = 0          # PCM μ-law payload type (RTP PT 0 = PCMU)
+AUDIO_UDP_PORT     = 5004       # default; overridable via --audio-port
+# Simple sine-wave beep sent while running and PTT is off (receive side demo)
+_AUDIO_TONE_HZ     = 440        # Hz of the demo tone the server sends
 
 NOISE_FLOOR_DBM = -120.0
 DB_S9 = -73.0           # dBm that corresponds to "S9" on the meter
@@ -98,6 +108,81 @@ def dbm_to_s_text(dbm):
     s = 9 - (DB_S9 - dbm) / DB_PER_S_UNIT
     s = max(0.0, s)
     return f"S{s:0.0f}"
+
+
+
+# ── RTP helpers ───────────────────────────────────────────────────────────────
+
+def _rtp_pack(payload: bytes, seq: int, ts: int, ssrc: int = 0x1234ABCD) -> bytes:
+    """Pack a minimal 12-byte RTP header + payload."""
+    # V=2, P=0, X=0, CC=0, M=0, PT=AUDIO_RTP_TYPE
+    byte0 = 0x80
+    byte1 = AUDIO_RTP_TYPE & 0x7F
+    return struct.pack("!BBHII", byte0, byte1, seq & 0xFFFF, ts, ssrc) + payload
+
+
+def _rtp_unpack(data: bytes):
+    """Return (payload, seq, ts) from a raw RTP datagram, or None on error."""
+    if len(data) < 12:
+        return None
+    hdr = struct.unpack("!BBHII", data[:12])
+    seq = hdr[2]
+    ts  = hdr[3]
+    return data[12:], seq, ts
+
+
+def _linear16_to_ulaw(samples: bytes) -> bytes:
+    """Convert raw 16-bit little-endian PCM to 8-bit μ-law bytes."""
+    out = bytearray(len(samples) // 2)
+    for i in range(len(out)):
+        s = struct.unpack_from("<h", samples, i * 2)[0]
+        # μ-law encoding
+        sign = 0 if s >= 0 else 0x80
+        if s < 0:
+            s = -s
+        s = min(s, 32767)
+        s += 33
+        exp = 7
+        for e in range(7, -1, -1):
+            if s >= (1 << (e + 5)):
+                exp = e
+                break
+        else:
+            exp = 0
+        mantissa = (s >> (exp + 1)) & 0x0F
+        ulaw = ~(sign | (exp << 4) | mantissa) & 0xFF
+        out[i] = ulaw
+    return bytes(out)
+
+
+def _ulaw_to_linear16(ulaw_bytes: bytes) -> bytes:
+    """Convert 8-bit μ-law bytes to raw 16-bit little-endian PCM."""
+    out = bytearray(len(ulaw_bytes) * 2)
+    for i, b in enumerate(ulaw_bytes):
+        b = ~b & 0xFF
+        sign = b & 0x80
+        exp  = (b >> 4) & 0x07
+        mantissa = b & 0x0F
+        s = ((mantissa << 1) | 0x21) << exp
+        s -= 33
+        if sign:
+            s = -s
+        s = max(-32768, min(32767, s))
+        struct.pack_into("<h", out, i * 2, s)
+    return bytes(out)
+
+
+def _gen_sine_frame(freq: float, sample_rate: int, frame_samps: int,
+                    phase_ref: list) -> bytes:
+    """Generate one frame of a sine tone as μ-law RTP payload."""
+    samples = bytearray(frame_samps * 2)
+    phase = phase_ref[0]
+    for i in range(frame_samps):
+        val = int(32000 * math.sin(phase))
+        struct.pack_into("<h", samples, i * 2, val)
+        phase += 2 * math.pi * freq / sample_rate
+    phase_ref[0] = phase % (2 * math.pi)
+    return _linear16_to_ulaw(bytes(samples))
 
 
 class Signal:
@@ -146,6 +231,7 @@ class RadioState:
         self.tune_freq = 14_205_000.0
         self.mute = False
         self.ptt = False
+        self.ptt_client_addr = None   # (ip, port) of the GUI's UDP endpoint
         self.running = False
         self.lo_active = "A"
         self.lo_b_freq = self.center_freq
@@ -398,16 +484,130 @@ class RadioState:
         return msg
 
 
-# ---------------------------------------------------------------------------
-# TCP server
-# ---------------------------------------------------------------------------
+
+# ── UDP Audio Channel ─────────────────────────────────────────────────────────
+
+class UDPAudioChannel:
+    """
+    Manages one UDP socket for bidirectional RTP audio.
+
+    Behaviour:
+      • PTT OFF (radio.ptt == False):
+            Server → GUI  (server generates/re-streams audio, GUI plays it)
+      • PTT ON  (radio.ptt == True):
+            GUI → Server  (GUI sends mic audio, server receives it)
+
+    The GUI's UDP address is learned from the first incoming datagram
+    (STUN-less hole-punch: GUI sends a small "hello" RTP packet on
+    channel open so the server learns (ip, port)).
+    """
+
+    def __init__(self, radio: "RadioState", udp_port: int):
+        self.radio    = radio
+        self.port     = udp_port
+        self._sock    = None
+        self._alive   = False
+        self._seq     = 0
+        self._ts      = 0
+        self._phase   = [0.0]   # sine generator phase accumulator
+        self._cli_addr = None   # (ip, port) of GUI's UDP endpoint
+
+    # ── lifecycle ─────────────────────────────────────────────────────────────
+    def start(self):
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._sock.bind(("0.0.0.0", self.port))
+        self._sock.settimeout(0.05)
+        self._alive = True
+        threading.Thread(target=self._rx_loop, daemon=True).start()
+        threading.Thread(target=self._tx_loop, daemon=True).start()
+        print(f"[audio] UDP RTP channel open on port {self.port}")
+
+    def stop(self):
+        self._alive = False
+        if self._sock:
+            try:
+                self._sock.close()
+            except OSError:
+                pass
+            self._sock = None
+        print("[audio] UDP RTP channel closed")
+
+    def set_client_addr(self, addr):
+        """Called by ClientHandler when the GUI's UDP endpoint is known."""
+        self._cli_addr = addr
+        self.radio.ptt_client_addr = addr
+        print(f"[audio] GUI UDP endpoint registered: {addr}")
+
+    # ── TX loop: server → GUI (PTT OFF) ──────────────────────────────────────
+    def _tx_loop(self):
+        """Push one RTP frame every AUDIO_FRAME_MS ms while PTT is OFF."""
+        interval = AUDIO_FRAME_MS / 1000.0
+        next_tick = time.monotonic()
+        while self._alive:
+            now = time.monotonic()
+            if now < next_tick:
+                time.sleep(max(0.0, next_tick - now))
+            next_tick += interval
+
+            state = self.radio.as_dict()
+            if not state["running"] or state["ptt"] or not self._cli_addr:
+                continue  # nothing to send
+
+            payload = _gen_sine_frame(
+                _AUDIO_TONE_HZ, AUDIO_SAMPLE_RATE,
+                AUDIO_FRAME_SAMPS, self._phase
+            )
+            pkt = _rtp_pack(payload, self._seq, self._ts)
+            self._seq = (self._seq + 1) & 0xFFFF
+            self._ts  = (self._ts + AUDIO_FRAME_SAMPS) & 0xFFFFFFFF
+            try:
+                self._sock.sendto(pkt, self._cli_addr)
+            except OSError:
+                pass
+
+    # ── RX loop: GUI → server (PTT ON) ────────────────────────────────────────
+    def _rx_loop(self):
+        """Receive RTP datagrams from the GUI while PTT is ON."""
+        while self._alive:
+            try:
+                data, addr = self._sock.recvfrom(2048)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+
+            # Auto-register the GUI's UDP address from any incoming packet
+            if self._cli_addr is None or self._cli_addr != addr:
+                self.set_client_addr(addr)
+
+            result = _rtp_unpack(data)
+            if result is None:
+                continue
+            payload, seq, ts = result
+
+            state = self.radio.as_dict()
+            if not state["ptt"]:
+                # PTT is off — GUI shouldn't be sending, but discard gracefully
+                continue
+
+            # ── Here you would route payload (μ-law PCM) to SDR TX / playback
+            # For this reference implementation we just log occasionally.
+            # Replace this stub with your real audio sink (soundcard / SDR TX):
+            #   pcm = _ulaw_to_linear16(payload)
+            #   audio_sink.write(pcm)
+            _ = _ulaw_to_linear16(payload)   # decode (result discarded in demo)
+
+
+# ── TCP server ────────────────────────────────────────────────────────────────
 
 class ClientHandler(threading.Thread):
-    def __init__(self, sock, addr, radio):
+    def __init__(self, sock, addr, radio, audio_channel=None):
         super().__init__(daemon=True)
         self.sock = sock
         self.addr = addr
         self.radio = radio
+        self.audio_channel = audio_channel
         self.send_lock = threading.Lock()
         self.alive = True
 
@@ -423,6 +623,15 @@ class ClientHandler(threading.Thread):
 
     def run(self):
         print(f"[cat_server] client connected: {self.addr}")
+        # Announce the UDP audio port immediately so the GUI can open the channel
+        if self.audio_channel:
+            self.send_json({
+                "type": "audio_port",
+                "port": self.audio_channel.port,
+                "sample_rate": AUDIO_SAMPLE_RATE,
+                "frame_ms": AUDIO_FRAME_MS,
+                "codec": "pcmu",   # G.711 μ-law
+            })
         streamer = threading.Thread(target=self._stream_loop, daemon=True)
         streamer.start()
 
@@ -443,6 +652,13 @@ class ClientHandler(threading.Thread):
                     except Exception:
                         continue
                     self.radio.apply(cmd)
+                    # When GUI sends its UDP address alongside set_ptt or
+                    # audio_hello, register it so the TX loop can reach it.
+                    if cmd.get("cmd") in ("set_ptt", "audio_hello"):
+                        udp_port = cmd.get("udp_port")
+                        if udp_port and self.audio_channel:
+                            gui_ip = self.addr[0]
+                            self.audio_channel.set_client_addr((gui_ip, int(udp_port)))
                     self.send_json({"resp": "ok", "state": self.radio.as_dict()})
         except OSError:
             pass
@@ -471,6 +687,10 @@ def _parse_args():
                     help="Host/IP to listen on (default: 0.0.0.0)")
     ap.add_argument("port", nargs="?", type=int, default=50101,
                     help="TCP port to listen on (default: 50101)")
+    ap.add_argument("--audio-port", metavar="PORT", type=int, default=AUDIO_UDP_PORT,
+                    help=f"UDP port for RTP audio (default: {AUDIO_UDP_PORT})")
+    ap.add_argument("--no-audio", action="store_true", default=False,
+                    help="Disable the RTP/UDP audio channel")
     for n in range(1, NUM_USER_BUTTONS + 1):
         ap.add_argument(f"--user-button-label-{n}", metavar="TEXT", default="",
                          help=f"Label for user button {n} (max 7 characters)")
@@ -505,6 +725,12 @@ def main():
 
     radio = RadioState(user_buttons=_build_user_buttons(args))
 
+    # ── Start the UDP audio channel ──────────────────────────────────────────
+    audio_ch = None
+    if not args.no_audio:
+        audio_ch = UDPAudioChannel(radio, args.audio_port)
+        audio_ch.start()
+
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind((host, port))
@@ -514,10 +740,12 @@ def main():
     try:
         while True:
             sock, addr = srv.accept()
-            ClientHandler(sock, addr, radio).start()
+            ClientHandler(sock, addr, radio, audio_channel=audio_ch).start()
     except KeyboardInterrupt:
         print("\n[cat_server] shutting down")
     finally:
+        if audio_ch:
+            audio_ch.stop()
         srv.close()
 
 

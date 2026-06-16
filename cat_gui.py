@@ -2,7 +2,7 @@
 """
 cat_gui.py
 """
-import argparse, collections, json, math, os, queue, socket, sys, threading, time, datetime
+import argparse, collections, json, math, os, queue, socket, struct, sys, threading, time, datetime
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -186,6 +186,309 @@ def nice_step(x):
 def scaled(key, sc):
     """Return BASE[key] scaled and rounded to int."""
     return max(1, int(round(BASE[key] * sc)))
+
+
+# ── RTP Audio constants (must match server) ───────────────────────────────────
+AUDIO_SAMPLE_RATE = 8000
+AUDIO_FRAME_MS    = 20
+AUDIO_FRAME_SAMPS = int(AUDIO_SAMPLE_RATE * AUDIO_FRAME_MS / 1000)  # 160
+
+# ── RTP helpers (GUI side) ────────────────────────────────────────────────────
+
+def _rtp_pack_gui(payload: bytes, seq: int, ts: int, ssrc: int = 0xABCD1234) -> bytes:
+    byte0 = 0x80
+    byte1 = 0 & 0x7F   # PT 0 = PCMU
+    return struct.pack("!BBHII", byte0, byte1, seq & 0xFFFF, ts, ssrc) + payload
+
+def _rtp_unpack_gui(data: bytes):
+    if len(data) < 12:
+        return None
+    hdr = struct.unpack("!BBHII", data[:12])
+    return data[12:], hdr[2], hdr[3]
+
+def _ulaw_to_linear16_gui(ulaw_bytes: bytes) -> bytes:
+    out = bytearray(len(ulaw_bytes) * 2)
+    for i, b in enumerate(ulaw_bytes):
+        b = ~b & 0xFF
+        sign = b & 0x80
+        exp  = (b >> 4) & 0x07
+        mantissa = b & 0x0F
+        s = ((mantissa << 1) | 0x21) << exp
+        s -= 33
+        if sign:
+            s = -s
+        s = max(-32768, min(32767, s))
+        struct.pack_into("<h", out, i * 2, s)
+    return bytes(out)
+
+def _linear16_to_ulaw_gui(samples: bytes) -> bytes:
+    out = bytearray(len(samples) // 2)
+    for i in range(len(out)):
+        s = struct.unpack_from("<h", samples, i * 2)[0]
+        sign = 0 if s >= 0 else 0x80
+        if s < 0:
+            s = -s
+        s = min(s, 32767)
+        s += 33
+        exp = 0
+        for e in range(7, -1, -1):
+            if s >= (1 << (e + 5)):
+                exp = e
+                break
+        mantissa = (s >> (exp + 1)) & 0x0F
+        ulaw = ~(sign | (exp << 4) | mantissa) & 0xFF
+        out[i] = ulaw
+    return bytes(out)
+
+
+class RTPAudioClient:
+    """
+    Manages the GUI side of the RTP/UDP audio channel.
+
+    Behaviour driven by PTT state:
+      PTT OFF → open speaker stream, receive RTP from server and play
+      PTT ON  → mute speaker, open mic stream, send RTP to server
+
+    PyAudio is imported lazily so the GUI still runs on machines without it
+    (audio features silently disabled with a console warning).
+    """
+
+    def __init__(self, server_host: str, server_port: int):
+        self._host       = server_host
+        self._port       = server_port
+        self._sock       = None
+        self._alive      = False
+        self._ptt        = False
+        self._seq        = 0
+        self._ts         = 0
+        self._pa         = None
+        self._rx_stream  = None
+        self._tx_stream  = None
+        self._lock       = threading.Lock()
+        self._local_port = None
+        self._in_device  = None   # PyAudio input  device index (None = system default)
+        self._out_device = None   # PyAudio output device index (None = system default)
+        self._sample_rate  = AUDIO_SAMPLE_RATE
+        self._frame_ms     = AUDIO_FRAME_MS
+        self._frame_samps  = AUDIO_FRAME_SAMPS
+
+    # ── device enumeration ────────────────────────────────────────────────────
+    def get_devices(self):
+        """Return list of dicts describing all audio devices on this machine.
+        Returns [] if pyaudio is not available."""
+        try:
+            import pyaudio
+        except ImportError:
+            return []
+        pa = self._pa
+        own = False
+        if pa is None:
+            try:
+                pa = pyaudio.PyAudio()
+                own = True
+            except Exception:
+                return []
+        devices = []
+        try:
+            for i in range(pa.get_device_count()):
+                try:
+                    info = pa.get_device_info_by_index(i)
+                    devices.append({
+                        "index":               i,
+                        "name":                info["name"],
+                        "max_input_channels":  int(info["maxInputChannels"]),
+                        "max_output_channels": int(info["maxOutputChannels"]),
+                        "default_sample_rate": int(info["defaultSampleRate"]),
+                    })
+                except Exception:
+                    pass
+        finally:
+            if own:
+                try:
+                    pa.terminate()
+                except Exception:
+                    pass
+        return devices
+
+    def set_devices(self, in_index, out_index):
+        """Set input/output device indices (None = system default).
+        Restarts any active stream immediately on the new devices."""
+        with self._lock:
+            self._in_device  = in_index
+            self._out_device = out_index
+        if self._alive:
+            self._close_streams()
+            if self._ptt:
+                self._open_tx_stream()
+            else:
+                self._open_rx_stream()
+
+    # ── lifecycle ─────────────────────────────────────────────────────────────
+    def open(self, server_host: str, server_udp_port: int,
+             sample_rate: int = AUDIO_SAMPLE_RATE,
+             frame_ms: int = AUDIO_FRAME_MS):
+        """Call this when the server sends audio_port."""
+        self._host        = server_host
+        self._port        = server_udp_port
+        self._sample_rate = sample_rate
+        self._frame_ms    = frame_ms
+        self._frame_samps = int(sample_rate * frame_ms / 1000)
+
+        # Open UDP socket
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._sock.settimeout(0.05)
+        self._sock.bind(("0.0.0.0", 0))   # OS picks a port
+        self._local_port = self._sock.getsockname()[1]
+        self._alive = True
+
+        # Try to import PyAudio
+        try:
+            import pyaudio
+            self._pa = pyaudio.PyAudio()
+        except ImportError:
+            print("[audio] WARNING: pyaudio not installed — audio disabled. "
+                  "Install with: pip install pyaudio")
+            self._pa = None
+
+        # Send a hello packet so the server learns our (ip, port)
+        # (also carries our local UDP port via the TCP channel — done externally)
+        hello = _rtp_pack_gui(b"\x00" * self._frame_samps, 0, 0)
+        try:
+            self._sock.sendto(hello, (self._host, self._port))
+        except OSError:
+            pass
+
+        threading.Thread(target=self._rx_loop, daemon=True).start()
+        # PTT starts OFF → open speaker stream immediately so audio plays on connect
+        self._open_rx_stream()
+        print(f"[audio] RTP client open  local_udp={self._local_port}"
+              f"  server={self._host}:{self._port}")
+
+    def close(self):
+        self._alive = False
+        self._close_streams()
+        if self._sock:
+            try:
+                self._sock.close()
+            except OSError:
+                pass
+            self._sock = None
+        if self._pa:
+            try:
+                self._pa.terminate()
+            except Exception:
+                pass
+            self._pa = None
+        print("[audio] RTP client closed")
+
+    def local_udp_port(self):
+        return self._local_port
+
+    # ── PTT control ──────────────────────────────────────────────────────────
+    def set_ptt(self, active: bool):
+        with self._lock:
+            if active == self._ptt:
+                return
+            self._ptt = active
+        self._close_streams()
+        if active:
+            self._open_tx_stream()
+        else:
+            self._open_rx_stream()
+
+    # ── stream helpers ────────────────────────────────────────────────────────
+    def _close_streams(self):
+        for attr in ("_rx_stream", "_tx_stream"):
+            s = getattr(self, attr, None)
+            if s:
+                try:
+                    s.stop_stream()
+                    s.close()
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+
+    def _open_rx_stream(self):
+        if not self._pa:
+            return
+        try:
+            import pyaudio
+            kw = {}
+            if self._out_device is not None:
+                kw["output_device_index"] = self._out_device
+            self._rx_stream = self._pa.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=self._sample_rate,
+                output=True,
+                frames_per_buffer=self._frame_samps,
+                **kw,
+            )
+        except Exception as e:
+            print(f"[audio] speaker stream error: {e}")
+
+    def _open_tx_stream(self):
+        if not self._pa:
+            return
+        try:
+            import pyaudio
+            kw = {}
+            if self._in_device is not None:
+                kw["input_device_index"] = self._in_device
+            self._tx_stream = self._pa.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=self._sample_rate,
+                input=True,
+                frames_per_buffer=self._frame_samps,
+                stream_callback=self._tx_callback,
+                **kw,
+            )
+            self._tx_stream.start_stream()
+        except Exception as e:
+            print(f"[audio] mic stream error: {e}")
+
+    def _tx_callback(self, in_data, frame_count, time_info, status):
+        """PyAudio input callback — encode and send one RTP packet."""
+        import pyaudio
+        payload = _linear16_to_ulaw_gui(in_data)
+        pkt = _rtp_pack_gui(payload, self._seq, self._ts)
+        self._seq = (self._seq + 1) & 0xFFFF
+        self._ts  = (self._ts + frame_count) & 0xFFFFFFFF
+        try:
+            self._sock.sendto(pkt, (self._host, self._port))
+        except OSError:
+            pass
+        return (None, pyaudio.paContinue)
+
+    # ── RX loop ───────────────────────────────────────────────────────────────
+    def _rx_loop(self):
+        while self._alive:
+            try:
+                data, _ = self._sock.recvfrom(2048)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+
+            result = _rtp_unpack_gui(data)
+            if result is None:
+                continue
+            payload, seq, ts = result
+
+            with self._lock:
+                ptt_active = self._ptt
+
+            if ptt_active:
+                continue  # we are TX-ing, discard any incoming echo
+
+            pcm = _ulaw_to_linear16_gui(payload)
+            if self._rx_stream:
+                try:
+                    self._rx_stream.write(pcm)
+                except Exception:
+                    pass
+
 
 # ── networking ────────────────────────────────────────────────────────────────
 
@@ -752,6 +1055,7 @@ class App:
         except: pass
 
         self.net=Net(self); self.q=queue.Queue()
+        self.rtp_audio = RTPAudioClient("", 0)   # configured when server sends audio_port
 
         self.state=dict(
             lo_freq=28_495_000, lo_b_freq=28_495_000, tune_freq=28_505_000,
@@ -897,7 +1201,9 @@ class App:
             new_state = not self.state.get("ptt", False)
             self.state["ptt"] = new_state
             _draw_ptt_btn(new_state)
-            self.net.send({"cmd": "set_ptt", "enabled": new_state})
+            self.net.send({"cmd": "set_ptt", "enabled": new_state,
+                           "udp_port": self.rtp_audio.local_udp_port()})
+            self.rtp_audio.set_ptt(new_state)
 
         self._ptt_canvas.bind("<Button-1>", _ptt_click)
         self._ptt_canvas.config(cursor="hand2")
@@ -1058,10 +1364,13 @@ class App:
         # ── SDR-Device / Soundcard / Bandwidth / Options ──────────────────────
         r1=tk.Frame(lp,bg=C["panel_bg"])
         r1.pack(fill="x",padx=max(2,int(round(4*sc))),pady=(max(1,int(round(2*sc))),max(1,int(round(1*sc)))))
-        for t in ["SDR-Device","Soundcard","Bandwidth","Options"]:
+        for t in ["SDR-Device","Bandwidth","Options"]:
             _fbtn(r1,t,sc=sc,
                   command=lambda t=t:self.net.send({"cmd":"ui_button","name":t})
                   ).pack(side="left",padx=max(1,int(round(1*sc))),fill="x",expand=True)
+        _fbtn(r1,"Soundcard",sc=sc,
+              command=self._open_soundcard_dialog
+              ).pack(side="left",padx=max(1,int(round(1*sc))),fill="x",expand=True)
 
         # ── transport bar ─────────────────────────────────────────────────────
         tb=tk.Frame(lp,bg=C["panel_bg"])
@@ -1404,6 +1713,153 @@ class App:
         if hasattr(self, '_draw_ptt_btn'):
             self._draw_ptt_btn(bool(self.state.get("ptt", False)))
 
+
+    # ── Soundcard device selection dialog ─────────────────────────────────────
+    def _open_soundcard_dialog(self):
+        """Open a modal window listing all PyAudio devices.
+        The user picks an input device (microphone) and an output device
+        (speaker) independently; confirming applies them immediately to the
+        RTP audio client without requiring a reconnect."""
+
+        devices = self.rtp_audio.get_devices()
+
+        sc = self._sc
+        fs = max(7, int(round(8 * sc)))
+        fs_h = max(8, int(round(9 * sc)))
+        pad = max(4, int(round(6 * sc)))
+        row_h = max(22, int(round(26 * sc)))
+
+        top = tk.Toplevel(self.root)
+        top.title("Soundcard / Audio Device Selection")
+        top.configure(bg=C["panel_bg"])
+        top.transient(self.root)
+        top.grab_set()
+        top.resizable(False, False)
+
+        # ── helper: build one device-list panel ──────────────────────────────
+        def _make_panel(parent, title, filter_key, current_idx):
+            """Return (frame, get_selection_fn).
+            filter_key: "max_input_channels" or "max_output_channels"
+            """
+            fr = tk.Frame(parent, bg=C["panel_bg"])
+
+            tk.Label(fr, text=title, bg=C["panel_bg"], fg=C["btn_grn_fg"],
+                     font=_gui_font(fs_h, "bold")).pack(anchor="w", padx=pad, pady=(pad, 2))
+
+            # Scrollable listbox
+            lb_fr = tk.Frame(fr, bg=C["panel_bg"])
+            lb_fr.pack(fill="both", expand=True, padx=pad, pady=(0, pad))
+
+            sb = tk.Scrollbar(lb_fr, orient="vertical", bg=C["btn_gray"],
+                              troughcolor=C["win_bg"])
+            lb = tk.Listbox(lb_fr, yscrollcommand=sb.set,
+                            bg=C["btn_gray"], fg=C["text"],
+                            selectbackground=C["btn_sel"], selectforeground=C["btn_sel_fg"],
+                            font=_gui_font(fs), relief="flat", bd=0,
+                            height=10,
+                            width=40,
+                            activestyle="none")
+            sb.config(command=lb.yview)
+            sb.pack(side="right", fill="y")
+            lb.pack(side="left", fill="both", expand=True)
+
+            # Populate: first entry is always "System default"
+            entries = [{"index": None, "label": "(System default)"}]
+            for d in devices:
+                if d[filter_key] > 0:
+                    ch = d[filter_key]
+                    sr = d["default_sample_rate"]
+                    label = f"[{d['index']:2d}]  {d['name']}  ({ch}ch  {sr//1000}kHz)"
+                    entries.append({"index": d["index"], "label": label})
+
+            for e in entries:
+                lb.insert("end", e["label"])
+
+            # Pre-select current device
+            sel = 0
+            for i, e in enumerate(entries):
+                if e["index"] == current_idx:
+                    sel = i
+                    break
+            lb.selection_set(sel)
+            lb.see(sel)
+
+            def get_selection():
+                idxs = lb.curselection()
+                if not idxs:
+                    return current_idx
+                return entries[idxs[0]]["index"]
+
+            return fr, get_selection
+
+        # ── layout: two panels side by side ──────────────────────────────────
+        panels_fr = tk.Frame(top, bg=C["panel_bg"])
+        panels_fr.pack(fill="both", expand=True, padx=pad, pady=(pad, 0))
+
+        in_fr, get_in = _make_panel(
+            panels_fr, "Microphone (input)",
+            "max_input_channels", self.rtp_audio._in_device)
+        in_fr.pack(side="left", fill="both", expand=True, padx=(0, pad // 2))
+
+        out_fr, get_out = _make_panel(
+            panels_fr, "Speaker / Headphones (output)",
+            "max_output_channels", self.rtp_audio._out_device)
+        out_fr.pack(side="left", fill="both", expand=True, padx=(pad // 2, 0))
+
+        # Status label
+        self._sc_status_var = tk.StringVar(value="")
+        tk.Label(top, textvariable=self._sc_status_var,
+                 bg=C["panel_bg"], fg=C["text_grn"],
+                 font=_gui_font(fs)).pack(padx=pad, pady=(2, 0))
+
+        # ── no pyaudio warning ────────────────────────────────────────────────
+        if not devices:
+            tk.Label(top,
+                     text="pyaudio not installed - no devices available. pip install pyaudio",
+                     bg=C["panel_bg"], fg=C["btn_red_fg"],
+                     font=_gui_font(fs), justify="left"
+                     ).pack(padx=pad, pady=(0, pad))
+
+        # ── buttons ───────────────────────────────────────────────────────────
+        btn_fr = tk.Frame(top, bg=C["panel_bg"])
+        btn_fr.pack(fill="x", padx=pad, pady=pad)
+
+        def _apply():
+            in_idx  = get_in()
+            out_idx = get_out()
+            self.rtp_audio.set_devices(in_idx, out_idx)
+            in_name  = next((d["name"] for d in devices if d["index"] == in_idx),
+                            "System default")
+            out_name = next((d["name"] for d in devices if d["index"] == out_idx),
+                            "System default")
+            self._sc_status_var.set(
+                f"✓  In: {in_name[:28]}   Out: {out_name[:28]}")
+            print(f"[audio] devices set — input={in_idx} ({in_name})"
+                  f"  output={out_idx} ({out_name})")
+
+        def _ok():
+            _apply()
+            top.destroy()
+
+        _fbtn(btn_fr, "Apply", sc=sc, command=_apply,
+              bg=C["btn_gray"], fg=C["btn_sel_fg"]
+              ).pack(side="left", padx=(0, max(2, int(round(4 * sc)))))
+        _fbtn(btn_fr, "OK", sc=sc, command=_ok,
+              bg=C["btn_grn"], fg=C["btn_grn_fg"]
+              ).pack(side="left", padx=(0, max(2, int(round(4 * sc)))))
+        tk.Button(btn_fr, text="Cancel", command=top.destroy,
+                  bg=C["btn_gray"], fg=C["btn_red_fg"],
+                  font=_gui_font(fs), relief="flat", bd=1
+                  ).pack(side="left")
+
+        # ── centre over parent ────────────────────────────────────────────────
+        top.update_idletasks()
+        rw = self.root.winfo_x() + self.root.winfo_width() // 2
+        rh = self.root.winfo_y() + self.root.winfo_height() // 2
+        tw = top.winfo_reqwidth()
+        th = top.winfo_reqheight()
+        top.geometry(f"+{rw - tw // 2}+{rh - th // 2}")
+
     def _toggle_connect(self):
         if self.net.connected:
             if self.state["running"]:
@@ -1436,6 +1892,7 @@ class App:
 
     def _on_disconnected(self):
         self.state["running"]=False
+        self.rtp_audio.close()
         self.conn_btn.config(text="Connect",state="normal",
                              bg="#0e2a10",fg=C["btn_grn_fg"])
         self.conn_status.config(fg="#331111")
@@ -1570,6 +2027,17 @@ class App:
     def _handle(self,msg):
         t=msg.get("type")
         if t=="disconnected": self._on_disconnected()
+        elif t=="audio_port":
+            # Server is advertising its UDP RTP port — open the audio channel
+            server_host = self.net.sock.getpeername()[0] if self.net.sock else "127.0.0.1"
+            udp_port    = int(msg.get("port", 5004))
+            sr          = int(msg.get("sample_rate", AUDIO_SAMPLE_RATE))
+            fm          = int(msg.get("frame_ms", AUDIO_FRAME_MS))
+            self.rtp_audio.open(server_host, udp_port, sample_rate=sr, frame_ms=fm)
+            # Tell the server our UDP port so TX can reach us
+            local_udp = self.rtp_audio.local_udp_port()
+            if local_udp:
+                self.net.send({"cmd": "audio_hello", "udp_port": local_udp})
         elif t=="data":
             f0=msg["f_start"]; f1=msg["f_stop"]
             self.rf_spec.update_data(f0,f1,msg["spectrum"])
@@ -1612,7 +2080,7 @@ def main():
     root.bind("<Escape>", _on_esc)
 
     root.protocol("WM_DELETE_WINDOW",
-                  lambda:(app.net.disconnect(), root.destroy()))
+                  lambda:(app.net.disconnect(), app.rtp_audio.close(), root.destroy()))
     root.mainloop()
 
 if __name__=="__main__":
