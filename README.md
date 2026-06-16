@@ -1,5 +1,11 @@
 # CAT GUI Interface (TCP-driven simulation)
 
+<div align="center">
+  <a href="https://github.com/hiperiondev/RadioCAT_GUI">
+    <img src="images/full_gui.png" alt="screenshot">
+  </a>
+</div>
+</p>
 This project is a Python/Tkinter **CAT GUI Interface** — a simulated SDR
 front-end whose every control is wired to a small simulated "radio" backend
 over a plain TCP socket.
