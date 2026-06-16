@@ -333,6 +333,15 @@ Esta es una simulación con fines de demostración/educación:
   servidor e incluido en el diccionario de estado, pero ningún botón de la GUI
   envía `set_nb`. Actívelo desde un cliente externo o agregue un botón "NB"
   dedicado.
+- El estado `rf_gain` es rastreado por el servidor e incluido en el diccionario
+  de estado (predeterminado 20,0 dB), pero la GUI no tiene ningún control
+  deslizante ni control que envíe `set_rf_gain`. Solo puede configurarse desde
+  clientes externos o extendiendo la interfaz con un control dedicado.
+- El umbral `squelch` es rastreado por el servidor (predeterminado −130,0 dBm)
+  y controla el indicador `squelch_open` en cada trama de datos, pero la GUI
+  no tiene control deslizante para `set_squelch`. El botón "Squelch" de la
+  columna del S-meter envía únicamente una notificación `ui_smeter_btn`; no
+  modifica el nivel de squelch.
 - El sistema de menús, la base de datos de mapeo de bandas, la grabación,
   la decodificación DRM y la integración OmniRig/CAT no están reproducidos
   — este proyecto se centra en el flujo de trabajo básico de sintonización/

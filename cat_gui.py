@@ -2,7 +2,7 @@
 """
 cat_gui.py
 """
-import argparse, collections, json, math, os, queue, socket, struct, sys, threading, time, datetime
+import argparse, array, collections, json, math, os, queue, socket, struct, sys, threading, time, datetime
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -67,10 +67,22 @@ disable_soundcard_select = false
 def _parse_simple_toml(text):
     """Minimal TOML parser (strings, ints, bools, flat [sections]) used when
     neither tomllib nor tomli is available."""
+    def _strip_comment(raw):
+        """Return *raw* with any trailing TOML comment removed.
+        A '#' is only a comment delimiter when it appears outside a
+        double-quoted string; e.g.  bg = "#FFECD6"  must survive intact."""
+        in_quote = False
+        for i, ch in enumerate(raw):
+            if ch == '"':
+                in_quote = not in_quote
+            elif ch == '#' and not in_quote:
+                return raw[:i].strip()
+        return raw.strip()
+
     result = {}
     section = result
     for raw in text.splitlines():
-        line = raw.split('#')[0].strip()
+        line = _strip_comment(raw)
         if not line:
             continue
         if line.startswith('[') and line.endswith(']'):
@@ -229,12 +241,28 @@ def _parse_args():
         ap.error('--disable-scale requires --scale to also be specified')
 
     if (args.host is None) != (args.port is None):
-        ap.error('--host and --port must be specified together')
+        if _cli_host or _cli_port:
+            # At least one side was given on the CLI — report it as a CLI mistake
+            ap.error('--host and --port must be specified together')
+        else:
+            # Both sides came from the TOML file — report the config file as the source
+            print(f"[config] ERROR: 'host' and 'port' must both be set together in "
+                  f"{_config_path}", file=sys.stderr)
+            sys.exit(1)
     if (args.audio_mic is None) != (args.audio_speaker is None):
-        ap.error('--audio-mic and --audio-speaker must be specified together')
+        if _cli_mic or _cli_spk:
+            ap.error('--audio-mic and --audio-speaker must be specified together')
+        else:
+            print(f"[config] ERROR: 'mic' and 'speaker' must both be set together in "
+                  f"{_config_path}", file=sys.stderr)
+            sys.exit(1)
     return args
 
-_ARGS = _parse_args()
+# _ARGS is intentionally None at import time; main() sets it via _parse_args()
+# so that importing this module as a library never consumes sys.argv or calls
+# sys.exit().  All code that reads _ARGS lives inside functions/methods which
+# are only ever reached after main() has initialised it.
+_ARGS = None
 
 # ── TTF path (same directory as this script) ──────────────────────────────────
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -326,19 +354,17 @@ def _load_custom_fonts(root):
         stem = os.path.splitext(os.path.basename(path))[0]
         return stem.replace("_", " ").replace("-", " ").title()
 
-    def _wait_for_family(root, family, retries=6, delay_ms=120):
-        """Return True once family appears in tkfont.families()."""
-        fams = set(tkfont.families(root))
-        if family in fams:
-            return True
-        # Poll: give Tk a moment to ingest the new fontconfig cache
-        for _ in range(retries):
-            root.update()
-            import time; time.sleep(delay_ms / 1000)
-            fams = set(tkfont.families(root))
-            if family in fams:
-                return True
-        return False
+    def _wait_for_family(root, family):
+        """Return True if family is visible to Tk after one event-loop flush.
+
+        _register_appfont() calls FcConfigAppFontAddFile() / CTFontManager which
+        mutate the live in-process font config synchronously — the family is
+        either present immediately after root.update() drains any pending Tk
+        redraws, or polling with time.sleep() won't help.  Removing the sleep
+        loop eliminates up to 720 ms of blocking startup time.
+        """
+        root.update()
+        return family in set(tkfont.families(root))
 
     def _register_appfont(path, plat):
         """Register the font directly with *this process's* live font
@@ -498,7 +524,10 @@ C = dict(
     grid_text   = "#3a5878",   # grid labels
     trace       = "#18e840",   # spectrum trace
     trace_fill  = "#030d06",   # trace fill
-    filter_fill = "#142850",   # IF passband
+    filter_fill = "#142850",   # IF passband (kept for compatibility)
+    filter_fill_overlay = "#1e3f70",  # IF passband overlay – lighter than bg so
+                                       # the spectrum trace shows through even when
+                                       # stipple is unavailable (macOS / Windows)
     filter_edge = "#3060e0",   # IF passband edge
     vfo_line    = "#ff2828",   # VFO line
     smeter_grn  = "#28ee50",
@@ -509,11 +538,6 @@ C = dict(
     sep         = "#1a3050",
 )
 
-# ── --bg theme override ──────────────────────────────────────────────────────
-if _ARGS.bg == 'light':
-    _LIGHT_BG = "#FFECD6"
-    for _k in ("win_bg","panel_bg","panel_mid","spec_bg","btn_gray"):
-        C[_k] = _LIGHT_BG
 
 MODES    = ["AM","ECSS","FM","LSB","USB","CW","DIG"]
 NUM_BINS = 900
@@ -582,12 +606,13 @@ def scaled(key, sc):
 AUDIO_SAMPLE_RATE = 8000
 AUDIO_FRAME_MS    = 20
 AUDIO_FRAME_SAMPS = int(AUDIO_SAMPLE_RATE * AUDIO_FRAME_MS / 1000)  # 160
+PT_PCMU           = 0    # RTP payload type: G.711 µ-law (RFC 3551)
 
 # ── RTP helpers (GUI side) ────────────────────────────────────────────────────
 
 def _rtp_pack_gui(payload: bytes, seq: int, ts: int, ssrc: int = 0xABCD1234) -> bytes:
     byte0 = 0x80
-    byte1 = 0 & 0x7F   # PT 0 = PCMU
+    byte1 = PT_PCMU & 0x7F   # payload type in bits 6-0; bit 7 = marker (clear)
     return struct.pack("!BBHII", byte0, byte1, seq & 0xFFFF, ts, ssrc) + payload
 
 def _rtp_unpack_gui(data: bytes):
@@ -596,25 +621,40 @@ def _rtp_unpack_gui(data: bytes):
     hdr = struct.unpack("!BBHII", data[:12])
     return data[12:], hdr[2], hdr[3]
 
-def _ulaw_to_linear16_gui(ulaw_bytes: bytes) -> bytes:
-    out = bytearray(len(ulaw_bytes) * 2)
-    for i, b in enumerate(ulaw_bytes):
-        b = ~b & 0xFF
+# ── u-law <-> linear16 codec ────────────────────────────────────────────────
+# NOTE: this is intentionally NOT the standard ITU-T G.711 mu-law curve — it
+# uses a bias of 33 (0x21) and a mantissa shift of 1, which works out to be
+# exactly 1/4 the amplitude of the textbook formula (BIAS=132, shift=3) that
+# audioop.ulaw2lin()/lin2ulaw() implement. Swapping in audioop would silently
+# change playback/transmit volume by 4x and could desync from whatever the
+# server side expects. audioop is also deprecated (PEP 594) and removed in
+# Python 3.13+, so it's not a safe long-term dependency either. Instead, the
+# exact original per-sample math is preserved but pushed into precomputed
+# lookup tables built once at import time, so the hot path becomes a pure
+# table lookup with no bit-shifting, branching, or struct (un)packing.
+
+def _build_ulaw_decode_table():
+    """256-entry table: u-law byte -> decoded int16 sample."""
+    table = []
+    for raw in range(256):
+        b = ~raw & 0xFF
         sign = b & 0x80
-        exp  = (b >> 4) & 0x07
+        exp = (b >> 4) & 0x07
         mantissa = b & 0x0F
         s = ((mantissa << 1) | 0x21) << exp
         s -= 33
         if sign:
             s = -s
         s = max(-32768, min(32767, s))
-        struct.pack_into("<h", out, i * 2, s)
-    return bytes(out)
+        table.append(s)
+    return tuple(table)
 
-def _linear16_to_ulaw_gui(samples: bytes) -> bytes:
-    out = bytearray(len(samples) // 2)
-    for i in range(len(out)):
-        s = struct.unpack_from("<h", samples, i * 2)[0]
+def _build_linear_to_ulaw_table():
+    """65536-entry table: unsigned 16-bit sample value (signed sample + 0x10000
+    if negative, i.e. `sample & 0xFFFF`) -> encoded u-law byte."""
+    table = bytearray(65536)
+    for sample in range(-32768, 32768):
+        s = sample
         sign = 0 if s >= 0 else 0x80
         if s < 0:
             s = -s
@@ -627,8 +667,26 @@ def _linear16_to_ulaw_gui(samples: bytes) -> bytes:
                 break
         mantissa = (s >> (exp + 1)) & 0x0F
         ulaw = ~(sign | (exp << 4) | mantissa) & 0xFF
-        out[i] = ulaw
-    return bytes(out)
+        table[sample & 0xFFFF] = ulaw
+    return bytes(table)
+
+_ULAW_DECODE_TABLE      = _build_ulaw_decode_table()
+_LINEAR_TO_ULAW_TABLE   = _build_linear_to_ulaw_table()
+
+def _ulaw_to_linear16_gui(ulaw_bytes: bytes) -> bytes:
+    table = _ULAW_DECODE_TABLE
+    out = array.array('h', (table[b] for b in ulaw_bytes))
+    if sys.byteorder != "little":
+        out.byteswap()
+    return out.tobytes()
+
+def _linear16_to_ulaw_gui(samples: bytes) -> bytes:
+    in_arr = array.array('h')
+    in_arr.frombytes(samples)
+    if sys.byteorder != "little":
+        in_arr.byteswap()
+    table = _LINEAR_TO_ULAW_TABLE
+    return bytes(table[s & 0xFFFF] for s in in_arr)
 
 
 class RTPAudioClient:
@@ -658,6 +716,10 @@ class RTPAudioClient:
         self._local_port = None
         self._in_device  = None   # PyAudio input  device index (None = system default)
         self._out_device = None   # PyAudio output device index (None = system default)
+        # Ring buffer shared between _rx_loop (producer) and the PyAudio
+        # output callback (consumer).  Using a deque avoids blocking the UDP
+        # receive thread when the PyAudio buffer is temporarily full.
+        self._rx_buf     = collections.deque()
         self._sample_rate  = AUDIO_SAMPLE_RATE
         self._frame_ms     = AUDIO_FRAME_MS
         self._frame_samps  = AUDIO_FRAME_SAMPS
@@ -712,6 +774,12 @@ class RTPAudioClient:
                 self._open_tx_stream()
             else:
                 self._open_rx_stream()
+
+    def get_selected_devices(self):
+        """Return (in_device, out_device) indices currently selected.
+        Either value may be None, meaning «use the system default»."""
+        with self._lock:
+            return (self._in_device, self._out_device)
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
     def open(self, server_host: str, server_udp_port: int,
@@ -788,6 +856,7 @@ class RTPAudioClient:
 
     # ── stream helpers ────────────────────────────────────────────────────────
     def _close_streams(self):
+        self._rx_buf.clear()   # discard buffered audio before tearing down streams
         for attr in ("_rx_stream", "_tx_stream"):
             s = getattr(self, attr, None)
             if s:
@@ -812,10 +881,31 @@ class RTPAudioClient:
                 rate=self._sample_rate,
                 output=True,
                 frames_per_buffer=self._frame_samps,
+                stream_callback=self._rx_callback,
                 **kw,
             )
+            self._rx_stream.start_stream()
         except Exception as e:
             print(f"[audio] speaker stream error: {e}")
+
+    def _rx_callback(self, in_data, frame_count, time_info, status):
+        """PyAudio output callback — drain samples from the ring buffer."""
+        needed = frame_count * 2  # 16-bit mono → 2 bytes per sample
+        try:
+            chunk = self._rx_buf.popleft()
+            if len(chunk) >= needed:
+                data = chunk[:needed]
+                remainder = chunk[needed:]
+                if remainder:
+                    self._rx_buf.appendleft(remainder)
+            else:
+                # Short chunk: pad with silence to fill the frame
+                data = chunk + b"\x00" * (needed - len(chunk))
+        except IndexError:
+            # Buffer empty (normal underrun) or cleared by _close_streams()
+            # racing between our check and pop — either way, emit silence.
+            data = b"\x00" * needed
+        return (data, 0)  # 0 == pyaudio.paContinue
 
     def _open_tx_stream(self):
         if not self._pa:
@@ -840,7 +930,6 @@ class RTPAudioClient:
 
     def _tx_callback(self, in_data, frame_count, time_info, status):
         """PyAudio input callback — encode and send one RTP packet."""
-        import pyaudio
         payload = _linear16_to_ulaw_gui(in_data)
         pkt = _rtp_pack_gui(payload, self._seq, self._ts)
         self._seq = (self._seq + 1) & 0xFFFF
@@ -849,7 +938,7 @@ class RTPAudioClient:
             self._sock.sendto(pkt, (self._host, self._port))
         except OSError:
             pass
-        return (None, pyaudio.paContinue)
+        return (None, 0)  # 0 == pyaudio.paContinue
 
     # ── RX loop ───────────────────────────────────────────────────────────────
     def _rx_loop(self):
@@ -874,10 +963,10 @@ class RTPAudioClient:
 
             pcm = _ulaw_to_linear16_gui(payload)
             if self._rx_stream:
-                try:
-                    self._rx_stream.write(pcm)
-                except Exception:
-                    pass
+                # Non-blocking: push decoded PCM into the ring buffer so the
+                # PyAudio output callback (_rx_callback) can drain it at its
+                # own pace without ever stalling this receive thread.
+                self._rx_buf.append(pcm)
 
 
 def _print_audio_devices():
@@ -929,8 +1018,10 @@ class Net:
     def disconnect(self):
         self.connected=False
         if self.sock:
+            try: self.sock.shutdown(socket.SHUT_RDWR)
+            except OSError: pass
             try: self.sock.close()
-            except: pass
+            except OSError: pass
             self.sock=None
 
     def send(self,obj):
@@ -944,21 +1035,37 @@ class Net:
             self.app.q.put({"type":"disconnected"})
             return False
 
+    _RX_BUF_MAX = 4 * 1024 * 1024   # 4 MiB — guard against unbounded buffer growth
+
     def _rx(self):
         buf=b""
         while self.connected:
             try: data=self.sock.recv(65536)
-            except: break
+            except OSError: break
             if not data: break
             buf+=data
+            if len(buf) > self._RX_BUF_MAX:
+                import logging
+                logging.warning(
+                    "_rx: receive buffer exceeded %d bytes with no line boundary "
+                    "— likely malformed/unterminated JSON; closing socket",
+                    self._RX_BUF_MAX,
+                )
+                break
             while b"\n" in buf:
                 line,buf=buf.split(b"\n",1)
                 line=line.strip()
                 if not line: continue
                 try: self.app.q.put(json.loads(line.decode()))
-                except: pass
-        self.connected=False
-        self.app.q.put({"type":"disconnected"})
+                except (json.JSONDecodeError, UnicodeDecodeError): pass
+        # Snapshot the flag *before* clearing it: if disconnect() already set it
+        # to False, the user initiated the close intentionally and the GUI should
+        # not be notified.  If it is still True here, the loop fell out due to a
+        # network fault and the GUI needs to surface the error.
+        was_unexpected = self.connected
+        self.connected = False
+        if was_unexpected:
+            self.app.q.put({"type":"disconnected"})
 
 # ── Waterfall canvas ──────────────────────────────────────────────────────────
 
@@ -1113,8 +1220,14 @@ class SpecCanvas(tk.Canvas):
             ctr=(self.f0+self.f1)/2
             fl=self.app.state["filter_lo"]; fh=self.app.state["filter_hi"]
             x1=self._fx(ctr+fl); x2=self._fx(ctr+fh)
-            self.create_rectangle(x1,0,x2,draw_h,fill=C["filter_fill"],
-                                  outline="",stipple="gray50")
+            # stipple="gray50" is only reliable on X11; on macOS/Windows the
+            # rectangle is rendered fully opaque, hiding the spectrum trace.
+            # Use a slightly lighter fill that reads as a tinted overlay on all
+            # platforms, and only add the stipple on X11 where it works.
+            import sys as _sys
+            _stipple = "gray50" if _sys.platform.startswith("linux") else ""
+            self.create_rectangle(x1,0,x2,draw_h,fill=C["filter_fill_overlay"],
+                                  outline="",stipple=_stipple)
             self.create_line(x1,0,x1,draw_h,fill=C["filter_edge"],width=1)
             self.create_line(x2,0,x2,draw_h,fill=C["filter_edge"],width=1)
             xc=self._fx(ctr)
@@ -1180,7 +1293,7 @@ class SpecCanvas(tk.Canvas):
         self.app.state["filter_lo"]=round(fl)
         self.app.state["filter_hi"]=round(fh)
         self.draw()
-        now=time.time()
+        now=time.monotonic()
         if now-self._last>0.05:
             self._last=now
             self.app.net.send({"cmd":"set_filter","lo":round(fl),"hi":round(fh)})
@@ -1367,6 +1480,7 @@ class FreqDisp(tk.Frame):
     def _edit(self,_=None):
         top=tk.Toplevel(self); top.title("Set Frequency")
         top.configure(bg=C["panel_bg"]); top.transient(self.winfo_toplevel())
+        top.grab_set()
         tk.Label(top,text="Frequency (Hz):",bg=C["panel_bg"],
                  fg=C["text"]).pack(padx=12,pady=(12,4))
         var=tk.StringVar(value=str(self.value))
@@ -1374,7 +1488,13 @@ class FreqDisp(tk.Frame):
         ent.pack(padx=12,pady=4); ent.select_range(0,"end"); ent.focus_set()
         def apply(_=None):
             try: v=int(float(var.get()))
-            except: top.destroy(); return
+            except ValueError:
+                ent.config(highlightthickness=2,highlightbackground="#cc2222",
+                           highlightcolor="#cc2222")
+                ent.after(1200,lambda:ent.config(highlightthickness=1,
+                                                  highlightbackground=C["sep"],
+                                                  highlightcolor=C["sep"]))
+                return
             self.set_value(v,notify=True); top.destroy()
         ent.bind("<Return>",apply)
         tk.Button(top,text="Set",command=apply,bg=C["btn_gray"],
@@ -1382,7 +1502,7 @@ class FreqDisp(tk.Frame):
 
 # ── toolbar strip (between RF waterfall and AF area) ─────────────────────────
 
-def _toolbar(parent,rbw="23.4 Hz",avg="2",bg=None,sc=1.0,app=None,box_id="rf"):
+def _toolbar(parent,rbw="23.4 Hz",avg="2",bg=None,sc=1.0,app=None,box_id="rf",initial_view=None):
     if bg is None: bg=C["panel_mid"]
     h=max(16,int(round(BASE['toolbar_h']*sc)))
     fs=max(6,int(round(8*sc)))
@@ -1398,13 +1518,19 @@ def _toolbar(parent,rbw="23.4 Hz",avg="2",bg=None,sc=1.0,app=None,box_id="rf"):
                  font=_gui_font(max(5,int(round(7*sc))))).pack(side="left")
 
     # ── Mutually exclusive Waterfall / Spectrum toggle buttons ──────────────
-    _wf_state = {"sel": "Waterfall"}   # one mutable cell shared by both closures
+    # BUG-12 fix: seed from caller-supplied initial_view (which comes from
+    # app.state) so the toggle survives reconnects and scale-change rebuilds.
+    _state_key = f"toolbar_view_{box_id}"
+    _wf_state = {"sel": initial_view if initial_view in ("Waterfall","Spectrum") else "Waterfall"}
 
     def _make_toggle(name, btn_ref_key):
         def _cmd():
             _wf_state["sel"] = name
             _update_toggle_colors()
             if app:
+                # BUG-12 fix: write selection back into app.state so it
+                # persists across rebuilds and is visible to _refresh().
+                app.state[_state_key] = name
                 # Distinct commands per box and per button
                 app.net.send({"cmd": "ui_display",
                                "box": box_id,
@@ -1431,8 +1557,16 @@ def _toolbar(parent,rbw="23.4 Hz",avg="2",bg=None,sc=1.0,app=None,box_id="rf"):
         b.pack(side="left", padx=max(1,int(round(2*sc))))
         _toggle_btns[name] = b
         sep()
-    # Apply initial colours (Waterfall selected by default)
+    # Apply initial colours from seeded state
     _update_toggle_colors()
+
+    # BUG-12 fix: expose an updater so _refresh() can push server-side state
+    # changes into the toggle without knowing about _wf_state internals.
+    def _set_view(name):
+        if name in ("Waterfall", "Spectrum"):
+            _wf_state["sel"] = name
+            _update_toggle_colors()
+    bar.set_view = _set_view
 
     for t in ["◀","◀◀"]: lbl(t,C["text_dim"])
     sep()
@@ -1467,17 +1601,21 @@ class App:
 
         try:
             root.tk.call("font","create","_MorgentaLoad","-family","Morgenta Regular")
-        except: pass
+        except tk.TclError: pass
         try:
             root.option_add("*Font","TkDefaultFont")
-        except: pass
+        except tk.TclError: pass
         try:
             # Disabled labels use the same dim color as the LO A label
             root.option_add("*Label.disabledForeground",C["text_dim"])
-        except: pass
+        except tk.TclError: pass
 
         self.net=Net(self); self.q=queue.Queue()
         self.rtp_audio = RTPAudioClient("", 0)   # configured when server sends audio_port
+        # PTT must stay disabled until the RTP socket has actually bound and
+        # local_udp_port() can return a real value — otherwise an early click
+        # would send {"udp_port": None} to the server (see _ptt_click below).
+        self._ptt_enabled = False
 
         # Apply --audio-mic / --audio-speaker device selection, if given.
         if _ARGS.audio_mic is not None or _ARGS.audio_speaker is not None:
@@ -1515,6 +1653,10 @@ class App:
             ptt=False,
             user_buttons=[{"label":"","type":"normal"} for _ in range(6)],
             user_btn_state=[False]*6,
+            # BUG-12 fix: persist toolbar toggle selection so it survives
+            # reconnects and scale-change rebuilds.
+            toolbar_view_rf="Waterfall",
+            toolbar_view_af="Waterfall",
         )
         self._sup=False
         # HiDPI / 4K scaling state
@@ -1555,7 +1697,7 @@ class App:
 
         # ── toolbar between RF and bottom ─────────────────────────────────────
         self._toolbar1_parent=r
-        self._toolbar1=_toolbar(r,rbw="23.4 Hz",avg="2",sc=sc,app=self,box_id="rf")
+        self._toolbar1=_toolbar(r,rbw="23.4 Hz",avg="2",sc=sc,app=self,box_id="rf",initial_view=self.state.get("toolbar_view_rf","Waterfall"))
 
         # ── bottom row: left control panel + right AF ─────────────────────────
         bot=tk.Frame(r,bg=C["win_bg"])
@@ -1604,46 +1746,87 @@ class App:
         _mk_sm_btn(pk_col,"Squelch",C["text_dim"],"ui_smeter_btn",
                    _gui_font(fs_pk_sm)).pack(anchor="w",padx=max(1,int(round(2*sc))),pady=0,fill="x")
 
+        # ── PTT circular button ───────────────────────────────────────────────
+        # Pack PTT *before* the smeter (side="right") so it is always anchored
+        # to the right edge of sm_row and is never squeezed off-screen when the
+        # smeter takes expand=True space at small scale values.
+        ptt_size = max(36, int(round(54 * sc)))
+        ptt_col = tk.Frame(sm_row, bg=C["panel_bg"],
+                           width=ptt_size + max(4, int(round(8*sc))))
+        ptt_col.pack_propagate(False)   # hold fixed width so smeter can't steal it
+        ptt_col.pack(side="right", fill="y",
+                     padx=(0, max(2, int(round(4*sc)))))
+        self._ptt_canvas = tk.Canvas(ptt_col, width=ptt_size, height=ptt_size,
+                                     bg=C["panel_bg"], highlightthickness=0)
+        # expand=True + fill="both" + anchor="center" centres the square canvas
+        # both horizontally and vertically inside ptt_col for every scale level.
+        self._ptt_canvas.pack(expand=True, fill="both", anchor="center")
+
         sm_w=scaled('smeter_w',sc); sm_h=scaled('smeter_h',sc)
         self.smeter=SMeter(sm_row,width=sm_w,height=sm_h)
         self.smeter._sc=sc
         self.smeter.pack(side="left",fill="x",expand=True,
                          padx=(max(1,int(round(2*sc))),max(2,int(round(4*sc)))))
-
-        # ── PTT circular button ───────────────────────────────────────────────
-        ptt_size = max(36, int(round(54 * sc)))
-        ptt_col = tk.Frame(sm_row, bg=C["panel_bg"])
-        ptt_col.pack(side="left", padx=(0, max(2, int(round(4*sc)))))
-        self._ptt_canvas = tk.Canvas(ptt_col, width=ptt_size, height=ptt_size,
-                                     bg=C["panel_bg"], highlightthickness=0)
-        self._ptt_canvas.pack()
         fs_ptt = max(6, int(round(7*sc)))
         self._ptt_size = ptt_size
 
-        def _draw_ptt_btn(active):
+        def _draw_ptt_btn(active, enabled=None):
+            if enabled is None:
+                enabled = getattr(self, "_ptt_enabled", False)
             c = self._ptt_canvas
             c.delete("all")
-            sz = self._ptt_size
+            # Use the actual rendered canvas dimensions so the circle is always
+            # centred even when the packer has resized the canvas via fill="both".
+            cw = c.winfo_width()
+            ch = c.winfo_height()
+            # Fallback to stored size before the first layout pass
+            if cw < 2:
+                cw = self._ptt_size
+            if ch < 2:
+                ch = self._ptt_size
+            # Draw in a square region centred inside (cw x ch)
+            sz = min(cw, ch)
+            ox = (cw - sz) // 2
+            oy = (ch - sz) // 2
             margin = max(3, int(round(4*sc)))
-            fill_color = "#cc1111" if active else "#117711"
-            rim_color  = "#ff4444" if active else "#22ee44"
-            label_color = "#ffcccc" if active else "#ccffcc"
-            c.create_oval(margin, margin, sz-margin, sz-margin,
+            if not enabled:
+                fill_color  = "#444444"
+                rim_color   = "#666666"
+                label_color = "#999999"
+            else:
+                fill_color = "#cc1111" if active else "#117711"
+                rim_color  = "#ff4444" if active else "#22ee44"
+                label_color = "#ffcccc" if active else "#ccffcc"
+            c.create_oval(ox + margin, oy + margin,
+                          ox + sz - margin, oy + sz - margin,
                           fill=fill_color, outline=rim_color,
                           width=max(2, int(round(3*sc))))
             # Subtle inner highlight
             hi = margin + max(3, int(round(5*sc)))
-            c.create_oval(hi, hi, sz-hi, sz-hi,
-                          fill="", outline="#cc4444" if active else "#44aa44",
+            inner_outline = "#777777" if not enabled else ("#cc4444" if active else "#44aa44")
+            c.create_oval(ox + hi, oy + hi,
+                          ox + sz - hi, oy + sz - hi,
+                          fill="", outline=inner_outline,
                           width=max(1, int(round(2*sc))))
-            c.create_text(sz//2, sz//2, text="PTT",
+            c.create_text(cw // 2, ch // 2, text="PTT",
                           fill=label_color,
                           font=_gui_font(fs_ptt, "bold"))
 
         self._draw_ptt_btn = _draw_ptt_btn
-        _draw_ptt_btn(False)
+        _draw_ptt_btn(False, enabled=False)
+        self._ptt_canvas.config(cursor="arrow")
+        # Redraw the circle centred whenever the canvas is resized (window
+        # resize, scale change, etc.) so it never drifts off-centre.
+        self._ptt_canvas.bind(
+            "<Configure>",
+            lambda _e: _draw_ptt_btn(bool(self.state.get("ptt", False)))
+        )
 
         def _ptt_click(_evt=None):
+            if not getattr(self, "_ptt_enabled", False):
+                # Audio channel hasn't bound a local UDP port yet — ignore the
+                # click rather than send a bogus {"udp_port": None} to the server.
+                return
             new_state = not self.state.get("ptt", False)
             self.state["ptt"] = new_state
             _draw_ptt_btn(new_state)
@@ -1652,7 +1835,6 @@ class App:
             self.rtp_audio.set_ptt(new_state)
 
         self._ptt_canvas.bind("<Button-1>", _ptt_click)
-        self._ptt_canvas.config(cursor="hand2")
 
         # ── Mode buttons + FreqMgr ────────────────────────────────────────────
         mode_row=tk.Frame(lp,bg=C["panel_bg"])
@@ -1716,6 +1898,11 @@ class App:
                     self._band_btns[bname].config(bg=C["btn_sel"],fg=C["btn_sel_fg"])
                 else:
                     self._band_btns[bname].config(bg=C["btn_gray"],fg=C["btn_sel_fg"])
+
+        # Expose refresh helpers so _change_scale can call them after a rebuild
+        # without having to re-enter _build_left's scope.
+        self._refresh_lo_btns        = _refresh_lo_btns
+        self._refresh_band_highlight = _refresh_band_highlight
 
         # ── freq_box: outer container ─────────────────────────────────────────
         # We use a grid: column 0 = LO/Tune rows (stacked), column 1 = band
@@ -1805,12 +1992,14 @@ class App:
                  highlightthickness=0,showvalue=0,length=sl_len,
                  command=lambda v:self.net.send({"cmd":"set_agc_thresh","value":float(v)})
                  ).grid(row=1,column=1,sticky="ew",padx=max(2,int(round(4*sc))))
+        # BUG-11 fix: allow the slider column to grow with the panel width
+        sv.grid_columnconfigure(1, weight=1)
 
 
         # ── SDR-Device / Soundcard / Bandwidth / Options ──────────────────────
         r1=tk.Frame(lp,bg=C["panel_bg"])
         r1.pack(fill="x",padx=max(2,int(round(4*sc))),pady=(max(1,int(round(2*sc))),max(1,int(round(1*sc)))))
-        for t in ["SDR-Device","Bandwidth","Options"]:
+        for t in ["Device","Bandwidth","Options"]:
             _fbtn(r1,t,sc=sc,
                   command=lambda t=t:self.net.send({"cmd":"ui_button","name":t})
                   ).pack(side="left",padx=max(1,int(round(1*sc))),fill="x",expand=True)
@@ -1960,7 +2149,7 @@ class App:
         self.af_spec=SpecCanvas(af_sf,self,show_filter=False,af=True)
         self.af_spec.pack(fill="both",expand=True)
 
-        self._toolbar2=_toolbar(rp,rbw="5.9 Hz",avg="1",sc=sc,app=self,box_id="af")
+        self._toolbar2=_toolbar(rp,rbw="5.9 Hz",avg="1",sc=sc,app=self,box_id="af",initial_view=self.state.get("toolbar_view_af","Waterfall"))
 
     # ── HiDPI scale change ────────────────────────────────────────────────────
     def _build_scale_ctrl(self):
@@ -1969,7 +2158,7 @@ class App:
         Built exactly once and never destroyed, so it can never 'disappear'
         even though _change_scale() destroys/rebuilds most of the rest of
         the GUI. It floats as an overlay in the bottom-right corner of the
-        window. Range: -9 .. +9, default 0 (shown centered between the two
+        window. Range: -5 .. +5, default 0 (shown centered between the two
         buttons).
 
         If --disable-scale was passed, this control (buttons and level
@@ -2073,13 +2262,19 @@ class App:
 
         The +/- buttons themselves live in a persistent overlay
         (see _build_scale_ctrl) that is never destroyed, so they remain
-        usable indefinitely. Scale level range is -9..+9, default 0,
+        usable indefinitely. Scale level range is -5..+5, default 0,
         and the current level (not a percentage) is shown in the label
         between the two buttons.
         """
         self._scale_level=max(-5,min(5,self._scale_level+delta))
         self._sc=1.25**self._scale_level
         sc=self._sc
+
+        # Save LO selection state before widgets are destroyed; _build_left
+        # unconditionally re-creates _lo_active and _lo_band, so without this
+        # the user's LO-B / band selection would silently reset to defaults.
+        _saved_lo_active = self._lo_active.get() if hasattr(self, '_lo_active') else "A"
+        _saved_lo_band   = dict(self._lo_band)    if hasattr(self, '_lo_band')   else {"A": None, "B": None}
 
         # Destroy and rebuild left panel and right panel inside _bot
         for child in self._bot.winfo_children():
@@ -2092,9 +2287,16 @@ class App:
         self._build_left(self._bot)
         self._build_right(self._bot)
 
+        # Restore LO state that _build_left just reset to defaults, then
+        # re-sync the visual highlights so the UI matches.
+        self._lo_active.set(_saved_lo_active)
+        self._lo_band.update(_saved_lo_band)
+        self._refresh_lo_btns()
+        self._refresh_band_highlight()
+
         # Rebuild toolbar1 (between RF strip and bot)
         self._toolbar1.destroy()
-        self._toolbar1=_toolbar(self._toolbar1_parent,rbw="23.4 Hz",avg="2",sc=sc,app=self,box_id="rf")
+        self._toolbar1=_toolbar(self._toolbar1_parent,rbw="23.4 Hz",avg="2",sc=sc,app=self,box_id="rf",initial_view=self.state.get("toolbar_view_rf","Waterfall"))
         # Re-pack toolbar1 before _bot
         self._toolbar1.pack(before=self._bot)
 
@@ -2156,9 +2358,16 @@ class App:
                          fg=C["btn_sel_fg"])
             else:
                 b.config(bg=C["btn_gray"],fg=C["btn_sel_fg"])
+        # Toolbar toggle buttons (Waterfall / Spectrum)
+        # BUG-12 fix: push the persisted view selection into both toolbars so
+        # they stay correct after reconnects and server-side view changes.
+        for _tb_attr, _tb_key in (("_toolbar1","toolbar_view_rf"),("_toolbar2","toolbar_view_af")):
+            _tb = getattr(self, _tb_attr, None)
+            if _tb and hasattr(_tb, "set_view"):
+                _tb.set_view(self.state.get(_tb_key, "Waterfall"))
         # PTT button
         if hasattr(self, '_draw_ptt_btn'):
-            self._draw_ptt_btn(bool(self.state.get("ptt", False)))
+            self._draw_ptt_btn(bool(self.state.get("ptt", False)), self._ptt_enabled)
 
 
     # ── Soundcard device selection dialog ─────────────────────────────────────
@@ -2244,14 +2453,16 @@ class App:
         panels_fr = tk.Frame(top, bg=C["panel_bg"])
         panels_fr.pack(fill="both", expand=True, padx=pad, pady=(pad, 0))
 
+        _cur_in, _cur_out = self.rtp_audio.get_selected_devices()
+
         in_fr, get_in = _make_panel(
             panels_fr, "Microphone (input)",
-            "max_input_channels", self.rtp_audio._in_device)
+            "max_input_channels", _cur_in)
         in_fr.pack(side="left", fill="both", expand=True, padx=(0, pad // 2))
 
         out_fr, get_out = _make_panel(
             panels_fr, "Speaker / Headphones (output)",
-            "max_output_channels", self.rtp_audio._out_device)
+            "max_output_channels", _cur_out)
         out_fr.pack(side="left", fill="both", expand=True, padx=(pad // 2, 0))
 
         # Status label
@@ -2321,26 +2532,42 @@ class App:
                 messagebox.showerror("Connect","Invalid port number"); return
             self.conn_btn.config(text="Connecting…",state="disabled")
             self.root.update_idletasks()
-            ok,msg=self.net.connect(host,port)
-            if not ok:
-                self.conn_btn.config(text="Connect",state="normal")
-                messagebox.showerror("Connect",f"Cannot connect to {host}:{port}\n{msg}")
-                return
-            self.net.send({"cmd":"hello"})
-            self.net.send({"cmd":"set_freq","hz":self.state["lo_freq"]})
-            self.net.send({"cmd":"set_lo_b_freq","hz":self.state["lo_b_freq"]})
-            self.net.send({"cmd":"set_tune_freq","hz":self.state["tune_freq"]})
-            self.net.send({"cmd":"set_mode","mode":self.state["mode"]})
-            self.net.send({"cmd":"start"})
-            self.state["running"]=True
-            self.conn_btn.config(text="Disconnect",state="normal",
-                                 bg="#2a0e0e",fg=C["btn_red_fg"])
-            self.conn_status.config(fg=C["btn_grn_fg"])
-            self.start_btn.config(text="Stop",bg="#6a1414",fg=C["btn_red_fg"])
+            # Run the blocking socket.create_connection() in a background thread
+            # so the GUI remains responsive during the 3-second timeout window.
+            # The result is posted back via self.q and handled in poll()/_handle().
+            def _do_connect():
+                ok, msg = self.net.connect(host, port)
+                self.q.put({"type": "_connect_result",
+                            "ok": ok, "msg": msg, "host": host, "port": port})
+            threading.Thread(target=_do_connect, daemon=True).start()
+
+    def _on_connect_result(self, ok, msg, host, port):
+        """Called on the GUI thread after the background connect attempt finishes."""
+        if not ok:
+            self.conn_btn.config(text="Connect", state="normal")
+            messagebox.showerror("Connect", f"Cannot connect to {host}:{port}\n{msg}")
+            return
+        self.net.send({"cmd":"hello"})
+        self.net.send({"cmd":"set_freq","hz":self.state["lo_freq"]})
+        self.net.send({"cmd":"set_lo_b_freq","hz":self.state["lo_b_freq"]})
+        self.net.send({"cmd":"set_tune_freq","hz":self.state["tune_freq"]})
+        self.net.send({"cmd":"set_mode","mode":self.state["mode"]})
+        self.net.send({"cmd":"start"})
+        self.state["running"]=True
+        self.conn_btn.config(text="Disconnect",state="normal",
+                             bg="#2a0e0e",fg=C["btn_red_fg"])
+        self.conn_status.config(fg=C["btn_grn_fg"])
+        self.start_btn.config(text="Stop",bg="#6a1414",fg=C["btn_red_fg"])
 
     def _on_disconnected(self):
         self.state["running"]=False
+        self.state["ptt"]=False
         self.rtp_audio.close()
+        self._ptt_enabled = False
+        if hasattr(self, '_draw_ptt_btn'):
+            self._draw_ptt_btn(False, False)
+        if hasattr(self, '_ptt_canvas'):
+            self._ptt_canvas.config(cursor="arrow")
         self.conn_btn.config(text="Connect",state="normal",
                              bg="#0e2a10",fg=C["btn_grn_fg"])
         self.conn_status.config(fg="#331111")
@@ -2369,6 +2596,8 @@ class App:
             cmd={"mute":"set_mute","notch":"set_notch","anotch":"set_anf"}.get(k)
             if cmd:
                 self.net.send({"cmd":cmd,"enabled":self.state[k]})
+        else:
+            logging.warning("_agc_tog: unknown key %r ignored", k)
         self._refresh()
 
     # ── user-defined buttons (server-configured, indices 1..6) ─────────────
@@ -2397,8 +2626,10 @@ class App:
         if cfg.get("type")=="push":
             new_on=not self._user_btn_state(idx)
             st=self.state.get("user_btn_state")
-            if not st or len(st)<6:
+            if not st:
                 st=[False]*6
+            elif len(st)<6:
+                st=list(st)+[False]*(6-len(st))
             st[idx-1]=new_on
             self.state["user_btn_state"]=st
             self.net.send({"cmd":"user_button","index":idx,"enabled":new_on})
@@ -2452,28 +2683,40 @@ class App:
 
     def _clock(self):
         now=datetime.datetime.now()
-        h12=now.strftime("%-I") if os.name!="nt" else now.strftime("%#I")
+        # Portable 12-hour hour: no strftime directives (%-I is Linux-only,
+        # %#I is Windows-only; other POSIX platforms may support neither).
+        h12=str(now.hour % 12 or 12)
         ampm="a.m." if now.hour<12 else "p.m."
-        try:
-            self.clock_var.set(
-                now.strftime(f"%#d/%#m/%Y  {h12}:%M:%S {ampm}")
-                if os.name=="nt"
-                else f"{now.day}/{now.month}/{now.year}  {h12}:{now.strftime('%M:%S')} {ampm}"
-            )
-        except Exception:
-            self.clock_var.set(now.strftime("%d/%m/%Y  %H:%M:%S"))
+        self.clock_var.set(
+            f"{now.day}/{now.month}/{now.year}  {h12}:{now.strftime('%M:%S')} {ampm}"
+        )
         self.root.after(1000,self._clock)
 
     # ── network poll ──────────────────────────────────────────────────────────
+    # When the incoming queue exceeds this depth, stale spectrum "data" frames
+    # are dropped so the GUI always catches up to the latest frame rather than
+    # lagging further behind with each tick.
+    _POLL_DROP_THRESHOLD = 50
+
     def poll(self):
         try:
-            for _ in range(100):
-                msg=self.q.get_nowait(); self._handle(msg)
-        except queue.Empty: pass
-        self.root.after(30,self.poll)
+            while True:
+                if self.q.qsize() > self._POLL_DROP_THRESHOLD:
+                    msg = self.q.get_nowait()
+                    if msg.get("type") == "data":
+                        continue      # discard stale spectrum frame; grab next
+                else:
+                    msg = self.q.get_nowait()
+                self._handle(msg)
+        except queue.Empty:
+            pass
+        self.root.after(30, self.poll)
 
     def _handle(self,msg):
         t=msg.get("type")
+        if t=="_connect_result":
+            self._on_connect_result(msg["ok"], msg["msg"], msg["host"], msg["port"])
+            return
         if t=="disconnected": self._on_disconnected()
         elif t=="audio_port":
             # Server is advertising its UDP RTP port — open the audio channel
@@ -2486,6 +2729,16 @@ class App:
             local_udp = self.rtp_audio.local_udp_port()
             if local_udp:
                 self.net.send({"cmd": "audio_hello", "udp_port": local_udp})
+                # Only now is it safe to let the user press PTT — the local
+                # socket is bound, so local_udp_port() will never return None.
+                self._ptt_enabled = True
+                if hasattr(self, '_draw_ptt_btn'):
+                    self._draw_ptt_btn(bool(self.state.get("ptt", False)), True)
+                if hasattr(self, '_ptt_canvas'):
+                    self._ptt_canvas.config(cursor="hand2")
+            else:
+                print("[audio] WARNING: RTP socket failed to bind a local UDP "
+                      "port — PTT remains disabled.")
         elif t=="data":
             f0=msg["f_start"]; f1=msg["f_stop"]
             self.rf_spec.update_data(f0,f1,msg["spectrum"])
@@ -2496,12 +2749,21 @@ class App:
             self.af_wf.set_freq_range(0,ar)
             self.af_wf.add_row(msg["af_spectrum"])
             self.smeter.set_value(msg["smeter_dbm"],msg["smeter_text"])
-        if "state" in msg:
+        elif "state" in msg:
             self.state.update(msg["state"]); self._refresh()
 
 # ── entry point ───────────────────────────────────────────────────────────────
 
 def main():
+    global _ARGS
+    _ARGS = _parse_args()
+
+    # ── --bg theme override (must happen before App() reads C) ────────────────
+    if _ARGS.bg == 'light':
+        _LIGHT_BG = "#FFECD6"
+        for _k in ("win_bg", "panel_bg", "panel_mid", "spec_bg", "btn_gray"):
+            C[_k] = _LIGHT_BG
+
     if _ARGS.audio_list:
         _print_audio_devices()
         return

@@ -312,6 +312,14 @@ This is a simulation for demonstration/educational purposes:
 - The `nb` (standalone noise blanker) state flag is handled by the server and
   included in the state dict, but no GUI button sends `set_nb`. Toggle it
   from an external client or add a dedicated "NB" button.
+- The `rf_gain` state is tracked by the server and included in the state dict
+  (default 20.0 dB), but the GUI has no slider or control that sends
+  `set_rf_gain`. It can only be set from external clients or extended with a
+  dedicated control.
+- The `squelch` threshold is tracked by the server (default −130.0 dBm) and
+  drives the `squelch_open` flag in every data frame, but the GUI has no slider
+  for `set_squelch`. The "Squelch" button in the S-meter column sends a
+  `ui_smeter_btn` notification only; it does not change the squelch level.
 - Menu system, band-mapping database, recording, DRM decoding, and
   OmniRig/CAT integration are not reproduced — this focuses on the
   core tuning/spectrum/waterfall/meter workflow described above.
