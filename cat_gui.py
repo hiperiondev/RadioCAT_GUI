@@ -27,7 +27,19 @@ def _parse_args():
                     help='Server hostname or IP to connect to (must be used together with --port)')
     ap.add_argument('--port', metavar='PORT', type=int, default=None,
                     help='Server port to connect to (must be used together with --host)')
+    ap.add_argument('--audio-list', action='store_true', default=False,
+                    help='List all audio input/output devices on this system, with the '
+                         'same index numbers shown in the GUI Soundcard dialog, then exit. '
+                         'Use the indices with --audio-mic / --audio-speaker.')
+    ap.add_argument('--audio-mic', metavar='INDEX', type=int, default=None,
+                    help='Select the microphone (input) device by index (see --audio-list). '
+                         'Default: system default device.')
+    ap.add_argument('--audio-speaker', metavar='INDEX', type=int, default=None,
+                    help='Select the speaker/headphone (output) device by index (see --audio-list). '
+                         'Default: system default device.')
     args=ap.parse_args()
+    if args.audio_list and len(sys.argv) > 2:
+        ap.error('--audio-list must be used alone, without other flags')
     if args.disable_scale:
         scale_given=any(a=='--scale' or a.startswith('--scale=') for a in sys.argv[1:])
         if not scale_given:
@@ -683,6 +695,38 @@ class RTPAudioClient:
                     pass
 
 
+def _print_audio_devices():
+    """Print every input- and output-capable audio device on this system,
+    in the same format and with the same index numbers as the GUI's
+    Soundcard dialog, for use with --audio-mic / --audio-speaker.
+    Works standalone — no Tk root or display needed."""
+    devices = RTPAudioClient("", 0).get_devices()
+    if not devices:
+        print("[audio] pyaudio not installed, or no audio devices found. "
+              "Install with: pip install pyaudio")
+        return
+
+    def _fmt(d, ch):
+        sr = d["default_sample_rate"]
+        return f"  [{d['index']:2d}]  {d['name']}  ({ch}ch  {sr // 1000}kHz)"
+
+    print("[audio] Input devices (microphones) — use with --audio-mic INDEX:")
+    in_devs = [d for d in devices if d["max_input_channels"] > 0]
+    if in_devs:
+        for d in in_devs:
+            print(_fmt(d, d["max_input_channels"]))
+    else:
+        print("  (none found)")
+
+    print("[audio] Output devices (speakers) — use with --audio-speaker INDEX:")
+    out_devs = [d for d in devices if d["max_output_channels"] > 0]
+    if out_devs:
+        for d in out_devs:
+            print(_fmt(d, d["max_output_channels"]))
+    else:
+        print("  (none found)")
+
+
 # ── networking ────────────────────────────────────────────────────────────────
 
 class Net:
@@ -1249,6 +1293,30 @@ class App:
 
         self.net=Net(self); self.q=queue.Queue()
         self.rtp_audio = RTPAudioClient("", 0)   # configured when server sends audio_port
+
+        # Apply --audio-mic / --audio-speaker device selection, if given.
+        if _ARGS.audio_mic is not None or _ARGS.audio_speaker is not None:
+            devices = self.rtp_audio.get_devices()
+            by_idx  = {d["index"]: d for d in devices}
+
+            def _check(idx, tag, key):
+                if idx is None:
+                    return None
+                d = by_idx.get(idx)
+                if d is None or d[key] <= 0:
+                    print(f"[audio] WARNING: --audio-{tag} {idx} is not a valid "
+                          f"{'input' if key=='max_input_channels' else 'output'} "
+                          f"device index — see --audio-list. Using system default.")
+                    return None
+                return idx
+
+            mic_idx = _check(_ARGS.audio_mic,     "mic",     "max_input_channels")
+            spk_idx = _check(_ARGS.audio_speaker, "speaker", "max_output_channels")
+            self.rtp_audio.set_devices(mic_idx, spk_idx)
+            mic_name = by_idx[mic_idx]["name"] if mic_idx is not None else "System default"
+            spk_name = by_idx[spk_idx]["name"] if spk_idx is not None else "System default"
+            print(f"[audio] CLI device selection — mic={mic_idx} ({mic_name})  "
+                  f"speaker={spk_idx} ({spk_name})")
 
         self.state=dict(
             lo_freq=28_495_000, lo_b_freq=28_495_000, tune_freq=28_505_000,
@@ -1951,7 +2019,8 @@ class App:
                             font=_gui_font(fs), relief="flat", bd=0,
                             height=10,
                             width=40,
-                            activestyle="none")
+                            activestyle="none",
+                            exportselection=False)
             sb.config(command=lb.yview)
             sb.pack(side="right", fill="y")
             lb.pack(side="left", fill="both", expand=True)
@@ -2247,6 +2316,9 @@ class App:
 # ── entry point ───────────────────────────────────────────────────────────────
 
 def main():
+    if _ARGS.audio_list:
+        _print_audio_devices()
+        return
     root=tk.Tk()
     _load_custom_fonts(root)
     app=App(root)
