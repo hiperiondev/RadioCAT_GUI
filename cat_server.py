@@ -78,6 +78,115 @@ import struct
 import threading
 import time
 
+# ── TOML config support ───────────────────────────────────────────────────────
+try:
+    import tomllib as _tomllib          # Python 3.11+
+except ImportError:
+    try:
+        import tomli as _tomllib        # pip install tomli
+    except ImportError:
+        _tomllib = None
+
+_SERVER_CONFIG_NAME = "cat_server.toml"
+
+_SERVER_CONFIG_DEFAULTS = {
+    "server": {
+        "host": "0.0.0.0",
+        "port": 50101,
+    },
+    "audio": {
+        "audio_port": 5004,
+        "no_audio":   False,
+    },
+    "user_buttons": {
+        **{f"label_{n}": "" for n in range(1, 7)},
+        **{f"type_{n}":  "normal" for n in range(1, 7)},
+    },
+}
+
+_SERVER_CONFIG_TEMPLATE = """\
+# CAT Server configuration
+# CLI flags override these values at runtime without modifying this file.
+# Use --config PATH to load a file from a non-default location.
+
+[server]
+host = "0.0.0.0"
+port = 50101
+
+[audio]
+audio_port = 5004
+no_audio = false
+
+[user_buttons]
+# label: max 7 characters; type: "normal" (momentary) or "push" (toggle)
+label_1 = ""
+type_1 = "normal"
+label_2 = ""
+type_2 = "normal"
+label_3 = ""
+type_3 = "normal"
+label_4 = ""
+type_4 = "normal"
+label_5 = ""
+type_5 = "normal"
+label_6 = ""
+type_6 = "normal"
+"""
+
+def _parse_simple_toml_srv(text):
+    """Minimal TOML parser for simple key=value with [sections]."""
+    result = {}
+    section = result
+    for raw in text.splitlines():
+        line = raw.split('#')[0].strip()
+        if not line:
+            continue
+        if line.startswith('[') and line.endswith(']'):
+            sec_name = line[1:-1].strip()
+            section = result.setdefault(sec_name, {})
+            continue
+        if '=' in line:
+            k, _, v = line.partition('=')
+            k = k.strip(); v = v.strip()
+            if v.startswith('"') and v.endswith('"'):
+                section[k] = v[1:-1]
+            elif v == 'true':
+                section[k] = True
+            elif v == 'false':
+                section[k] = False
+            else:
+                try:    section[k] = int(v)
+                except ValueError:
+                    try: section[k] = float(v)
+                    except ValueError: section[k] = v
+    return result
+
+def _load_server_config(path):
+    """Return the parsed TOML dict, or {} on any error."""
+    try:
+        if _tomllib is not None:
+            with open(path, "rb") as f:
+                return _tomllib.load(f)
+        else:
+            with open(path, "r", encoding="utf-8") as f:
+                return _parse_simple_toml_srv(f.read())
+    except Exception as e:
+        print(f"[config] WARNING: could not read {path}: {e}")
+        return {}
+
+def _ensure_server_config(path):
+    """Create the config file with defaults if it does not exist, then load it."""
+    if not os.path.exists(path):
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(_SERVER_CONFIG_TEMPLATE)
+            print(f"[config] Created default config: {path}")
+        except Exception as e:
+            print(f"[config] WARNING: could not write default config: {e}")
+    return _load_server_config(path)
+
+import os
+
 NUM_BINS = 600          # RF spectrum / waterfall bins
 AF_BINS = 256           # AF spectrum / waterfall bins
 AF_RANGE = 3000.0       # Hz shown on the AF display
@@ -682,30 +791,92 @@ class ClientHandler(threading.Thread):
 
 
 def _parse_args():
+    import sys
+
+    # ── Phase 1: extract --config before full parsing ─────────────────────────
+    _pre = argparse.ArgumentParser(add_help=False)
+    _pre.add_argument('--config', default=None)
+    _pre_args, _ = _pre.parse_known_args()
+    _config_path = _pre_args.config or os.path.join(os.getcwd(), _SERVER_CONFIG_NAME)
+
+    # ── Load / create TOML config ─────────────────────────────────────────────
+    _cfg  = _ensure_server_config(_config_path)
+    _srv  = _cfg.get("server",       {})
+    _aud  = _cfg.get("audio",        {})
+    _ubtn = _cfg.get("user_buttons", {})
+    _D    = _SERVER_CONFIG_DEFAULTS
+
+    _def_host       = _srv.get("host",       _D["server"]["host"])
+    _def_port       = int(_srv.get("port",   _D["server"]["port"]))
+    _def_audio_port = int(_aud.get("audio_port", _D["audio"]["audio_port"]))
+    _def_no_audio   = bool(_aud.get("no_audio",  _D["audio"]["no_audio"]))
+
+    # Determine which positional args (host / port) were explicitly on the CLI,
+    # ignoring --config and its value.
+    _skip = False
+    _positionals = []
+    for _a in sys.argv[1:]:
+        if _skip:            _skip = False; continue
+        if _a == '--config': _skip = True;  continue
+        if _a.startswith('--config='): continue
+        if not _a.startswith('-'):
+            _positionals.append(_a)
+    _cli_host_given = len(_positionals) >= 1
+    _cli_port_given = len(_positionals) >= 2
+
+    # ── Full argument parse ───────────────────────────────────────────────────
     ap = argparse.ArgumentParser(description="cat_server")
-    ap.add_argument("host", nargs="?", default="0.0.0.0",
-                    help="Host/IP to listen on (default: 0.0.0.0)")
-    ap.add_argument("port", nargs="?", type=int, default=50101,
-                    help="TCP port to listen on (default: 50101)")
-    ap.add_argument("--audio-port", metavar="PORT", type=int, default=AUDIO_UDP_PORT,
-                    help=f"UDP port for RTP audio (default: {AUDIO_UDP_PORT})")
-    ap.add_argument("--no-audio", action="store_true", default=False,
+    ap.add_argument('--config', metavar='PATH', default=None,
+                    help=f'Path to TOML config file (default: ./{_SERVER_CONFIG_NAME})')
+    ap.add_argument("host", nargs="?",
+                    default=_def_host if not _cli_host_given else None,
+                    help=f"Host/IP to listen on (default: {_def_host})")
+    ap.add_argument("port", nargs="?", type=int,
+                    default=_def_port if not _cli_port_given else None,
+                    help=f"TCP port to listen on (default: {_def_port})")
+    ap.add_argument("--audio-port", metavar="PORT", type=int, default=argparse.SUPPRESS,
+                    help=f"UDP port for RTP audio (default: {_def_audio_port})")
+    ap.add_argument("--no-audio", action="store_true", default=argparse.SUPPRESS,
                     help="Disable the RTP/UDP audio channel")
     for n in range(1, NUM_USER_BUTTONS + 1):
-        ap.add_argument(f"--user-button-label-{n}", metavar="TEXT", default="",
-                         help=f"Label for user button {n} (max 7 characters)")
+        ap.add_argument(f"--user-button-label-{n}", metavar="TEXT",
+                        default=argparse.SUPPRESS,
+                        help=f"Label for user button {n} (max 7 characters)")
         ap.add_argument(f"--user-button-type-{n}", choices=["normal", "push"],
-                         default="normal",
-                         help=f"Type of user button {n}: 'normal' (momentary) "
-                              f"or 'push' (push-push/toggle). Default: normal")
-    args = ap.parse_args()
+                        default=argparse.SUPPRESS,
+                        help=f"Type of user button {n}: 'normal' (momentary) "
+                             f"or 'push' (push-push/toggle). Default: normal")
+    _raw = ap.parse_args()
 
+    # ── Merge: CLI beats config, config beats built-in default ───────────────
+    _raw.config     = _config_path
+    _raw.audio_port = _raw.audio_port if hasattr(_raw, 'audio_port') else _def_audio_port
+    _raw.no_audio   = _raw.no_audio   if hasattr(_raw, 'no_audio')   else _def_no_audio
+
+    # Host/port: use CLI value if explicitly given, else config/default
+    if not _cli_host_given:
+        _raw.host = _def_host
+    if not _cli_port_given:
+        _raw.port = _def_port
+
+    # User buttons: CLI beats config, config beats built-in default
     for n in range(1, NUM_USER_BUTTONS + 1):
-        label = getattr(args, f"user_button_label_{n}")
+        _lattr = f"user_button_label_{n}"
+        _tattr = f"user_button_type_{n}"
+        _cfg_label = _ubtn.get(f"label_{n}", _D["user_buttons"][f"label_{n}"])
+        _cfg_type  = _ubtn.get(f"type_{n}",  _D["user_buttons"][f"type_{n}"])
+        if not hasattr(_raw, _lattr):
+            setattr(_raw, _lattr, _cfg_label)
+        if not hasattr(_raw, _tattr):
+            setattr(_raw, _tattr, _cfg_type)
+
+    # ── Validations ───────────────────────────────────────────────────────────
+    for n in range(1, NUM_USER_BUTTONS + 1):
+        label = getattr(_raw, f"user_button_label_{n}")
         if len(label) > 7:
             ap.error(f"--user-button-label-{n}: label must be at most 7 "
                      f"characters (got {len(label)!r}: {label!r})")
-    return args
+    return _raw
 
 
 def _build_user_buttons(args):

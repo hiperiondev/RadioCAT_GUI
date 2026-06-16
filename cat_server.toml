@@ -1,0 +1,26 @@
+# CAT Server configuration
+# CLI flags override these values at runtime without modifying this file.
+# Use --config PATH to load a file from a non-default location.
+
+[server]
+host = "0.0.0.0"
+port = 50101
+
+[audio]
+audio_port = 5004
+no_audio = false
+
+[user_buttons]
+# label: max 7 characters; type: "normal" (momentary) or "push" (toggle)
+label_1 = ""
+type_1 = "normal"
+label_2 = ""
+type_2 = "normal"
+label_3 = ""
+type_3 = "normal"
+label_4 = ""
+type_4 = "normal"
+label_5 = ""
+type_5 = "normal"
+label_6 = ""
+type_6 = "normal"

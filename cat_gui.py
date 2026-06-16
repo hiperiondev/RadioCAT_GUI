@@ -6,47 +6,232 @@ import argparse, collections, json, math, os, queue, socket, struct, sys, thread
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+# ── TOML config support ───────────────────────────────────────────────────────
+try:
+    import tomllib as _tomllib          # Python 3.11+
+except ImportError:
+    try:
+        import tomli as _tomllib        # pip install tomli
+    except ImportError:
+        _tomllib = None
+
+_GUI_CONFIG_NAME = "cat_gui.toml"
+
+_GUI_CONFIG_DEFAULTS = {
+    "display": {
+        "bg":            "dark",
+        "full_screen":   False,
+        "scale":         0,
+        "disable_scale": False,
+        "freq_font":     "",
+        "gui_font":      "",
+    },
+    "connection": {
+        "host": "",
+        "port": 0,          # 0 = not set; both host and port must be non-empty/non-zero
+    },
+    "audio": {
+        "mic":                       -1,   # -1 = system default
+        "speaker":                   -1,
+        "disable_soundcard_select":  False,
+    },
+}
+
+_GUI_CONFIG_TEMPLATE = """\
+# CAT GUI configuration
+# CLI flags override these values at runtime without modifying this file.
+# Use --config PATH to load a file from a non-default location.
+
+[display]
+bg = "dark"           # "light" or "dark"
+full_screen = false   # start in full-screen mode
+scale = 0             # HiDPI scale level, -5 to 5
+disable_scale = false # hide the +/- scale controls (set an explicit scale above too)
+freq_font = ""        # path to TTF/OTF font for frequency digits  (empty = system default)
+gui_font = ""         # path to TTF/OTF font for all other GUI text (empty = system default)
+
+[connection]
+# Leave host empty and port 0 to show the GUI connection fields.
+# Both must be filled to enable auto-connect on startup.
+host = ""
+port = 0
+
+[audio]
+# Device indices from --audio-list; -1 means use the system default.
+# Both mic and speaker must be set together (or both left at -1).
+mic = -1
+speaker = -1
+disable_soundcard_select = false
+"""
+
+def _parse_simple_toml(text):
+    """Minimal TOML parser (strings, ints, bools, flat [sections]) used when
+    neither tomllib nor tomli is available."""
+    result = {}
+    section = result
+    for raw in text.splitlines():
+        line = raw.split('#')[0].strip()
+        if not line:
+            continue
+        if line.startswith('[') and line.endswith(']'):
+            sec_name = line[1:-1].strip()
+            section = result.setdefault(sec_name, {})
+            continue
+        if '=' in line:
+            k, _, v = line.partition('=')
+            k = k.strip(); v = v.strip()
+            if v.startswith('"') and v.endswith('"'):
+                section[k] = v[1:-1]
+            elif v == 'true':
+                section[k] = True
+            elif v == 'false':
+                section[k] = False
+            else:
+                try:    section[k] = int(v)
+                except ValueError:
+                    try: section[k] = float(v)
+                    except ValueError: section[k] = v
+    return result
+
+def _load_gui_config(path):
+    """Return the parsed TOML dict, or {} on any error."""
+    try:
+        if _tomllib is not None:
+            with open(path, "rb") as f:
+                return _tomllib.load(f)
+        else:
+            with open(path, "r", encoding="utf-8") as f:
+                return _parse_simple_toml(f.read())
+    except Exception as e:
+        print(f"[config] WARNING: could not read {path}: {e}")
+        return {}
+
+def _ensure_gui_config(path):
+    """Create the config file with defaults if it does not exist, then load it."""
+    if not os.path.exists(path):
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(_GUI_CONFIG_TEMPLATE)
+            print(f"[config] Created default config: {path}")
+        except Exception as e:
+            print(f"[config] WARNING: could not write default config: {e}")
+    return _load_gui_config(path)
+
 # ── CLI argument parsing ─────────────────────────────────────────────────────
 def _parse_args():
+    # ── Phase 1: extract --config before full parsing ─────────────────────────
+    _pre = argparse.ArgumentParser(add_help=False)
+    _pre.add_argument('--config', default=None)
+    _pre_args, _ = _pre.parse_known_args()
+    _config_path = _pre_args.config or os.path.join(os.getcwd(), _GUI_CONFIG_NAME)
+
+    # ── Load / create TOML config ─────────────────────────────────────────────
+    _cfg  = _ensure_gui_config(_config_path)
+    _disp = _cfg.get("display",    {})
+    _conn = _cfg.get("connection", {})
+    _aud  = _cfg.get("audio",      {})
+    _D    = _GUI_CONFIG_DEFAULTS
+
+    # Effective defaults = config value falling back to built-in default
+    _def_bg     = _disp.get("bg",            _D["display"]["bg"])
+    _def_full   = bool(_disp.get("full_screen",   _D["display"]["full_screen"]))
+    _def_scale  = int(_disp.get("scale",          _D["display"]["scale"]))
+    _def_dscale = bool(_disp.get("disable_scale", _D["display"]["disable_scale"]))
+    _def_ffont  = _disp.get("freq_font", _D["display"]["freq_font"]) or None
+    _def_gfont  = _disp.get("gui_font",  _D["display"]["gui_font"])  or None
+    _def_host   = _conn.get("host", _D["connection"]["host"]) or None
+    _raw_port   = _conn.get("port", _D["connection"]["port"])
+    _def_port   = int(_raw_port) if _raw_port else None
+    _raw_mic    = _aud.get("mic",     _D["audio"]["mic"])
+    _def_mic    = None if int(_raw_mic) == -1 else int(_raw_mic)
+    _raw_spk    = _aud.get("speaker", _D["audio"]["speaker"])
+    _def_spk    = None if int(_raw_spk) == -1 else int(_raw_spk)
+    _def_dsc    = bool(_aud.get("disable_soundcard_select",
+                                _D["audio"]["disable_soundcard_select"]))
+
+    # ── Phase 2: full argument parse (SUPPRESS = "not given on CLI") ──────────
     ap = argparse.ArgumentParser(description='CAT GUI Interface', add_help=True)
-    ap.add_argument('--freq-font', metavar='PATH', default=None,
+    ap.add_argument('--config', metavar='PATH', default=None,
+                    help=f'Path to TOML config file (default: ./{_GUI_CONFIG_NAME})')
+    ap.add_argument('--freq-font', metavar='PATH', default=argparse.SUPPRESS,
                     help='TTF/OTF font file for LO/Tune frequency digit displays')
-    ap.add_argument('--gui-font',  metavar='PATH', default=None,
+    ap.add_argument('--gui-font',  metavar='PATH', default=argparse.SUPPRESS,
                     help='TTF/OTF font file for all other GUI elements')
-    ap.add_argument('--scale', metavar='INT', type=int, default=0,
+    ap.add_argument('--scale', metavar='INT', type=int, default=argparse.SUPPRESS,
                     help='Initial scale level (-5..5, default 0)')
-    ap.add_argument('--bg', choices=['light','dark'], default='dark',
+    ap.add_argument('--bg', choices=['light','dark'], default=argparse.SUPPRESS,
                     help='Background theme: "light" sets all interface '
                          'backgrounds to #FFECD6, "dark" keeps the default colours')
-    ap.add_argument('--full-screen', action='store_true', default=False,
+    ap.add_argument('--full-screen', action='store_true', default=argparse.SUPPRESS,
                     help='Start in full-screen mode')
-    ap.add_argument('--disable-scale', action='store_true', default=False,
+    ap.add_argument('--disable-scale', action='store_true', default=argparse.SUPPRESS,
                     help='Hide the HiDPI scale +/- controls and scale level number '
-                         '(requires --scale to also be specified)')
-    ap.add_argument('--host', metavar='HOST', default=None,
+                         '(requires --scale to also be specified on the command line)')
+    ap.add_argument('--host', metavar='HOST', default=argparse.SUPPRESS,
                     help='Server hostname or IP to connect to (must be used together with --port)')
-    ap.add_argument('--port', metavar='PORT', type=int, default=None,
+    ap.add_argument('--port', metavar='PORT', type=int, default=argparse.SUPPRESS,
                     help='Server port to connect to (must be used together with --host)')
     ap.add_argument('--audio-list', action='store_true', default=False,
                     help='List all audio input/output devices on this system, with the '
                          'same index numbers shown in the GUI Soundcard dialog, then exit. '
                          'Use the indices with --audio-mic / --audio-speaker.')
-    ap.add_argument('--audio-mic', metavar='INDEX', type=int, default=None,
+    ap.add_argument('--audio-mic', metavar='INDEX', type=int, default=argparse.SUPPRESS,
                     help='Select the microphone (input) device by index (see --audio-list). '
-                         'Default: system default device.')
-    ap.add_argument('--audio-speaker', metavar='INDEX', type=int, default=None,
+                         'Must be used together with --audio-speaker.')
+    ap.add_argument('--audio-speaker', metavar='INDEX', type=int, default=argparse.SUPPRESS,
                     help='Select the speaker/headphone (output) device by index (see --audio-list). '
-                         'Default: system default device.')
-    args=ap.parse_args()
-    if args.audio_list and len(sys.argv) > 2:
-        ap.error('--audio-list must be used alone, without other flags')
-    if args.disable_scale:
-        scale_given=any(a=='--scale' or a.startswith('--scale=') for a in sys.argv[1:])
-        if not scale_given:
-            ap.error('--disable-scale requires --scale to also be specified')
-    # --host and --port must be used together
+                         'Must be used together with --audio-mic.')
+    ap.add_argument('--disable-soundcard-select', action='store_true',
+                    default=argparse.SUPPRESS,
+                    help='Hide the Soundcard button in the GUI, preventing audio device '
+                         'selection from being changed at runtime.')
+    _raw = ap.parse_args()
+
+    # ── Merge: CLI overrides config; config overrides built-in default ────────
+    args = argparse.Namespace()
+    args.config    = _config_path
+    args.freq_font = _raw.freq_font if hasattr(_raw, 'freq_font') else _def_ffont
+    args.gui_font  = _raw.gui_font  if hasattr(_raw, 'gui_font')  else _def_gfont
+    args.scale     = _raw.scale     if hasattr(_raw, 'scale')     else _def_scale
+    args.bg        = _raw.bg        if hasattr(_raw, 'bg')        else _def_bg
+    args.full_screen              = _raw.full_screen  if hasattr(_raw, 'full_screen')  else _def_full
+    args.disable_scale            = _raw.disable_scale if hasattr(_raw, 'disable_scale') else _def_dscale
+    args.disable_soundcard_select = _raw.disable_soundcard_select \
+                                    if hasattr(_raw, 'disable_soundcard_select') else _def_dsc
+    args.audio_list = _raw.audio_list   # one-shot flag; intentionally not stored in config
+
+    _cli_host = hasattr(_raw, 'host')
+    _cli_port = hasattr(_raw, 'port')
+    args.host = _raw.host if _cli_host else _def_host
+    args.port = _raw.port if _cli_port else _def_port
+
+    _cli_mic = hasattr(_raw, 'audio_mic')
+    _cli_spk = hasattr(_raw, 'audio_speaker')
+    args.audio_mic     = _raw.audio_mic     if _cli_mic else _def_mic
+    args.audio_speaker = _raw.audio_speaker if _cli_spk else _def_spk
+
+    # ── Validations ───────────────────────────────────────────────────────────
+    if args.audio_list:
+        # Strip --config and its value, then ensure nothing else is present
+        _skip = False
+        _other = []
+        for _a in sys.argv[1:]:
+            if _skip:             _skip = False; continue
+            if _a == '--config':  _skip = True;  continue
+            if _a.startswith('--config='): continue
+            if _a == '--audio-list':       continue
+            _other.append(_a)
+        if _other:
+            ap.error('--audio-list must be used alone, without other flags')
+
+    if hasattr(_raw, 'disable_scale') and not hasattr(_raw, 'scale'):
+        # --disable-scale on CLI requires --scale on CLI (config values don't satisfy this)
+        ap.error('--disable-scale requires --scale to also be specified')
+
     if (args.host is None) != (args.port is None):
         ap.error('--host and --port must be specified together')
+    if (args.audio_mic is None) != (args.audio_speaker is None):
+        ap.error('--audio-mic and --audio-speaker must be specified together')
     return args
 
 _ARGS = _parse_args()
@@ -1629,9 +1814,10 @@ class App:
             _fbtn(r1,t,sc=sc,
                   command=lambda t=t:self.net.send({"cmd":"ui_button","name":t})
                   ).pack(side="left",padx=max(1,int(round(1*sc))),fill="x",expand=True)
-        _fbtn(r1,"Soundcard",sc=sc,
-              command=self._open_soundcard_dialog
-              ).pack(side="left",padx=max(1,int(round(1*sc))),fill="x",expand=True)
+        if not _ARGS.disable_soundcard_select:
+            _fbtn(r1,"Soundcard",sc=sc,
+                  command=self._open_soundcard_dialog
+                  ).pack(side="left",padx=max(1,int(round(1*sc))),fill="x",expand=True)
 
         # ── transport bar ─────────────────────────────────────────────────────
         tb=tk.Frame(lp,bg=C["panel_bg"])
