@@ -67,16 +67,48 @@ A button the GUI sends becomes:
 
     {"cmd": "user_button", "index": N}                 (normal button press)
     {"cmd": "user_button", "index": N, "enabled": true} (push-push toggle)
+
+Real IQ recordings (--iq_wav)
+------------------------------
+By default the RF spectrum/waterfall is synthetic (a handful of fake
+carriers). Pass --iq_wav PATH to a wav file of IQ samples in SDRplay IQ
+wav format (stereo PCM/float, I = left channel, Q = right channel,
+optionally with an 'auxi' chunk carrying the recorded centre frequency)
+and the server will FFT real samples from that file instead, looping the
+file forever so playback never runs out. The file's sample rate becomes
+the radio's sample rate, and its recorded centre frequency (if present)
+seeds the initial tuned frequency.
+
+Real receive audio (--audio_wav)
+---------------------------------
+By default the downlink "received audio" sent to the GUI over RTP is just
+a fake 440 Hz demo tone. Pass --audio_wav PATH to a normal mono/stereo PCM
+(or float) wav file and the server will transmit that file's audio to the
+GUI instead, looping it forever (so a short recording becomes an endless
+"on air" audio source). Stereo files are downmixed to mono and the audio
+is resampled to the RTP audio sample rate (8 kHz) if its native sample
+rate differs. This only affects the simulated receive audio; it is sent
+whenever the radio is running and PTT is off, same as the demo tone it
+replaces.
 """
 
 import argparse
 import json
 import math
+import os
 import random
 import socket
 import struct
+import sys
 import threading
 import time
+
+# numpy is only required when --iq_wav is used (FFT of recorded IQ samples).
+# The rest of the server works fine without it.
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 # ── TOML config support ───────────────────────────────────────────────────────
 try:
@@ -138,7 +170,16 @@ def _parse_simple_toml_srv(text):
     result = {}
     section = result
     for raw in text.splitlines():
-        line = raw.split('#')[0].strip()
+        # Strip comments only when the '#' is outside of a quoted region.
+        line = raw
+        in_quote = False
+        for ci, ch in enumerate(raw):
+            if ch == '"':
+                in_quote = not in_quote
+            elif ch == '#' and not in_quote:
+                line = raw[:ci]
+                break
+        line = line.strip()
         if not line:
             continue
         if line.startswith('[') and line.endswith(']'):
@@ -185,13 +226,12 @@ def _ensure_server_config(path):
             print(f"[config] WARNING: could not write default config: {e}")
     return _load_server_config(path)
 
-import os
-
 NUM_BINS = 600          # RF spectrum / waterfall bins
 AF_BINS = 256           # AF spectrum / waterfall bins
 AF_RANGE = 3000.0       # Hz shown on the AF display
 UPDATE_HZ = 10.0        # data pushes per second
 NUM_USER_BUTTONS = 6    # number of user-defined buttons (N = 1..6)
+IQ_FFT_SIZE = 4096      # FFT size used to turn --iq_wav samples into a spectrum
 
 # ── RTP / UDP audio ──────────────────────────────────────────────────────────
 AUDIO_SAMPLE_RATE  = 8000       # Hz
@@ -235,6 +275,8 @@ def _rtp_unpack(data: bytes):
     if len(data) < 12:
         return None
     hdr = struct.unpack("!BBHII", data[:12])
+    if (hdr[0] >> 6) != 2:          # RTP version must be 2
+        return None
     seq = hdr[2]
     ts  = hdr[3]
     return data[12:], seq, ts
@@ -251,7 +293,6 @@ def _linear16_to_ulaw(samples: bytes) -> bytes:
             s = -s
         s = min(s, 32767)
         s += 33
-        exp = 7
         for e in range(7, -1, -1):
             if s >= (1 << (e + 5)):
                 exp = e
@@ -314,10 +355,313 @@ class Signal:
         return amp - 18.0 * d * d
 
 
+# ── SDRplay IQ .wav playback (--iq_wav) ────────────────────────────────────────
+#
+# SDRplay-family tools (SDRuno, SDR-Console, etc.) record raw IQ captures as
+# ordinary RIFF/WAVE files: a stereo (2-channel) PCM or IEEE-float stream
+# where the left channel is "I" and the right channel is "Q", at the radio's
+# actual IQ sample rate. Some recorders additionally write a non-standard
+# "auxi" chunk holding the centre frequency the capture was made at. This
+# reader understands plain "fmt "/"data" wav files (16/24/32-bit int or
+# 32-bit float, mono or stereo) and will opportunistically pull the centre
+# frequency out of an "auxi" chunk if one is present; everything else about
+# the chunk layout varies between vendors, so unknown/extra chunks are just
+# skipped.
+
+class IQWavSource:
+    """Serves looping blocks of complex IQ samples read from a wav file.
+
+    The file is read like a tape loop: once the data chunk is exhausted,
+    reading simply wraps back around to the start, so a finite recording
+    can feed an unlimited stream of spectrum/waterfall updates.
+    """
+
+    def __init__(self, path):
+        if np is None:
+            raise RuntimeError(
+                "--iq_wav requires numpy. Install it with: pip install numpy"
+            )
+        self.path = path
+        self.channels = 2
+        self.sample_rate = 192000
+        self.bits_per_sample = 16
+        self.is_float = False
+        self.data_offset = 0
+        self.data_size = 0
+        self.center_freq = None     # populated from 'auxi' chunk, if present
+        self._pos = 0                # read offset (bytes) within the data chunk
+        self._lock = threading.Lock()
+        self._parse_header()
+        self._fh = open(self.path, "rb")
+
+    # -- header parsing -------------------------------------------------------
+    def _parse_header(self):
+        with open(self.path, "rb") as f:
+            riff = f.read(12)
+            if len(riff) < 12 or riff[0:4] != b"RIFF" or riff[8:12] != b"WAVE":
+                raise ValueError(f"{self.path}: not a RIFF/WAVE file")
+            while True:
+                hdr = f.read(8)
+                if len(hdr) < 8:
+                    break
+                chunk_id, chunk_size = struct.unpack("<4sI", hdr)
+                chunk_start = f.tell()
+                if chunk_id == b"fmt ":
+                    self._parse_fmt(f.read(chunk_size))
+                elif chunk_id == b"auxi":
+                    self._parse_auxi(f.read(chunk_size))
+                elif chunk_id == b"data":
+                    self.data_offset = chunk_start
+                    self.data_size = chunk_size
+                    break  # 'data' is normally the last chunk we care about
+                # RIFF chunks are word (2-byte) aligned
+                f.seek(chunk_start + chunk_size + (chunk_size & 1))
+        if self.data_size == 0:
+            raise ValueError(f"{self.path}: no 'data' chunk found")
+
+    def _parse_fmt(self, fmt):
+        if len(fmt) < 16:
+            raise ValueError("fmt chunk too short")
+        (audio_fmt, channels, sample_rate, _byte_rate,
+         _block_align, bits_per_sample) = struct.unpack("<HHIIHH", fmt[:16])
+        self.channels = channels
+        self.sample_rate = sample_rate
+        self.bits_per_sample = bits_per_sample
+        if audio_fmt == 0xFFFE and len(fmt) >= 40:
+            # WAVE_FORMAT_EXTENSIBLE: sub-format tag lives 8 bytes into the
+            # trailing GUID, right after the 22-byte fixed extensible header.
+            sub_tag = struct.unpack_from("<H", fmt, 24)[0]
+            self.is_float = (sub_tag == 3)
+        else:
+            self.is_float = (audio_fmt == 3)
+
+    def _parse_auxi(self, aux):
+        """Best-effort extraction of the centre frequency from an 'auxi'
+        chunk. SDRuno's layout (confirmed against SDRplay's own
+        examine_wav_iq_recordings.py reference tool) is:
+
+            8x WORD  start time (year, month, dow, day, h, m, s, ms)
+            8x WORD  stop time  (same fields)
+            DWORD    centerFreq   <- this is what we want
+            DWORD    ADFrequency
+            DWORD    IFFrequency
+            ... (bandwidth, IQ offset, etc.)
+
+        i.e. the two 16-byte timestamps (32 bytes total) come BEFORE the
+        centre frequency, not just one. This is true both for the full
+        164-byte SDRuno chunk and the shorter 68-byte variant some other
+        recorders write, since they share this same 36-byte prefix."""
+        try:
+            if len(aux) >= 36:
+                center = struct.unpack_from("<I", aux, 32)[0]
+                if 0 < center < 20_000_000_000:
+                    self.center_freq = float(center)
+        except struct.error:
+            pass
+
+    # -- sample access ---------------------------------------------------------
+    @property
+    def bytes_per_frame(self):
+        return max(1, self.channels) * (self.bits_per_sample // 8)
+
+    def read_iq_block(self, num_samples):
+        """Return a complex64 numpy array of `num_samples` IQ samples,
+        looping back to the start of the data chunk on EOF (infinite
+        playback from a finite file)."""
+        frame_size = self.bytes_per_frame
+        need = num_samples * frame_size
+        chunks = []
+        got = 0
+        with self._lock:
+            while got < need:
+                remaining = self.data_size - self._pos
+                if remaining <= 0:
+                    self._pos = 0          # loop back to the start of the file
+                    remaining = self.data_size
+                self._fh.seek(self.data_offset + self._pos)
+                to_read = min(need - got, remaining)
+                raw = self._fh.read(to_read)
+                if not raw:
+                    self._pos = 0           # defensive: avoid spinning forever
+                    continue
+                chunks.append(raw)
+                got += len(raw)
+                self._pos += len(raw)
+                if self._pos >= self.data_size:
+                    self._pos = 0           # wrap for next call too
+        return self._to_iq(b"".join(chunks))
+
+    def _to_iq(self, raw):
+        if self.is_float and self.bits_per_sample == 32:
+            samples = np.frombuffer(raw, dtype="<f4")
+        elif self.bits_per_sample == 8:
+            samples = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+        elif self.bits_per_sample == 16:
+            samples = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
+        elif self.bits_per_sample == 32:
+            samples = np.frombuffer(raw, dtype="<i4").astype(np.float32) / 2147483648.0
+        else:
+            raise ValueError(f"unsupported bits_per_sample: {self.bits_per_sample}")
+        if self.channels >= 2:
+            n_frames = len(samples) // self.channels
+            samples = samples[: n_frames * self.channels].reshape(n_frames, self.channels)
+            i_ch = samples[:, 0]
+            q_ch = samples[:, 1]
+        else:
+            i_ch = samples
+            q_ch = np.zeros_like(samples)
+        n = min(len(i_ch), len(q_ch))
+        return (i_ch[:n] + 1j * q_ch[:n]).astype(np.complex64)
+
+    def close(self):
+        try:
+            self._fh.close()
+        except OSError:
+            pass
+
+
+# ── WAV downlink-audio playback (--audio_wav) ──────────────────────────────
+#
+# Plays back an ordinary mono/stereo PCM (or IEEE-float) wav file as the
+# simulated "received audio" stream sent to the GUI over RTP, in place of
+# the built-in demo sine tone. The whole file is decoded once at startup,
+# downmixed to mono and resampled (simple linear interpolation) to the RTP
+# audio sample rate (AUDIO_SAMPLE_RATE, 8 kHz) if needed, then served back
+# frame-by-frame, wrapping around to the start forever.
+
+class AudioWavSource:
+    """Decodes a wav file fully to mono 16-bit PCM at AUDIO_SAMPLE_RATE and
+    serves it back in fixed-size frames, looping forever."""
+
+    def __init__(self, path):
+        if np is None:
+            raise RuntimeError(
+                "--audio_wav requires numpy. Install it with: pip install numpy"
+            )
+        self.path = path
+        channels, sample_rate, bits_per_sample, is_float, data = self._read_wav(path)
+        self.source_channels = channels
+        self.source_sample_rate = sample_rate
+
+        samples = self._to_float(data, bits_per_sample, is_float)
+        if channels >= 2:
+            n_frames = len(samples) // channels
+            samples = samples[: n_frames * channels].reshape(n_frames, channels)
+            mono = samples.mean(axis=1)
+        else:
+            mono = samples
+
+        if sample_rate != AUDIO_SAMPLE_RATE and len(mono) > 1:
+            duration = len(mono) / float(sample_rate)
+            n_out = max(1, int(round(duration * AUDIO_SAMPLE_RATE)))
+            x_src = np.linspace(0.0, 1.0, num=len(mono))
+            x_dst = np.linspace(0.0, 1.0, num=n_out)
+            mono = np.interp(x_dst, x_src, mono)
+
+        if len(mono) == 0:
+            raise ValueError(f"{path}: contains no audio samples")
+
+        self.pcm = np.clip(mono * 32767.0, -32768, 32767).astype("<i2")
+        self.num_samples = len(self.pcm)
+        self._pos = 0
+        self._lock = threading.Lock()
+
+    # -- header + data parsing -------------------------------------------------
+    @staticmethod
+    def _read_wav(path):
+        with open(path, "rb") as f:
+            riff = f.read(12)
+            if len(riff) < 12 or riff[0:4] != b"RIFF" or riff[8:12] != b"WAVE":
+                raise ValueError(f"{path}: not a RIFF/WAVE file")
+            channels = 1
+            sample_rate = AUDIO_SAMPLE_RATE
+            bits_per_sample = 16
+            is_float = False
+            data = b""
+            while True:
+                hdr = f.read(8)
+                if len(hdr) < 8:
+                    break
+                chunk_id, chunk_size = struct.unpack("<4sI", hdr)
+                chunk_start = f.tell()
+                if chunk_id == b"fmt ":
+                    fmt = f.read(chunk_size)
+                    if len(fmt) < 16:
+                        raise ValueError("fmt chunk too short")
+                    (audio_fmt, channels, sample_rate, _byte_rate,
+                     _block_align, bits_per_sample) = struct.unpack("<HHIIHH", fmt[:16])
+                    if audio_fmt == 0xFFFE and len(fmt) >= 40:
+                        sub_tag = struct.unpack_from("<H", fmt, 24)[0]
+                        is_float = (sub_tag == 3)
+                    else:
+                        is_float = (audio_fmt == 3)
+                elif chunk_id == b"data":
+                    data = f.read(chunk_size)
+                # RIFF chunks are word (2-byte) aligned
+                f.seek(chunk_start + chunk_size + (chunk_size & 1))
+            if not data:
+                raise ValueError(f"{path}: no 'data' chunk found")
+            return channels, sample_rate, bits_per_sample, is_float, data
+
+    @staticmethod
+    def _to_float(raw, bits_per_sample, is_float):
+        if is_float and bits_per_sample == 32:
+            return np.frombuffer(raw, dtype="<f4").astype(np.float32)
+        elif bits_per_sample == 8:
+            return (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+        elif bits_per_sample == 16:
+            return np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
+        elif bits_per_sample == 32:
+            return np.frombuffer(raw, dtype="<i4").astype(np.float32) / 2147483648.0
+        else:
+            raise ValueError(f"unsupported bits_per_sample: {bits_per_sample}")
+
+    # -- playback ----------------------------------------------------------
+    def read_frame(self, num_samples):
+        """Return `num_samples` of little-endian 16-bit PCM bytes, wrapping
+        back to the start of the file forever (infinite loop playback)."""
+        with self._lock:
+            idx = (np.arange(num_samples) + self._pos) % self.num_samples
+            frame = self.pcm[idx]
+            self._pos = (self._pos + num_samples) % self.num_samples
+        return frame.tobytes()
+
+
+def _iq_fft_spectrum_db(iq_block, rf_gain):
+    """FFT a block of complex IQ samples into a dBm-ish power spectrum,
+    DC-centred (index 0 = -sample_rate/2, last index = +sample_rate/2)."""
+    n = len(iq_block)
+    window = np.hanning(n)
+    spec = np.fft.fftshift(np.fft.fft(iq_block * window))
+    mag = np.abs(spec) / (np.sum(window) / 2.0 + 1e-12)
+    mag = np.maximum(mag, 1e-12)
+    # Recorded IQ files carry no absolute power reference (that depends on
+    # the original RF/IF gain settings, not stored in the wav), so this is
+    # a reasonable-looking approximation rather than a calibrated dBm value.
+    db = 20.0 * np.log10(mag) - 30.0 + rf_gain * 0.4
+    return np.clip(db, -135.0, -5.0)
+
+
+def _crop_and_resample(full_db, num_bins, zoom):
+    """Crop the full-bandwidth spectrum down to the span implied by `zoom`
+    (centered on 0 Hz / DC) and resample it to exactly `num_bins` points."""
+    n = len(full_db)
+    half = max(1, int(round(n / (2.0 * max(1, zoom)))))
+    center = n // 2
+    lo = max(0, center - half)
+    hi = min(n, center + half)
+    seg = full_db[lo:hi]
+    if len(seg) < 2:
+        seg = full_db
+    x_src = np.linspace(0.0, 1.0, num=len(seg))
+    x_dst = np.linspace(0.0, 1.0, num=num_bins)
+    return np.interp(x_dst, x_src, seg)
+
+
 class RadioState:
     """Holds the simulated 'radio' settings and produces spectrum data."""
 
-    def __init__(self, user_buttons=None):
+    def __init__(self, user_buttons=None, iq_source=None):
         self.lock = threading.Lock()
         self.center_freq = 14_195_000.0
         self.sample_rate = 192_000.0
@@ -360,6 +704,15 @@ class RadioState:
         # They become visible whenever they fall inside the current span.
         self.signals = self._make_signals()
 
+        # Optional IQWavSource: when set, the RF spectrum/waterfall is
+        # computed from real recorded IQ samples (looped forever) instead
+        # of the synthetic signal generator above.
+        self.iq_source = iq_source
+        if self.iq_source is not None:
+            self.sample_rate = float(self.iq_source.sample_rate)
+            if self.iq_source.center_freq is not None:
+                self.center_freq = self.iq_source.center_freq
+
     # ------------------------------------------------------------ setup ----
     def _make_signals(self):
         sigs = []
@@ -401,7 +754,7 @@ class RadioState:
                 "running": self.running,
                 "lo_active": self.lo_active,
                 "lo_b_freq": self.lo_b_freq,
-                "user_buttons": self.user_buttons,
+                "user_buttons": [dict(b) for b in self.user_buttons],
                 "user_btn_state": self.user_btn_state,
             }
 
@@ -448,8 +801,6 @@ class RadioState:
                 self.mute = bool(cmd.get("enabled", self.mute))
             elif c == "set_ptt":
                 self.ptt = bool(cmd.get("enabled", self.ptt))
-            elif c == "set_ptt":
-                self.ptt = bool(cmd.get("enabled", self.ptt))
             elif c == "set_zoom":
                 self.zoom = max(1, int(cmd.get("value", self.zoom)))
             elif c == "start":
@@ -475,7 +826,7 @@ class RadioState:
                 # LO A / LO B selection
                 self.lo_active = cmd.get("lo", "A")
             elif c == "set_lo_b_freq":
-                self.lo_b_freq = float(cmd.get("hz", getattr(self,"lo_b_freq",self.center_freq)))
+                self.lo_b_freq = float(cmd.get("hz", self.lo_b_freq))
             elif c == "transport":
                 # Transport-bar button presses (record/play/pause/etc.) -
                 # nothing to simulate, but still logged below.
@@ -517,13 +868,59 @@ class RadioState:
             squelch = self.squelch
             mute = self.mute
             mode = self.mode
+            t0 = self._t0
+            iq_source = self.iq_source
 
         span = sample_rate / zoom
         f_start = center - span / 2.0
         f_stop = center + span / 2.0
-        t = time.time() - self._t0
+        t = time.time() - t0
 
-        # ---- RF spectrum --------------------------------------------------
+        lo_f = center + filter_lo
+        hi_f = center + filter_hi
+        if hi_f < lo_f:
+            lo_f, hi_f = hi_f, lo_f
+
+        if iq_source is not None:
+            spectrum, signal_db = self._iq_spectrum_and_signal(
+                iq_source, center, sample_rate, zoom, rf_gain, lo_f, hi_f
+            )
+        else:
+            spectrum, signal_db = self._synthetic_spectrum_and_signal(
+                f_start, span, t, rf_gain, lo_f, hi_f
+            )
+
+        # simple smoothing so the meter doesn't jitter wildly
+        alpha = 0.35
+        with self.lock:
+            self._smoothed_signal_db = (
+                (1 - alpha) * self._smoothed_signal_db + alpha * signal_db
+            )
+            smoothed = self._smoothed_signal_db
+        smeter_dbm = max(-135.0, min(10.0, smoothed))
+        smeter_text = dbm_to_s_text(smeter_dbm)
+
+        squelch_open = (smeter_dbm >= squelch) and not mute
+
+        af_spectrum = self._make_af_spectrum(
+            smeter_dbm, lo_f, hi_f, rf_gain, mute, squelch_open
+        )
+
+        msg = {
+            "type": "data",
+            "f_start": f_start,
+            "f_stop": f_stop,
+            "spectrum": spectrum,
+            "af_range": AF_RANGE,
+            "af_spectrum": af_spectrum,
+            "smeter_dbm": smeter_dbm,
+            "smeter_text": smeter_text,
+            "squelch_open": squelch_open,
+        }
+        return msg
+
+    # ---- RF spectrum: synthetic signal generator -------------------------
+    def _synthetic_spectrum_and_signal(self, f_start, span, t, rf_gain, lo_f, hi_f):
         spectrum = [0.0] * NUM_BINS
         for i in range(NUM_BINS):
             f = f_start + (i / (NUM_BINS - 1)) * span
@@ -537,33 +934,46 @@ class RadioState:
             level += rf_gain * 0.4  # RF gain brightens the displayed trace a bit
             spectrum[i] = max(-135.0, min(-5.0, level))
 
-        # ---- signal level inside the IF passband (drives S-meter & AF) ----
-        lo_f = center + filter_lo
-        hi_f = center + filter_hi
-        if hi_f < lo_f:
-            lo_f, hi_f = hi_f, lo_f
+        # signal level inside the IF passband (drives S-meter & AF)
         in_band = []
         for sig in self.signals:
             if lo_f - sig.width_hz <= sig.offset_hz <= hi_f + sig.width_hz:
-                # power contributed at band centre
                 in_band.append(sig.level_at((lo_f + hi_f) / 2.0, t))
         if in_band:
             signal_db = max(in_band)
         else:
             signal_db = NOISE_FLOOR_DBM + random.uniform(-2.0, 2.0)
         signal_db += rf_gain * 0.4
+        return spectrum, signal_db
 
-        # simple smoothing so the meter doesn't jitter wildly
-        alpha = 0.35
-        self._smoothed_signal_db = (
-            (1 - alpha) * self._smoothed_signal_db + alpha * signal_db
-        )
-        smeter_dbm = max(-135.0, min(10.0, self._smoothed_signal_db))
-        smeter_text = dbm_to_s_text(smeter_dbm)
+    # ---- RF spectrum: real samples from --iq_wav (looped forever) --------
+    def _iq_spectrum_and_signal(self, iq_source, center, sample_rate, zoom,
+                                 rf_gain, lo_f, hi_f):
+        iq_block = iq_source.read_iq_block(IQ_FFT_SIZE)
+        full_db = _iq_fft_spectrum_db(iq_block, rf_gain)
+        spectrum = _crop_and_resample(full_db, NUM_BINS, zoom).tolist()
 
-        squelch_open = (smeter_dbm >= squelch) and not mute
+        # Map the IF passband (lo_f..hi_f, absolute Hz) onto bins of the
+        # full-bandwidth FFT (which spans center +/- sample_rate/2) so the
+        # S-meter reacts to whatever the recording actually contains there.
+        f_start_full = center - sample_rate / 2.0
+        f_stop_full = center + sample_rate / 2.0
+        span_full = max(1.0, f_stop_full - f_start_full)
 
-        # ---- AF (audio) spectrum ------------------------------------------
+        def freq_to_bin(f):
+            frac = (f - f_start_full) / span_full
+            frac = min(1.0, max(0.0, frac))
+            return int(frac * (len(full_db) - 1))
+
+        b_lo, b_hi = sorted((freq_to_bin(lo_f), freq_to_bin(hi_f)))
+        if b_hi > b_lo:
+            signal_db = float(np.max(full_db[b_lo:b_hi + 1]))
+        else:
+            signal_db = float(full_db[b_lo])
+        return spectrum, signal_db
+
+    # ---- AF (audio) spectrum, shared by both RF spectrum sources ---------
+    def _make_af_spectrum(self, smeter_dbm, lo_f, hi_f, rf_gain, mute, squelch_open):
         af_spectrum = [0.0] * AF_BINS
         bw = max(50, hi_f - lo_f)
         carrier_present = squelch_open
@@ -578,19 +988,7 @@ class RadioState:
             if mute:
                 level = NOISE_FLOOR_DBM
             af_spectrum[i] = max(-135.0, min(-5.0, level))
-
-        msg = {
-            "type": "data",
-            "f_start": f_start,
-            "f_stop": f_stop,
-            "spectrum": spectrum,
-            "af_range": AF_RANGE,
-            "af_spectrum": af_spectrum,
-            "smeter_dbm": smeter_dbm,
-            "smeter_text": smeter_text,
-            "squelch_open": squelch_open,
-        }
-        return msg
+        return af_spectrum
 
 
 
@@ -611,15 +1009,17 @@ class UDPAudioChannel:
     channel open so the server learns (ip, port)).
     """
 
-    def __init__(self, radio: "RadioState", udp_port: int):
+    def __init__(self, radio: "RadioState", udp_port: int, audio_source=None):
         self.radio    = radio
         self.port     = udp_port
+        self.audio_source = audio_source  # optional AudioWavSource (--audio_wav)
         self._sock    = None
         self._alive   = False
         self._seq     = 0
         self._ts      = 0
-        self._phase   = [0.0]   # sine generator phase accumulator
+        self._phase   = [0.0]   # sine generator phase accumulator (demo tone fallback)
         self._cli_addr = None   # (ip, port) of GUI's UDP endpoint
+        self._addr_lock = threading.Lock()  # guards _cli_addr + radio.ptt_client_addr
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
     def start(self):
@@ -644,8 +1044,9 @@ class UDPAudioChannel:
 
     def set_client_addr(self, addr):
         """Called by ClientHandler when the GUI's UDP endpoint is known."""
-        self._cli_addr = addr
-        self.radio.ptt_client_addr = addr
+        with self._addr_lock:
+            self._cli_addr = addr
+            self.radio.ptt_client_addr = addr
         print(f"[audio] GUI UDP endpoint registered: {addr}")
 
     # ── TX loop: server → GUI (PTT OFF) ──────────────────────────────────────
@@ -660,18 +1061,24 @@ class UDPAudioChannel:
             next_tick += interval
 
             state = self.radio.as_dict()
-            if not state["running"] or state["ptt"] or not self._cli_addr:
+            with self._addr_lock:
+                cli_addr = self._cli_addr
+            if not state["running"] or state["ptt"] or not cli_addr:
                 continue  # nothing to send
 
-            payload = _gen_sine_frame(
-                _AUDIO_TONE_HZ, AUDIO_SAMPLE_RATE,
-                AUDIO_FRAME_SAMPS, self._phase
-            )
+            if self.audio_source is not None:
+                raw_pcm = self.audio_source.read_frame(AUDIO_FRAME_SAMPS)
+                payload = _linear16_to_ulaw(raw_pcm)
+            else:
+                payload = _gen_sine_frame(
+                    _AUDIO_TONE_HZ, AUDIO_SAMPLE_RATE,
+                    AUDIO_FRAME_SAMPS, self._phase
+                )
             pkt = _rtp_pack(payload, self._seq, self._ts)
             self._seq = (self._seq + 1) & 0xFFFF
             self._ts  = (self._ts + AUDIO_FRAME_SAMPS) & 0xFFFFFFFF
             try:
-                self._sock.sendto(pkt, self._cli_addr)
+                self._sock.sendto(pkt, cli_addr)
             except OSError:
                 pass
 
@@ -687,7 +1094,12 @@ class UDPAudioChannel:
                 break
 
             # Auto-register the GUI's UDP address from any incoming packet
-            if self._cli_addr is None or self._cli_addr != addr:
+            with self._addr_lock:
+                if self._cli_addr is None or self._cli_addr != addr:
+                    needs_register = True
+                else:
+                    needs_register = False
+            if needs_register:
                 self.set_client_addr(addr)
 
             result = _rtp_unpack(data)
@@ -744,10 +1156,14 @@ class ClientHandler(threading.Thread):
         streamer = threading.Thread(target=self._stream_loop, daemon=True)
         streamer.start()
 
+        self.sock.settimeout(30.0)   # avoid blocking forever on a stalled client
         buf = b""
         try:
             while self.alive:
-                data = self.sock.recv(65536)
+                try:
+                    data = self.sock.recv(65536)
+                except socket.timeout:
+                    continue
                 if not data:
                     break
                 buf += data
@@ -781,13 +1197,16 @@ class ClientHandler(threading.Thread):
 
     def _stream_loop(self):
         period = 1.0 / UPDATE_HZ
+        next_tick = time.monotonic()
         while self.alive:
-            if self.radio.as_dict()["running"]:
+            state = self.radio.as_dict()
+            if state["running"]:
                 msg = self.radio.make_data_message()
-                msg["state"] = self.radio.as_dict()
+                msg["state"] = state
                 if not self.send_json(msg):
                     break
-            time.sleep(period)
+            next_tick += period
+            time.sleep(max(0.0, next_tick - time.monotonic()))
 
 
 def _parse_args():
@@ -812,13 +1231,22 @@ def _parse_args():
     _def_no_audio   = bool(_aud.get("no_audio",  _D["audio"]["no_audio"]))
 
     # Determine which positional args (host / port) were explicitly on the CLI,
-    # ignoring --config and its value.
+    # ignoring every flag that takes a value (and its value) below.
+    _value_flags = {'--config', '--audio-port', '--iq_wav', '--audio_wav'}
+    for _n in range(1, NUM_USER_BUTTONS + 1):
+        _value_flags.add(f'--user-button-label-{_n}')
+        _value_flags.add(f'--user-button-type-{_n}')
     _skip = False
     _positionals = []
     for _a in sys.argv[1:]:
-        if _skip:            _skip = False; continue
-        if _a == '--config': _skip = True;  continue
-        if _a.startswith('--config='): continue
+        if _skip:
+            _skip = False
+            continue
+        if _a in _value_flags:
+            _skip = True
+            continue
+        if any(_a.startswith(_vf + '=') for _vf in _value_flags):
+            continue
         if not _a.startswith('-'):
             _positionals.append(_a)
     _cli_host_given = len(_positionals) >= 1
@@ -838,6 +1266,18 @@ def _parse_args():
                     help=f"UDP port for RTP audio (default: {_def_audio_port})")
     ap.add_argument("--no-audio", action="store_true", default=argparse.SUPPRESS,
                     help="Disable the RTP/UDP audio channel")
+    ap.add_argument("--iq_wav", metavar="PATH", default=None,
+                    help="Path to a wav file of IQ samples in SDRplay IQ wav "
+                         "format (stereo I/Q PCM or float). When given, the "
+                         "RF spectrum/waterfall sent to the GUI is computed "
+                         "from these real samples (looped forever) instead "
+                         "of the built-in synthetic signal generator.")
+    ap.add_argument("--audio_wav", metavar="PATH", default=None,
+                    help="Path to a mono/stereo PCM (or float) wav file to "
+                         "transmit to the GUI as the simulated received "
+                         "audio, looped forever, instead of the built-in "
+                         "demo sine tone. Resampled to the RTP audio sample "
+                         "rate (8 kHz) if its native rate differs.")
     for n in range(1, NUM_USER_BUTTONS + 1):
         ap.add_argument(f"--user-button-label-{n}", metavar="TEXT",
                         default=argparse.SUPPRESS,
@@ -894,12 +1334,42 @@ def main():
     host = args.host
     port = args.port
 
-    radio = RadioState(user_buttons=_build_user_buttons(args))
+    # ── Optional: load a recorded IQ wav file to drive the RF spectrum ────────
+    iq_source = None
+    if args.iq_wav:
+        try:
+            iq_source = IQWavSource(args.iq_wav)
+        except Exception as e:
+            print(f"[cat_server] ERROR: could not load --iq_wav {args.iq_wav!r}: {e}")
+            sys.exit(1)
+        cf = f"{iq_source.center_freq / 1e6:.6f} MHz" if iq_source.center_freq else "unknown (use GUI to set)"
+        print(f"[cat_server] IQ wav loaded: {args.iq_wav}")
+        print(f"[cat_server]   sample_rate={iq_source.sample_rate} Hz, "
+              f"channels={iq_source.channels}, bits={iq_source.bits_per_sample}"
+              f"{' float' if iq_source.is_float else ''}, center_freq={cf}")
+        print("[cat_server]   -> looping this file forever for spectrum/waterfall")
+
+    radio = RadioState(user_buttons=_build_user_buttons(args), iq_source=iq_source)
+
+    # ── Optional: load a wav file to transmit as the downlink audio ──────────
+    audio_source = None
+    if args.audio_wav:
+        try:
+            audio_source = AudioWavSource(args.audio_wav)
+        except Exception as e:
+            print(f"[cat_server] ERROR: could not load --audio_wav {args.audio_wav!r}: {e}")
+            sys.exit(1)
+        print(f"[cat_server] audio wav loaded: {args.audio_wav}")
+        print(f"[cat_server]   source sample_rate={audio_source.source_sample_rate} Hz, "
+              f"channels={audio_source.source_channels} "
+              f"-> resampled to {AUDIO_SAMPLE_RATE} Hz mono")
+        print("[cat_server]   -> looping this file forever as the RX audio "
+              "stream sent to the GUI")
 
     # ── Start the UDP audio channel ──────────────────────────────────────────
     audio_ch = None
     if not args.no_audio:
-        audio_ch = UDPAudioChannel(radio, args.audio_port)
+        audio_ch = UDPAudioChannel(radio, args.audio_port, audio_source=audio_source)
         audio_ch.start()
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -917,6 +1387,8 @@ def main():
     finally:
         if audio_ch:
             audio_ch.stop()
+        if iq_source:
+            iq_source.close()
         srv.close()
 
 
