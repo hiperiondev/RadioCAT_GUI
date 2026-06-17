@@ -6,6 +6,12 @@ import argparse, array, cmath, collections, json, math, os, queue, socket, struc
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+# ── Optional NumPy (used for FFT when available) ──────────────────────────────
+try:
+    import numpy as _np
+except ImportError:
+    _np = None
+
 # ── TOML config support ───────────────────────────────────────────────────────
 try:
     import tomllib as _tomllib          # Python 3.11+
@@ -524,7 +530,6 @@ C = dict(
     grid_text   = "#3a5878",   # grid labels
     trace       = "#18e840",   # spectrum trace
     trace_fill  = "#030d06",   # trace fill
-    filter_fill = "#142850",   # IF passband (kept for compatibility)
     filter_fill_overlay = "#1e3f70",  # IF passband overlay – lighter than bg so
                                        # the spectrum trace shows through even when
                                        # stipple is unavailable (macOS / Windows)
@@ -699,16 +704,25 @@ _AF_DISPLAY_RANGE_HZ = 3000  # 0..this Hz is shown in the AF spectrum/waterfall
 
 _af_hamming_cache = {}
 def _af_hamming(n):
-    """Cached Hamming window of length n."""
+    """Cached Hamming window of length n.
+
+    Returns a numpy array when numpy is available, otherwise a plain list.
+    """
     w = _af_hamming_cache.get(n)
     if w is None:
-        w = ([0.54 - 0.46*math.cos(2*math.pi*i/(n-1)) for i in range(n)]
-             if n > 1 else [1.0]*n)
+        if _np is not None:
+            w = _np.hamming(n) if n > 1 else _np.ones(n)
+        else:
+            w = ([0.54 - 0.46*math.cos(2*math.pi*i/(n-1)) for i in range(n)]
+                 if n > 1 else [1.0]*n)
         _af_hamming_cache[n] = w
     return w
 
 def _af_fft(x):
-    """Recursive radix-2 Cooley–Tukey FFT. len(x) must be a power of 2."""
+    """Radix-2 FFT — used only when numpy is not available.
+
+    len(x) must be a power of 2.
+    """
     n = len(x)
     if n <= 1:
         return x
@@ -721,18 +735,31 @@ def _af_fft(x):
 def _af_spectrum_db(samples):
     """Convert a window of decoded int16 PCM samples (the real received
     audio) into a one-sided dB spectrum (index 0 = 0 Hz), scaled to the
-    same -150..0 dB range SpecCanvas/WFCanvas already use for display."""
+    same -150..0 dB range SpecCanvas/WFCanvas already use for display.
+
+    Uses numpy.fft.rfft when numpy is available for significantly better
+    performance; falls back to the pure-Python recursive FFT otherwise.
+    """
     n = len(samples)
     win = _af_hamming(n)
-    x = [complex(samples[i]*win[i], 0.0) for i in range(n)]
-    X = _af_fft(x)
-    win_sum = sum(win) or 1.0
-    out = []
-    for k in range(n//2 + 1):
-        mag = abs(X[k]) * 2.0 / win_sum
-        db = 20.0*math.log10(mag/32768.0 + 1e-9)
-        out.append(max(-150.0, min(0.0, db)))
-    return out
+    if _np is not None:
+        x = _np.array(samples, dtype=_np.float64) * win
+        X = _np.fft.rfft(x)          # length n//2 + 1, one-sided
+        win_sum = win.sum() or 1.0
+        mag = _np.abs(X) * 2.0 / win_sum
+        db = 20.0 * _np.log10(mag / 32768.0 + 1e-9)
+        db = _np.clip(db, -150.0, 0.0)
+        return db.tolist()
+    else:
+        x = [complex(samples[i]*win[i], 0.0) for i in range(n)]
+        X = _af_fft(x)
+        win_sum = sum(win) or 1.0
+        out = []
+        for k in range(n//2 + 1):
+            mag = abs(X[k]) * 2.0 / win_sum
+            db = 20.0*math.log10(mag/32768.0 + 1e-9)
+            out.append(max(-150.0, min(0.0, db)))
+        return out
 
 
 class RTPAudioClient:
@@ -772,6 +799,7 @@ class RTPAudioClient:
         # Rolling buffer of decoded int16 PCM samples (real received audio)
         # used to compute the AF spectrum/waterfall locally.
         self._af_ring    = array.array('h')
+        self._af_last_put = 0.0   # timestamp of last AF frame posted to GUI queue
         self._af_app     = None   # set externally to the App instance
 
     # ── device enumeration ────────────────────────────────────────────────────
@@ -836,12 +864,16 @@ class RTPAudioClient:
              sample_rate: int = AUDIO_SAMPLE_RATE,
              frame_ms: int = AUDIO_FRAME_MS):
         """Call this when the server sends audio_port."""
+        if self._alive:        # guard against double-open
+            self.close()
         self._host        = server_host
         self._port        = server_udp_port
         self._sample_rate = sample_rate
         self._frame_ms    = frame_ms
         self._frame_samps = int(sample_rate * frame_ms / 1000)
-        self._af_ring     = array.array('h')   # discard any samples from a prior session
+        with self._lock:                        # BUG-4: guard rebind against concurrent _rx_loop reads
+            self._af_ring     = array.array('h')   # discard any samples from a prior session
+            self._af_last_put = 0.0                # ensure first AF frame of new session is not skipped
 
         # Open UDP socket
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -868,6 +900,7 @@ class RTPAudioClient:
             pass
 
         threading.Thread(target=self._rx_loop, daemon=True).start()
+        threading.Thread(target=self._af_worker, daemon=True).start()  # BUG-6
         # PTT starts OFF → open speaker stream immediately so audio plays on connect
         self._open_rx_stream()
         print(f"[audio] RTP client open  local_udp={self._local_port}"
@@ -1023,26 +1056,41 @@ class RTPAudioClient:
             # the server — into the local AF spectrum analyzer so the AF
             # spectrum/waterfall box always reflects the actual received
             # signal, independent of whether local playback is available.
+            # BUG-6: FFT is offloaded to _af_worker; just buffer here.
             samples = array.array('h')
             samples.frombytes(pcm)
             if sys.byteorder != "little":
                 samples.byteswap()
-            self._af_ring.extend(samples)
-            while len(self._af_ring) >= _AF_FFT_N:
-                window = self._af_ring[:_AF_FFT_N]
+            with self._lock:                    # BUG-4: guard extend against concurrent open() rebind
+                self._af_ring.extend(samples)
+
+
+    # ── AF spectrum worker ────────────────────────────────────────────────────
+    def _af_worker(self):
+        """Dedicated thread: drains _af_ring and posts AF spectrum to the GUI
+        queue.  Keeps FFT computation off the UDP receive thread (BUG-6)."""
+        while self._alive:
+            with self._lock:
+                if len(self._af_ring) >= _AF_FFT_N:
+                    window = list(self._af_ring[:_AF_FFT_N])
+                    del self._af_ring[:_AF_FFT_HOP]
+                else:
+                    window = None
+            if window:
                 spectrum = _af_spectrum_db(window)
                 bin_hz = self._sample_rate / _AF_FFT_N
-                max_bin = min(len(spectrum)-1, int(_AF_DISPLAY_RANGE_HZ / bin_hz))
+                max_bin = min(len(spectrum) - 1, int(_AF_DISPLAY_RANGE_HZ / bin_hz))
                 if self._af_app is not None:
                     _now = time.monotonic()
-                    if not hasattr(self, '_af_last_put') or _now - self._af_last_put >= 0.05:
+                    if _now - self._af_last_put >= 0.05:
                         self._af_app.q.put({
                             "type":        "af_local",
-                            "af_spectrum": spectrum[:max_bin+1],
+                            "af_spectrum": spectrum[:max_bin + 1],
                             "af_range":    _AF_DISPLAY_RANGE_HZ,
                         })
                         self._af_last_put = _now
-                del self._af_ring[:_AF_FFT_HOP]
+            else:
+                time.sleep(0.005)
 
 
 def _print_audio_devices():
@@ -1281,9 +1329,13 @@ class WFCanvas(tk.Canvas):
             # Vertical grid line spanning the waterfall image area only
             self.create_line(x,0,x,ch-lbl_h,fill=C["grid"],tags="wf_overlay")
             lbl=f"{f:.0f}" if self.af else f"{f/1000:.0f}"
-            # Label drawn in the reserved bottom strip, below the image
-            self.create_text(x+2,ch-2,text=lbl,fill=C["grid_text"],
-                             anchor="sw",font=gfont,tags="wf_overlay")
+            # Label drawn in the reserved bottom strip, below the image.
+            # BUG-10: skip labels whose left edge would be clipped at the canvas
+            # border (mirrors the same guard in SpecCanvas.draw()).
+            _lbl_min_x = max(4, int(round(4 * sc)))
+            if x >= _lbl_min_x:
+                self.create_text(x+2,ch-2,text=lbl,fill=C["grid_text"],
+                                 anchor="sw",font=gfont,tags="wf_overlay")
             f+=step
         # Horizontal bottom axis line
         self.create_line(0,ch-lbl_h,cw,ch-lbl_h,fill=C["sep"],tags="wf_overlay")
@@ -1297,8 +1349,18 @@ class SpecCanvas(tk.Canvas):
         kw.setdefault("bg",C["spec_bg"]); kw.setdefault("highlightthickness",0)
         super().__init__(master,**kw)
         self.app=app; self.show_filter=show_filter; self.af=af
-        self.f0=28_490_000.0; self.f1=28_510_000.0; self.data=[]
+        if af:
+            self.f0 = 0.0
+            self.f1 = float(_AF_DISPLAY_RANGE_HZ)   # 3000.0
+        else:
+            self.f0 = 28_490_000.0
+            self.f1 = 28_510_000.0
+        self.data=[]
         self.drag=None; self._last=0.0
+        self._peak       = None   # BUG-5: per-bin peak dB array (None until first draw)
+        self._peak_decay = 0.5    # BUG-5: dB/frame decay rate for peak-hold
+        # BUG-7: compute once — stipple is platform-constant for the process lifetime
+        self._stipple = "gray50" if sys.platform.startswith("linux") else ""
         self.bind("<Configure>",lambda e:self.draw())
         if show_filter:
             self.bind("<Button-1>",self._press)
@@ -1351,10 +1413,9 @@ class SpecCanvas(tk.Canvas):
             # rectangle is rendered fully opaque, hiding the spectrum trace.
             # Use a slightly lighter fill that reads as a tinted overlay on all
             # platforms, and only add the stipple on X11 where it works.
-            import sys as _sys
-            _stipple = "gray50" if _sys.platform.startswith("linux") else ""
+            # BUG-7: self._stipple is computed once in __init__; no per-frame import.
             self.create_rectangle(x1,0,x2,draw_h,fill=C["filter_fill_overlay"],
-                                  outline="",stipple=_stipple)
+                                  outline="",stipple=self._stipple)
             self.create_line(x1,0,x1,draw_h,fill=C["filter_edge"],width=1)
             self.create_line(x2,0,x2,draw_h,fill=C["filter_edge"],width=1)
             xc=self._fx(ctr)
@@ -1369,9 +1430,15 @@ class SpecCanvas(tk.Canvas):
                              fill=C["grid_text"],anchor="nw",font=gfont)
 
         # ── 4. Frequency grid lines + labels (ON TOP of trace) ────────────────
-        # Estimate pixel width of widest dB label ("-150", 4 chars) so that
-        # X-axis frequency labels don't overlap the Y-axis dB labels on the left.
-        _db_lbl_w = max(28, int(round(30 * sc)))
+        # BUG-12: measure the actual rendered width of the widest dB label
+        # ("-150", 4 chars) so that X-axis frequency labels don't overlap the
+        # Y-axis dB labels, even when a wide custom --gui-font is in use or the
+        # scale is high enough to push TkFixedFont wider than the old estimate.
+        try:
+            import tkinter.font as _tkfont
+            _db_lbl_w = _tkfont.Font(font=gfont).measure("-150") + 4
+        except Exception:
+            _db_lbl_w = max(28, int(round(30 * sc)))
         span=self.f1-self.f0
         if span>0:
             step=nice_step(span/12)
@@ -1390,8 +1457,21 @@ class SpecCanvas(tk.Canvas):
         # ── 5. Separator line between trace area and label strip ──────────────
         self.create_line(0,draw_h,w,draw_h,fill=C["sep"])
 
-        # ── 6. Green peak/hold line at top (always on top) ───────────────────
-        self.create_line(0,2,w,2,fill=C["peak_bar"],width=2)
+        # ── 6. Green peak/hold line (tracks per-bin maximum with decay) ─────────
+        if n >= 2:
+            # Initialise or resize peak buffer when bin count changes
+            if self._peak is None or len(self._peak) != n:
+                self._peak = list(self.data)
+            else:
+                # Decay existing peaks toward current data; never rise above 0 dB
+                self._peak = [
+                    max(p - self._peak_decay, d)
+                    for p, d in zip(self._peak, self.data)
+                ]
+            peak_pts = []
+            for i in range(n):
+                peak_pts.extend([i / (n - 1) * w, self._dy(self._peak[i], draw_h)])
+            self.create_line(peak_pts, fill=C["peak_bar"], width=1)
 
     def _motion(self,e):
         ctr=(self.f0+self.f1)/2
@@ -2827,21 +2907,44 @@ class App:
     _POLL_DROP_THRESHOLD = 50
 
     def poll(self):
+        # IMPORTANT: self.root.after(30, self.poll) must run no matter what
+        # happens above, or this loop stops rescheduling itself forever.
+        # Every GUI update (spectrum, waterfall, S-meter, state refresh)
+        # flows through this queue; the RTP audio threads do not. So if an
+        # unexpected exception ever escaped poll() uncaught, audio would
+        # keep playing fine (it's driven by independent PyAudio/UDP
+        # threads) while the rest of the GUI silently froze in place.
+        # The try/finally below makes that failure mode impossible.
         try:
             while True:
                 if self.q.qsize() > self._POLL_DROP_THRESHOLD:
                     msg = self.q.get_nowait()
-                    if msg.get("type") in ("data", "af_local"):
+                    if msg.get("type") == "data":
+                        # Still update the S-meter even when dropping the spectrum frame
+                        # so it doesn't freeze while the queue is backed up.
+                        try:
+                            self.smeter.set_value(
+                                msg.get("smeter_dbm", -127.0),
+                                msg.get("smeter_text", ""))
+                        except Exception:
+                            import traceback; traceback.print_exc()
                         continue      # discard stale spectrum frame; grab next
+                    elif msg.get("type") == "af_local":
+                        continue      # discard stale AF frame; grab next
                 else:
                     msg = self.q.get_nowait()
                 try:
                     self._handle(msg)
-                except Exception as _exc:
+                except Exception:
                     import traceback; traceback.print_exc()
         except queue.Empty:
             pass
-        self.root.after(30, self.poll)
+        except Exception:
+            # Belt-and-suspenders: anything else unexpected (e.g. q.get_nowait()
+            # itself misbehaving) must not stop the chain from rescheduling.
+            import traceback; traceback.print_exc()
+        finally:
+            self.root.after(30, self.poll)
 
     def _handle(self,msg):
         t=msg.get("type")
