@@ -2,9 +2,9 @@
 """
 cat_gui.py
 """
-import argparse, array, cmath, collections, json, math, os, queue, socket, struct, sys, threading, time, datetime
+import argparse, array, cmath, collections, json, logging, math, os, queue, socket, struct, sys, threading, time, datetime
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox
 
 # ── Optional NumPy (used for FFT when available) ──────────────────────────────
 try:
@@ -595,6 +595,50 @@ def db_to_rgb(db, dmin=-150.0, dmax=0.0):
                     int(c0[2]+(c1[2]-c0[2])*f))
     return stops[-1][1]
 
+# Colormap data mirroring the stops in db_to_rgb — kept in sync manually.
+_CMAP_T  = (0.00, 0.18, 0.38, 0.55, 0.73, 1.00)
+_CMAP_R  = (  4,    0,    0,    0,  230,  255)
+_CMAP_G  = (  8,    0,  120,  200,  200,   20)
+_CMAP_B  = ( 22,  140,  200,    0,    0,    0)
+
+def _db_array_to_rgb_bytes(db_arr, dmin=-150.0, dmax=0.0):
+    """Vectorised (numpy) conversion of a 1-D dB array → packed RGB bytes.
+
+    Returns a bytes object of length 3*len(db_arr) suitable for use with
+    PhotoImage.put() after reshaping.  Falls back to the scalar path when
+    numpy is not available.
+    """
+    if _np is None:
+        # Pure-Python fallback: reuse existing scalar helper.
+        out = bytearray(3 * len(db_arr))
+        for i, db in enumerate(db_arr):
+            r, g, b = db_to_rgb(db, dmin, dmax)
+            out[3*i] = r; out[3*i+1] = g; out[3*i+2] = b
+        return bytes(out)
+
+    t_arr = _np.clip(((_np.asarray(db_arr, dtype=_np.float32) - dmin)
+                      / (dmax - dmin)), 0.0, 1.0)
+
+    ct = _np.array(_CMAP_T, dtype=_np.float32)
+    cr = _np.array(_CMAP_R, dtype=_np.float32)
+    cg = _np.array(_CMAP_G, dtype=_np.float32)
+    cb = _np.array(_CMAP_B, dtype=_np.float32)
+
+    # For each sample, find which colour-stop segment it falls in.
+    # searchsorted gives the index of the *right* stop; clamp to valid range.
+    idx = _np.searchsorted(ct, t_arr, side='right') - 1
+    idx = _np.clip(idx, 0, len(ct) - 2)
+
+    t0 = ct[idx]; t1 = ct[idx + 1]
+    span = _np.where(t1 > t0, t1 - t0, 1.0)
+    f = _np.clip((t_arr - t0) / span, 0.0, 1.0)
+
+    r = (cr[idx] + (cr[idx+1] - cr[idx]) * f).astype(_np.uint8)
+    g = (cg[idx] + (cg[idx+1] - cg[idx]) * f).astype(_np.uint8)
+    b = (cb[idx] + (cb[idx+1] - cb[idx]) * f).astype(_np.uint8)
+
+    return _np.stack([r, g, b], axis=1).tobytes()
+
 def nice_step(x):
     if x<=0: return 1
     e=math.floor(math.log10(x)); b=10**e
@@ -665,6 +709,7 @@ def _build_linear_to_ulaw_table():
             s = -s
         s = min(s, 32767)
         s += 33
+        s = min(s, 8191)
         exp = 0
         for e in range(7, -1, -1):
             if s >= (1 << (e + 5)):
@@ -701,6 +746,7 @@ def _linear16_to_ulaw_gui(samples: bytes) -> bytes:
 _AF_FFT_N            = 512   # FFT window size, samples (power of 2)
 _AF_FFT_HOP          = 256   # samples advanced between successive FFTs (50% overlap)
 _AF_DISPLAY_RANGE_HZ = 3000  # 0..this Hz is shown in the AF spectrum/waterfall
+_AF_RING_MAX         = 10 * _AF_FFT_N   # hard cap on _af_ring length (~5 s at 8 kHz)
 
 _af_hamming_cache = {}
 def _af_hamming(n):
@@ -1063,6 +1109,8 @@ class RTPAudioClient:
                 samples.byteswap()
             with self._lock:                    # BUG-4: guard extend against concurrent open() rebind
                 self._af_ring.extend(samples)
+                if len(self._af_ring) > _AF_RING_MAX:
+                    del self._af_ring[:-_AF_FFT_N]   # keep only the most recent window
 
 
     # ── AF spectrum worker ────────────────────────────────────────────────────
@@ -1169,7 +1217,6 @@ class Net:
             if not data: break
             buf+=data
             if len(buf) > self._RX_BUF_MAX:
-                import logging
                 logging.warning(
                     "_rx: receive buffer exceeded %d bytes with no line boundary "
                     "— likely malformed/unterminated JSON; closing socket",
@@ -1209,10 +1256,10 @@ class WFCanvas(tk.Canvas):
     canvas_width), which eliminates the freeze entirely.
     """
 
-    def __init__(self,master,img_w,af=False,**kw):
+    def __init__(self,master,af=False,**kw):
         kw.setdefault("bg",C["win_bg"]); kw.setdefault("highlightthickness",0)
         super().__init__(master,**kw)
-        self.img_w=img_w; self.af=af
+        self.af=af
         self.f0=28_490_000.0; self.f1=28_510_000.0
         self._app=None
         self._img=None          # current PhotoImage (canvas-sized)
@@ -1255,11 +1302,22 @@ class WFCanvas(tk.Canvas):
         n=len(spectrum)
         if n==0:
             return "{" + " ".join(["#000000"]*out_w) + "}"
-        parts=[]
-        for x in range(out_w):
-            si=min(int(x*n/out_w),n-1)
-            r,g,b=db_to_rgb(spectrum[si],dmin,dmax)
-            parts.append(f"#{r:02x}{g:02x}{b:02x}")
+        # Resample spectrum to output width first, then colourise.
+        if _np is not None:
+            src = _np.asarray(spectrum, dtype=_np.float32)
+            xi  = (_np.arange(out_w) * n / out_w).astype(_np.intp)
+            xi  = _np.clip(xi, 0, n - 1)
+            resampled = src[xi]
+            rgb = _db_array_to_rgb_bytes(resampled, dmin, dmax)
+            # rgb is a flat bytes object: [R0,G0,B0, R1,G1,B1, ...]
+            parts = [f"#{rgb[i]:02x}{rgb[i+1]:02x}{rgb[i+2]:02x}"
+                     for i in range(0, len(rgb), 3)]
+        else:
+            parts=[]
+            for x in range(out_w):
+                si=min(int(x*n/out_w),n-1)
+                r,g,b=db_to_rgb(spectrum[si],dmin,dmax)
+                parts.append(f"#{r:02x}{g:02x}{b:02x}")
         return "{" + " ".join(parts) + "}"
 
     # ── public API ────────────────────────────────────────────────────────────
@@ -1361,6 +1419,36 @@ class SpecCanvas(tk.Canvas):
         self._peak_decay = 0.5    # BUG-5: dB/frame decay rate for peak-hold
         # BUG-7: compute once — stipple is platform-constant for the process lifetime
         self._stipple = "gray50" if sys.platform.startswith("linux") else ""
+
+        # ── Retained canvas items (created once; updated via coords/itemconfig) ──
+        # Drawing order (back → front): fill polygon, trace line, filter overlay,
+        # peak line, dB grid, freq grid, separator.  Items tagged "grid" or
+        # "filter_overlay" are shown/hidden rather than deleted and re-created.
+        # A tiny placeholder polygon/line keeps the item IDs valid before the
+        # first real draw(); coords() replaces them on every subsequent frame.
+        _ph = [0, 0, 1, 0]   # degenerate placeholder — invisible until first draw
+        self._id_fill   = self.create_polygon(_ph, fill=C["trace_fill"], outline="", state="hidden")
+        self._id_trace  = self.create_line(_ph,    fill=C["trace"],      width=1,    state="hidden")
+        self._id_filt_r = self.create_rectangle(0, 0, 1, 1,
+                              fill=C["filter_fill_overlay"], outline="",
+                              stipple=self._stipple, state="hidden")
+        self._id_filt_lo = self.create_line(_ph, fill=C["filter_edge"], width=1, state="hidden")
+        self._id_filt_hi = self.create_line(_ph, fill=C["filter_edge"], width=1, state="hidden")
+        self._id_vfo     = self.create_line(_ph, fill=C["vfo_line"],    width=1, dash=(4,3), state="hidden")
+        self._id_peak   = self.create_line(_ph,    fill=C["peak_bar"],   width=1,    state="hidden")
+        self._id_sep    = self.create_line(0, 0, 1, 0, fill=C["sep"],               state="hidden")
+        # dB grid rows — fixed set, created once, repositioned each frame
+        _db_labels = [0, -25, -50, -75, -100, -125, -150]
+        self._id_db_lines = [self.create_line(0,0,1,0, fill=C["grid"])           for _ in _db_labels]
+        self._id_db_texts = [self.create_text(0,0, text=f"{db} dB" if db==0 else str(db),
+                                              fill=C["grid_text"], anchor="nw")   for db in _db_labels]
+        self._db_labels = _db_labels
+        # Frequency grid items are variable-count (depends on span/step/width),
+        # so we keep a pool that grows as needed and hide unused slots.
+        self._id_freq_lines = []
+        self._id_freq_texts = []
+        self._freq_labels   = []   # text strings for each active slot
+
         self.bind("<Configure>",lambda e:self.draw())
         if show_filter:
             self.bind("<Button-1>",self._press)
@@ -1386,7 +1474,10 @@ class SpecCanvas(tk.Canvas):
         self.f0=f0; self.f1=f1; self.data=spec; self.draw()
 
     def draw(self):
-        self.delete("all")
+        # ── Retained-item draw: no delete("all").  Every canvas object was
+        # created once in __init__; here we only reposition and show/hide them.
+        # This eliminates per-frame Tcl/Tk object churn (the dominant cost for
+        # a spectrum canvas with ~900 bins and ~7 grid lines).
         w,h=self.winfo_width(),self.winfo_height()
         if w<2 or h<2: return
         sc = getattr(self.app, '_sc', 1.0)
@@ -1398,36 +1489,54 @@ class SpecCanvas(tk.Canvas):
         # ── 1. Spectrum trace (drawn FIRST = behind everything) ───────────────
         n=len(self.data)
         if n>=2:
-            pts=[]
-            for i,db in enumerate(self.data):
-                pts.extend([i/(n-1)*w,self._dy(db, draw_h)])
-            self.create_polygon(pts+[w,draw_h,0,draw_h],fill=C["trace_fill"],outline="")
-            self.create_line(pts,fill=C["trace"],width=1)
+            if _np is not None:
+                xs = _np.linspace(0.0, w, n, endpoint=False)
+                db_arr = _np.asarray(self.data, dtype=_np.float64)
+                ys = draw_h - _np.clip((db_arr - self.DB_MIN) /
+                                       (self.DB_MAX - self.DB_MIN), 0.0, 1.0) * draw_h
+                pts = _np.empty(2 * n, dtype=_np.float64)
+                pts[0::2] = xs; pts[1::2] = ys
+                pts = pts.tolist()
+            else:
+                pts=[]
+                for i,db in enumerate(self.data):
+                    pts.extend([i/(n-1)*w,self._dy(db, draw_h)])
+            fill_pts = pts + [w, draw_h, 0, draw_h]
+            self.coords(self._id_fill,  fill_pts)
+            self.coords(self._id_trace, pts)
+            self.itemconfig(self._id_fill,  state="normal")
+            self.itemconfig(self._id_trace, state="normal")
+        else:
+            self.itemconfig(self._id_fill,  state="hidden")
+            self.itemconfig(self._id_trace, state="hidden")
 
         # ── 2. IF filter overlay (behind grid, over trace) ────────────────────
         if self.show_filter:
             ctr=(self.f0+self.f1)/2
             fl=self.app.state["filter_lo"]; fh=self.app.state["filter_hi"]
             x1=self._fx(ctr+fl); x2=self._fx(ctr+fh)
-            # stipple="gray50" is only reliable on X11; on macOS/Windows the
-            # rectangle is rendered fully opaque, hiding the spectrum trace.
-            # Use a slightly lighter fill that reads as a tinted overlay on all
-            # platforms, and only add the stipple on X11 where it works.
-            # BUG-7: self._stipple is computed once in __init__; no per-frame import.
-            self.create_rectangle(x1,0,x2,draw_h,fill=C["filter_fill_overlay"],
-                                  outline="",stipple=self._stipple)
-            self.create_line(x1,0,x1,draw_h,fill=C["filter_edge"],width=1)
-            self.create_line(x2,0,x2,draw_h,fill=C["filter_edge"],width=1)
             xc=self._fx(ctr)
-            self.create_line(xc,0,xc,draw_h,fill=C["vfo_line"],width=1,dash=(4,3))
+            # BUG-7: self._stipple is computed once in __init__; no per-frame import.
+            self.coords(self._id_filt_r,  x1, 0, x2, draw_h)
+            self.coords(self._id_filt_lo, x1, 0, x1, draw_h)
+            self.coords(self._id_filt_hi, x2, 0, x2, draw_h)
+            self.coords(self._id_vfo,     xc, 0, xc, draw_h)
+            self.itemconfig(self._id_filt_r,  state="normal")
+            self.itemconfig(self._id_filt_lo, state="normal")
+            self.itemconfig(self._id_filt_hi, state="normal")
+            self.itemconfig(self._id_vfo,     state="normal")
+        else:
+            self.itemconfig(self._id_filt_r,  state="hidden")
+            self.itemconfig(self._id_filt_lo, state="hidden")
+            self.itemconfig(self._id_filt_hi, state="hidden")
+            self.itemconfig(self._id_vfo,     state="hidden")
 
         # ── 3. dB grid lines + labels (ON TOP of trace) ───────────────────────
-        db_labels=[0,-25,-50,-75,-100,-125,-150]
-        for db in db_labels:
-            y=self._dy(db, draw_h)
-            self.create_line(0,y,w,y,fill=C["grid"])
-            self.create_text(2,y+1,text=f"{db} dB" if db==0 else str(db),
-                             fill=C["grid_text"],anchor="nw",font=gfont)
+        for idx, db in enumerate(self._db_labels):
+            y = self._dy(db, draw_h)
+            self.coords(self._id_db_lines[idx], 0, y, w, y)
+            self.coords(self._id_db_texts[idx], 2, y+1)
+            self.itemconfig(self._id_db_texts[idx], font=gfont)
 
         # ── 4. Frequency grid lines + labels (ON TOP of trace) ────────────────
         # BUG-12: measure the actual rendered width of the widest dB label
@@ -1440,38 +1549,78 @@ class SpecCanvas(tk.Canvas):
         except Exception:
             _db_lbl_w = max(28, int(round(30 * sc)))
         span=self.f1-self.f0
+        freq_slots = []   # list of (x, lbl) for active grid positions
         if span>0:
             step=nice_step(span/12)
             f=math.ceil(self.f0/step)*step
             while f<self.f1:
                 x=self._fx(f)
-                self.create_line(x,0,x,draw_h,fill=C["grid"])
                 lbl=f"{f:.0f}" if self.af else f"{f/1000:.0f}"
-                # Label in the reserved bottom strip — skip labels that would
-                # land on top of the dB labels in the left margin.
-                if x >= _db_lbl_w:
-                    self.create_text(x+2,draw_h+lbl_h-1,text=lbl,fill=C["grid_text"],
-                                     anchor="sw",font=gfont)
+                freq_slots.append((x, lbl, x >= _db_lbl_w))
                 f+=step
 
+        # Grow the retained pool if we need more slots than we have
+        while len(self._id_freq_lines) < len(freq_slots):
+            self._id_freq_lines.append(self.create_line(0,0,1,0, fill=C["grid"]))
+            self._id_freq_texts.append(self.create_text(0,0, text="",
+                                        fill=C["grid_text"], anchor="sw", font=gfont))
+            self._freq_labels.append("")
+
+        # Update visible slots
+        for i, (x, lbl, show_lbl) in enumerate(freq_slots):
+            self.coords(self._id_freq_lines[i], x, 0, x, draw_h)
+            self.itemconfig(self._id_freq_lines[i], state="normal")
+            if show_lbl:
+                self.coords(self._id_freq_texts[i], x+2, draw_h+lbl_h-1)
+                if self._freq_labels[i] != lbl:
+                    self.itemconfig(self._id_freq_texts[i], text=lbl, font=gfont)
+                    self._freq_labels[i] = lbl
+                self.itemconfig(self._id_freq_texts[i], state="normal")
+            else:
+                self.itemconfig(self._id_freq_texts[i], state="hidden")
+
+        # Hide unused pool slots
+        for i in range(len(freq_slots), len(self._id_freq_lines)):
+            self.itemconfig(self._id_freq_lines[i], state="hidden")
+            self.itemconfig(self._id_freq_texts[i], state="hidden")
+
         # ── 5. Separator line between trace area and label strip ──────────────
-        self.create_line(0,draw_h,w,draw_h,fill=C["sep"])
+        self.coords(self._id_sep, 0, draw_h, w, draw_h)
+        self.itemconfig(self._id_sep, state="normal")
 
         # ── 6. Green peak/hold line (tracks per-bin maximum with decay) ─────────
         if n >= 2:
-            # Initialise or resize peak buffer when bin count changes
-            if self._peak is None or len(self._peak) != n:
-                self._peak = list(self.data)
+            if _np is not None:
+                data_arr = _np.asarray(self.data, dtype=_np.float64)
+                # Initialise or resize peak buffer when bin count changes
+                if self._peak is None or len(self._peak) != n:
+                    self._peak = data_arr.copy()
+                else:
+                    pk = _np.asarray(self._peak, dtype=_np.float64)
+                    self._peak = _np.maximum(pk - self._peak_decay, data_arr)
+                xs = _np.linspace(0.0, w, n, endpoint=False)
+                ys = draw_h - _np.clip((self._peak - self.DB_MIN) /
+                                       (self.DB_MAX - self.DB_MIN), 0.0, 1.0) * draw_h
+                pk_flat = _np.empty(2 * n, dtype=_np.float64)
+                pk_flat[0::2] = xs; pk_flat[1::2] = ys
+                peak_pts = pk_flat.tolist()
             else:
-                # Decay existing peaks toward current data; never rise above 0 dB
-                self._peak = [
-                    max(p - self._peak_decay, d)
-                    for p, d in zip(self._peak, self.data)
-                ]
-            peak_pts = []
-            for i in range(n):
-                peak_pts.extend([i / (n - 1) * w, self._dy(self._peak[i], draw_h)])
-            self.create_line(peak_pts, fill=C["peak_bar"], width=1)
+                # Initialise or resize peak buffer when bin count changes
+                if self._peak is None or len(self._peak) != n:
+                    self._peak = list(self.data)
+                else:
+                    # Decay existing peaks toward current data; never rise above 0 dB
+                    self._peak = [
+                        max(p - self._peak_decay, d)
+                        for p, d in zip(self._peak, self.data)
+                    ]
+                peak_pts = []
+                for i in range(n):
+                    peak_pts.extend([i / (n - 1) * w, self._dy(self._peak[i], draw_h)])
+            self.coords(self._id_peak, peak_pts)
+            self.itemconfig(self._id_peak, state="normal")
+        else:
+            self.itemconfig(self._id_peak, state="hidden")
 
     def _motion(self,e):
         ctr=(self.f0+self.f1)/2
@@ -1893,7 +2042,7 @@ class App:
         top=tk.Frame(r,bg=C["win_bg"])
         top.pack(side="top",fill="both",expand=True)
 
-        self.rf_wf=WFCanvas(top,img_w=NUM_BINS)
+        self.rf_wf=WFCanvas(top)
         self.rf_wf._app=self
         self.rf_wf.pack(side="top",fill="both",expand=True)
 
@@ -2347,7 +2496,7 @@ class App:
         rp.pack(side="left",fill="both",expand=True)
         self._rp=rp
 
-        self.af_wf=WFCanvas(rp,img_w=AF_BINS,af=True)
+        self.af_wf=WFCanvas(rp,af=True)
         self.af_wf._app=self
         self.af_wf.pack(side="top",fill="both",expand=True)
 
