@@ -512,10 +512,10 @@ def _gui_font(size, *modifiers):
 
 # ── Colour palette ────────────────────────────────────────────────────────────
 C = dict(
-    win_bg      = "#060d1e",   # outer window / waterfall background
+    win_bg      = "#020814",   # outer window / waterfall background — deep dark blue
     panel_bg    = "#0c1525",   # left control panel
     panel_mid   = "#0e1a2e",   # toolbar / dividers
-    spec_bg     = "#020810",   # spectrum/AF canvas bg
+    spec_bg     = "#010610",   # spectrum/AF canvas bg — near-black navy
     btn_gray    = "#182438",   # default button
     btn_grn     = "#0e3018",   # green highlight button face
     btn_grn_fg  = "#22dd44",   # green button text
@@ -526,18 +526,16 @@ C = dict(
     text_dim    = "#4a6080",   # dim labels
     text_grn    = "#22dd44",   # green text (date, active mode)
     freq_amber  = "#ffb800",   # LO/Tune digits
-    grid        = "#121e30",   # grid lines
-    grid_text   = "#3a5878",   # grid labels
-    trace       = "#18e840",   # spectrum trace
-    trace_fill  = "#030d06",   # trace fill
-    filter_fill_overlay = "#1e3f70",  # IF passband overlay – lighter than bg so
-                                       # the spectrum trace shows through even when
-                                       # stipple is unavailable (macOS / Windows)
+    grid        = "#1a2a3a",   # grid lines — muted dark-blue-gray
+    grid_text   = "#6080a0",   # grid labels — slightly lighter gray
+    trace       = "#22cc44",   # spectrum trace — green
+    trace_fill  = "#05200a",   # trace fill — very dark green
+    filter_fill_overlay = "#1e3f70",  # IF passband overlay
     filter_edge = "#3060e0",   # IF passband edge
     vfo_line    = "#ff2828",   # VFO line
     smeter_grn  = "#28ee50",
     smeter_red  = "#ff3830",
-    peak_bar    = "#ff8c00",   # dark orange peak bar
+    peak_bar    = "#e0e8ff",   # peak/hold line — bright white-blue (matches reference)
     toolbar_wf  = "#ff3030",   # "Waterfall" label red
     toolbar_sp  = "#c8d8f0",   # "Spectrum" label
     sep         = "#1a3050",
@@ -584,8 +582,9 @@ BASE = dict(
 
 def db_to_rgb(db, dmin=-150.0, dmax=0.0):
     t = max(0.0, min(1.0, (db-dmin)/(dmax-dmin)))
-    stops = [(0.00,(4,8,22)),(0.18,(0,0,140)),(0.38,(0,120,200)),
-             (0.55,(0,200,0)),(0.73,(230,200,0)),(1.00,(255,20,0))]
+    stops = [(0.00,(2,5,30)),(0.20,(0,10,130)),(0.40,(0,90,220)),
+             (0.57,(0,210,210)),(0.70,(0,200,0)),(0.82,(220,210,0)),
+             (0.92,(255,100,0)),(1.00,(255,255,220))]
     for i in range(len(stops)-1):
         t0,c0 = stops[i]; t1,c1 = stops[i+1]
         if t<=t1 or i==len(stops)-2:
@@ -596,10 +595,10 @@ def db_to_rgb(db, dmin=-150.0, dmax=0.0):
     return stops[-1][1]
 
 # Colormap data mirroring the stops in db_to_rgb — kept in sync manually.
-_CMAP_T  = (0.00, 0.18, 0.38, 0.55, 0.73, 1.00)
-_CMAP_R  = (  4,    0,    0,    0,  230,  255)
-_CMAP_G  = (  8,    0,  120,  200,  200,   20)
-_CMAP_B  = ( 22,  140,  200,    0,    0,    0)
+_CMAP_T  = (0.00, 0.20, 0.40, 0.57, 0.70, 0.82, 0.92, 1.00)
+_CMAP_R  = (  2,    0,    0,    0,    0,  220,  255,  255)
+_CMAP_G  = (  5,   10,   90,  210,  200,  210,  100,  255)
+_CMAP_B  = ( 30,  130,  220,  210,    0,    0,    0,  220)
 
 def _db_array_to_rgb_bytes(db_arr, dmin=-150.0, dmax=0.0):
     """Vectorised (numpy) conversion of a 1-D dB array → packed RGB bytes.
@@ -1437,11 +1436,16 @@ class SpecCanvas(tk.Canvas):
         self._id_vfo     = self.create_line(_ph, fill=C["vfo_line"],    width=1, dash=(4,3), state="hidden")
         self._id_peak   = self.create_line(_ph,    fill=C["peak_bar"],   width=1,    state="hidden")
         self._id_sep    = self.create_line(0, 0, 1, 0, fill=C["sep"],               state="hidden")
-        # dB grid rows — fixed set, created once, repositioned each frame
-        _db_labels = [0, -25, -50, -75, -100, -125, -150]
+        # dB grid rows — dense 5 dB spacing, text only every 25 dB (every 5th line)
+        _db_labels = list(range(0, -155, -5))   # 0, -5, -10, ..., -150
         self._id_db_lines = [self.create_line(0,0,1,0, fill=C["grid"])           for _ in _db_labels]
-        self._id_db_texts = [self.create_text(0,0, text=f"{db} dB" if db==0 else str(db),
-                                              fill=C["grid_text"], anchor="nw")   for db in _db_labels]
+        self._id_db_texts = []
+        for i, db in enumerate(_db_labels):
+            show = (i % 5 == 0)   # text only at 0, -25, -50, -75, -100, -125, -150
+            txt = (f"{db} dB" if db == 0 else str(db)) if show else ""
+            self._id_db_texts.append(
+                self.create_text(0, 0, text=txt, fill=C["grid_text"], anchor="nw")
+            )
         self._db_labels = _db_labels
         # Frequency grid items are variable-count (depends on span/step/width),
         # so we keep a pool that grows as needed and hide unused slots.
