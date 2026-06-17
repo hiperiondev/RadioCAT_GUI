@@ -134,6 +134,9 @@ _SERVER_CONFIG_DEFAULTS = {
         **{f"label_{n}": "" for n in range(1, 7)},
         **{f"type_{n}":  "normal" for n in range(1, 7)},
     },
+    "user_mods": {
+        **{f"label_{n}": "" for n in range(1, 6)},
+    },
 }
 
 _SERVER_CONFIG_TEMPLATE = """\
@@ -163,6 +166,15 @@ label_5 = ""
 type_5 = "normal"
 label_6 = ""
 type_6 = "normal"
+
+[user_mods]
+# label: max 4 characters; user-defined modulation button labels shown in the
+# mode row of the GUI. Fill slots in order: 1, 2, 3, 4, 5 (no skipping).
+label_1 = ""
+label_2 = ""
+label_3 = ""
+label_4 = ""
+label_5 = ""
 """
 
 def _parse_simple_toml_srv(text):
@@ -231,6 +243,7 @@ AF_BINS = 256           # AF spectrum / waterfall bins
 AF_RANGE = 3000.0       # Hz shown on the AF display
 UPDATE_HZ = 10.0        # data pushes per second
 NUM_USER_BUTTONS = 6    # number of user-defined buttons (N = 1..6)
+NUM_USER_MODS    = 5    # number of user-defined modulation buttons (N = 1..5)
 IQ_FFT_SIZE = 4096      # FFT size used to turn --iq_wav samples into a spectrum
 
 # ── RTP / UDP audio ──────────────────────────────────────────────────────────
@@ -661,7 +674,7 @@ def _crop_and_resample(full_db, num_bins, zoom):
 class RadioState:
     """Holds the simulated 'radio' settings and produces spectrum data."""
 
-    def __init__(self, user_buttons=None, iq_source=None):
+    def __init__(self, user_buttons=None, user_mod_labels=None, iq_source=None):
         self.lock = threading.Lock()
         self.center_freq = 14_195_000.0
         self.sample_rate = 192_000.0
@@ -695,6 +708,11 @@ class RadioState:
             {"label": "", "type": "normal"} for _ in range(NUM_USER_BUTTONS)
         ]
         self.user_btn_state = [False] * NUM_USER_BUTTONS
+
+        # User-defined modulation buttons: list of up to NUM_USER_MODS labels
+        # (max 4 chars each). Empty string means the slot is unused.
+        self.user_mod_labels = list(user_mod_labels) if user_mod_labels else \
+                               [""] * NUM_USER_MODS
 
         # AGC smoothing state for the S-meter / AF level
         self._smoothed_signal_db = NOISE_FLOOR_DBM
@@ -756,6 +774,7 @@ class RadioState:
                 "lo_b_freq": self.lo_b_freq,
                 "user_buttons": [dict(b) for b in self.user_buttons],
                 "user_btn_state": self.user_btn_state,
+                "user_mod_labels": list(self.user_mod_labels),
             }
 
     # ----------------------------------------------------------- commands ----
@@ -1223,6 +1242,7 @@ def _parse_args():
     _srv  = _cfg.get("server",       {})
     _aud  = _cfg.get("audio",        {})
     _ubtn = _cfg.get("user_buttons", {})
+    _umods= _cfg.get("user_mods",    {})
     _D    = _SERVER_CONFIG_DEFAULTS
 
     _def_host       = _srv.get("host",       _D["server"]["host"])
@@ -1236,6 +1256,8 @@ def _parse_args():
     for _n in range(1, NUM_USER_BUTTONS + 1):
         _value_flags.add(f'--user-button-label-{_n}')
         _value_flags.add(f'--user-button-type-{_n}')
+    for _n in range(1, NUM_USER_MODS + 1):
+        _value_flags.add(f'--user_mod_{_n}')
     _skip = False
     _positionals = []
     for _a in sys.argv[1:]:
@@ -1286,6 +1308,12 @@ def _parse_args():
                         default=argparse.SUPPRESS,
                         help=f"Type of user button {n}: 'normal' (momentary) "
                              f"or 'push' (push-push/toggle). Default: normal")
+    for n in range(1, NUM_USER_MODS + 1):
+        ap.add_argument(f"--user_mod_{n}", metavar="LABEL",
+                        default=argparse.SUPPRESS,
+                        help=f"Label for user-defined modulation button {n} "
+                             f"(max 4 characters). Slots must be filled in order: "
+                             f"1, 2, 3 — no skipping.")
     _raw = ap.parse_args()
 
     # ── Merge: CLI beats config, config beats built-in default ───────────────
@@ -1310,12 +1338,45 @@ def _parse_args():
         if not hasattr(_raw, _tattr):
             setattr(_raw, _tattr, _cfg_type)
 
+    # User mods: CLI beats config, config beats built-in default
+    for n in range(1, NUM_USER_MODS + 1):
+        _mattr = f"user_mod_{n}"
+        _cfg_mod_label = _umods.get(f"label_{n}", _D["user_mods"][f"label_{n}"])
+        if not hasattr(_raw, _mattr):
+            setattr(_raw, _mattr, _cfg_mod_label)
+
     # ── Validations ───────────────────────────────────────────────────────────
+    # Length checks
     for n in range(1, NUM_USER_BUTTONS + 1):
         label = getattr(_raw, f"user_button_label_{n}")
         if len(label) > 7:
             ap.error(f"--user-button-label-{n}: label must be at most 7 "
                      f"characters (got {len(label)!r}: {label!r})")
+    for n in range(1, NUM_USER_MODS + 1):
+        label = getattr(_raw, f"user_mod_{n}")
+        if len(label) > 4:
+            ap.error(f"--user_mod_{n}: label must be at most 4 "
+                     f"characters (got {len(label)!r}: {label!r})")
+
+    # Sequential checks: no gaps allowed — must fill 1, 2, 3… in order
+    _btn_empty = False
+    for n in range(1, NUM_USER_BUTTONS + 1):
+        _lbl = getattr(_raw, f"user_button_label_{n}")
+        if not _lbl:
+            _btn_empty = True
+        elif _btn_empty:
+            ap.error(f"--user-button-label/type flags must be specified "
+                     f"sequentially (1, 2, 3…); cannot set slot {n} while "
+                     f"a preceding slot is empty")
+    _mod_empty = False
+    for n in range(1, NUM_USER_MODS + 1):
+        _lbl = getattr(_raw, f"user_mod_{n}")
+        if not _lbl:
+            _mod_empty = True
+        elif _mod_empty:
+            ap.error(f"--user_mod flags must be specified sequentially "
+                     f"(1, 2, 3); cannot set --user_mod_{n} without "
+                     f"filling the preceding slots")
     return _raw
 
 
@@ -1327,6 +1388,11 @@ def _build_user_buttons(args):
             "type": getattr(args, f"user_button_type_{n}"),
         })
     return buttons
+
+
+def _build_user_mods(args):
+    """Return a list of NUM_USER_MODS label strings for user-defined mod buttons."""
+    return [getattr(args, f"user_mod_{n}", "") for n in range(1, NUM_USER_MODS + 1)]
 
 
 def main():
@@ -1349,7 +1415,9 @@ def main():
               f"{' float' if iq_source.is_float else ''}, center_freq={cf}")
         print("[cat_server]   -> looping this file forever for spectrum/waterfall")
 
-    radio = RadioState(user_buttons=_build_user_buttons(args), iq_source=iq_source)
+    radio = RadioState(user_buttons=_build_user_buttons(args),
+                       user_mod_labels=_build_user_mods(args),
+                       iq_source=iq_source)
 
     # ── Optional: load a wav file to transmit as the downlink audio ──────────
     audio_source = None

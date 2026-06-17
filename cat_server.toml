@@ -24,3 +24,12 @@ label_5 = ""
 type_5 = "normal"
 label_6 = ""
 type_6 = "normal"
+
+[user_mods]
+# label: max 4 characters; user-defined modulation button labels shown in the
+# mode row of the GUI. Fill slots in order: 1, 2, 3, 4, 5 (no skipping).
+label_1 = ""
+label_2 = ""
+label_3 = ""
+label_4 = ""
+label_5 = ""

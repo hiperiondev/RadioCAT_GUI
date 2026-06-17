@@ -544,7 +544,7 @@ C = dict(
 )
 
 
-MODES    = ["AM","ECSS","FM","LSB","USB","CW","DIG"]
+MODES    = ["AM","FM","LSB","USB","CW"]
 NUM_BINS = 900
 AF_BINS  = 600
 
@@ -2010,6 +2010,7 @@ class App:
             ptt=False,
             user_buttons=[{"label":"","type":"normal"} for _ in range(6)],
             user_btn_state=[False]*6,
+            user_mod_labels=["","","","",""],  # up to 5 user-defined modulation buttons
             # BUG-12 fix: persist toolbar toggle selection so it survives
             # reconnects and scale-change rebuilds.
             toolbar_view_rf="Waterfall",
@@ -2207,6 +2208,20 @@ class App:
                         font=_gui_font(fs_mode),relief="flat",bd=1,
                         padx=max(1,int(round(2*sc))),pady=max(1,int(round(1*sc))))
             b.pack(side="left",padx=max(1,int(round(1*sc)))); self.mode_btns[m]=b
+        # ── User-defined modulation buttons (labels from server, max 4 chars) ──
+        # 5 slots; only those with a non-empty label from the server are shown.
+        # They behave as toggle buttons exclusive with the standard mode buttons.
+        self.user_mod_btns={}
+        for _umi in range(5):
+            _umidx=_umi+1
+            _umb=tk.Button(mode_row,text="",width=4,
+                           command=lambda i=_umi:None,  # updated in _refresh
+                           bg=C["btn_gray"],fg=C["btn_sel_fg"],
+                           activebackground=C["btn_sel"],
+                           font=_gui_font(fs_mode),relief="flat",bd=1,
+                           padx=max(1,int(round(2*sc))),pady=max(1,int(round(1*sc))))
+            # Do not pack now — _refresh packs/forgets based on server labels
+            self.user_mod_btns[_umidx]=_umb
         tk.Button(mode_row,text="FreqMgr",bg=C["btn_gray"],fg=C["btn_sel_fg"],
                   font=_gui_font(fs_mode),relief="flat",bd=1,
                   padx=max(2,int(round(3*sc))),pady=max(1,int(round(1*sc))),
@@ -2696,6 +2711,26 @@ class App:
                 b.config(bg=C["btn_sel"],fg=C["btn_sel_fg"])
             else:
                 b.config(bg=C["btn_gray"],fg=C["btn_sel_fg"])
+        # ── User-defined modulation buttons ───────────────────────────────────
+        # Pack/unpack based on whether the server has provided a label.
+        # Exclusive with standard mode buttons: selecting one deselects all
+        # others (including standard modes) because they all share state["mode"].
+        _uml=self.state.get("user_mod_labels") or []
+        _sc=self._sc
+        _px=max(1,int(round(1*_sc)))
+        for _umidx,_umb in self.user_mod_btns.items():
+            _lbl=((_uml[_umidx-1].strip() if _umidx-1<len(_uml) else ""))[:4]
+            if _lbl:
+                _umb.config(text=_lbl,
+                            command=lambda lbl=_lbl:self._set_user_mod(lbl),
+                            bg=C["btn_sel"] if self.state["mode"]==_lbl else C["btn_gray"],
+                            fg=C["btn_sel_fg"])
+                try:
+                    _umb.pack_info()  # already packed → skip
+                except tk.TclError:
+                    _umb.pack(side="left",padx=_px)
+            else:
+                _umb.pack_forget()
         for k,b in self.dsp_btns.items():
             on=self.state.get(k,False)
             b.config(bg=C["btn_sel"] if on else C["btn_gray"],
@@ -2937,6 +2972,12 @@ class App:
         lo,hi=defs.get(m,(self.state["filter_lo"],self.state["filter_hi"]))
         self.state["filter_lo"]=lo; self.state["filter_hi"]=hi
         self._refresh(); self.net.send({"cmd":"set_mode","mode":m})
+
+    def _set_user_mod(self,label):
+        """Select a user-defined modulation mode (exclusive with all other modes)."""
+        self.state["mode"]=label
+        self._refresh()
+        self.net.send({"cmd":"set_mode","mode":label})
 
     def _toggle(self,k):
         self.state[k]=not self.state.get(k,False); self._refresh()
