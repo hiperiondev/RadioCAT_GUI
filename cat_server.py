@@ -241,12 +241,23 @@ def _parse_simple_toml_srv(text):
             continue
         if line.startswith('[') and line.endswith(']'):
             sec_name = line[1:-1].strip()
+            # NOTE: This minimal fallback parser does NOT support dotted
+            # section headers (e.g. [server.tls]) or inline tables.
+            # The bundled config template never uses them.  If tomllib /
+            # tomli is available it is used instead (see _load_server_config).
+            if '.' in sec_name:
+                raise ValueError(
+                    f"_parse_simple_toml_srv: nested section [{sec_name}] is "
+                    "not supported by the built-in fallback parser. "
+                    "Install 'tomli' (pip install tomli) for full TOML support."
+                )
             section = result.setdefault(sec_name, {})
             continue
         if '=' in line:
             k, _, v = line.partition('=')
             k = k.strip(); v = v.strip()
-            if v.startswith('"') and v.endswith('"'):
+            if (v.startswith('"') and v.endswith('"')) or \
+               (v.startswith("'") and v.endswith("'")):
                 section[k] = v[1:-1]
             elif v == 'true':
                 section[k] = True
