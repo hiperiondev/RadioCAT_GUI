@@ -1131,14 +1131,17 @@ class RTPAudioClient:
                 bin_hz = self._sample_rate / _AF_FFT_N
                 max_bin = min(len(spectrum) - 1, int(_AF_DISPLAY_RANGE_HZ / bin_hz))
                 if self._af_app is not None:
-                    _now = time.monotonic()
-                    if _now - self._af_last_put >= 0.05:
+                    with self._lock:
+                        _now = time.monotonic()
+                        _should_put = (_now - self._af_last_put) >= 0.05
+                        if _should_put:
+                            self._af_last_put = _now
+                    if _should_put:
                         self._af_app.q.put({
                             "type":        "af_local",
                             "af_spectrum": spectrum[:max_bin + 1],
                             "af_range":    _AF_DISPLAY_RANGE_HZ,
                         })
-                        self._af_last_put = _now
             else:
                 time.sleep(0.005)
 
@@ -1271,6 +1274,7 @@ class WFCanvas(tk.Canvas):
         self._img_w=0           # width  of _img in pixels
         self._img_h=0           # height of _img in pixels
         self._iid=self.create_image(0,0,anchor="nw")
+        self._tx_active=False
         self.bind("<Configure>",self._on_resize)
 
     # ── internal helpers ──────────────────────────────────────────────────────
@@ -1354,6 +1358,7 @@ class WFCanvas(tk.Canvas):
         one row, then writes the new row into row 0 with put().  This is
         O(canvas_width) regardless of how many rows have accumulated.
         """
+        if self._tx_active: return
         if len(spectrum)==0: return
 
         # Ensure backing image exists and matches current canvas size
@@ -1437,6 +1442,7 @@ class SpecCanvas(tk.Canvas):
             self.f1 = 28_510_000.0
         self.data=[]
         self.drag=None; self._last=0.0
+        self._tx_active=False
         self._peak       = None   # BUG-5: per-bin peak dB array (None until first draw)
         self._peak_decay = 0.5    # BUG-5: dB/frame decay rate for peak-hold
         # BUG-7: compute once — stipple is platform-constant for the process lifetime
@@ -1498,6 +1504,7 @@ class SpecCanvas(tk.Canvas):
         return h-max(0.0,min(1.0,t))*h
 
     def update_data(self,f0,f1,spec):
+        if self._tx_active: return
         self.f0=f0; self.f1=f1; self.data=spec; self.draw()
 
     def set_tx(self, active: bool):
