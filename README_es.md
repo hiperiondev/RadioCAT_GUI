@@ -1,4 +1,4 @@
-# Interfaz GUI CAT (simulación por TCP)
+# Interfaz GUI CAT
 
 <div align="center">
   <a href="https://github.com/hiperiondev/RadioCAT_GUI">
@@ -126,7 +126,7 @@ Definida por Software. Puntos clave:
 | Escala HiDPI | Superposición persistente −/+; niveles de escala −5..+5 (×1,25 por paso) |
 | Pantalla completa | Opción `--full-screen`; triple Esc (3 pulsaciones en 1 s) activa/desactiva la pantalla completa |
 | Tema | `--bg dark` (predeterminado) o `--bg light` (fondos #FFECD6) |
-| Configuración TOML | `cat_server.toml` / `cat_gui.toml` creados automáticamente al inicio; `--config PATH` sobreescribe la ubicación |
+| Configuración TOML | `cat_server.toml` / `cat_gui.toml` creados automáticamente al inicio; `--config PATH` sobrescribe la ubicación |
 
 Todo lo que aparece en la tabla anterior se controla en vivo mediante TCP —
 nada es estático ni prerenderizado.
@@ -137,7 +137,7 @@ Cada mensaje es un objeto JSON terminado con `\n`.
 
 **Cliente → Servidor (comandos):**
 
-```
+```json
 {"cmd": "hello"}
 {"cmd": "set_freq",       "hz": 14195000}
 {"cmd": "set_lo_b_freq",  "hz": 14195000}
@@ -163,7 +163,7 @@ Cada mensaje es un objeto JSON terminado con `\n`.
 {"cmd": "start"}
 {"cmd": "stop"}
 {"cmd": "transport",      "action": "rec"}         # rec|play|pause|stop|ff|rw|infinite
-{"cmd": "ui_button",      "name": "FreqMgr"}       # SDR-Device|Bandwidth|Options|FreqMgr
+{"cmd": "ui_button",      "name": "FreqMgr"}       # SDR-Device|Bandwidth|Options|FreqMgr (Soundcard excluido — abre diálogo local únicamente)
 {"cmd": "ui_display",     "box": "rf", "view": "waterfall"}  # box: rf|af  view: waterfall|spectrum
 {"cmd": "ui_smeter_btn",  "name": "Peak"}          # Peak|S-units|Squelch
 {"cmd": "user_button",    "index": 1}              # pulsación momentánea (tipo normal)
@@ -178,21 +178,25 @@ Cada mensaje es un objeto JSON terminado con `\n`.
 > diccionario de estado, pero la GUI actualmente no tiene ningún botón que
 > lo envíe. Úselo desde clientes externos o agregue un botón "NB" en la GUI.
 
+> **Nota:** `audio_hello` debe ser enviado por cualquier cliente externo tras
+> conectarse, para registrar su puerto UDP RTP en el servidor antes de que
+> el audio comience a fluir.
+
 **Servidor → Cliente:**
 
 Enviado una sola vez al conectar (antes de iniciar la transmisión), cuando el
 canal de audio está habilitado:
-```
+```json
 {"type": "audio_port", "port": 5004, "sample_rate": 8000, "frame_ms": 20, "codec": "pcmu"}
 ```
 
 Respuesta a cada comando:
-```
+```json
 {"resp": "ok", "state": {...estado actual de la radio...}}
 ```
 
 Transmitido (solo mientras está "en ejecución"), aproximadamente 10 veces por segundo:
-```
+```json
 {
   "type": "data",
   "f_start": <Hz>, "f_stop": <Hz>,
@@ -200,7 +204,7 @@ Transmitido (solo mientras está "en ejecución"), aproximadamente 10 veces por 
   "af_spectrum": [dBm, ...],         # Espectro AF, 256 puntos
   "af_range": 3000,
   "smeter_dbm": -73.4,
-  "smeter_text": "S9 +3dB",
+  "smeter_text": "S9+3dB",
   "squelch_open": true,
   "state": {...estado actual de la radio...}
 }
@@ -212,6 +216,12 @@ el estado completo de la radio: `center_freq`, `lo_b_freq`, `lo_active`
 `filter_hi`, `agc` (`"Med"` u `"Off"`), `agc_thresh`, `rf_gain`, `volume`,
 `squelch`, `nb`, `nr`, `nbrf`, `nbif`, `afc`, `anf`, `notch`, `mute`,
 `ptt`, `running`, `user_buttons` y `user_btn_state`.
+
+> **Nota:** `smeter_text` es una cadena con formato `"S1"` a `"S9"`,
+> `"S9+20dB"` o `"S9+40dB"` para niveles de sobrecarga. El comando `set_zoom`
+> controla el **zoom del espectro RF** (factor entero 1–32) y es completamente
+> independiente del argumento `--scale`, que controla la **escala HiDPI de la
+> interfaz** (niveles −5 a +5, factor 1,25 por paso).
 
 El entorno RF simulado se genera de forma determinista a partir de la
 frecuencia (piso de ruido + portadoras HF sintéticas distribuidas entre
@@ -231,6 +241,7 @@ funcionan sin ellos pero con funcionalidad reducida):
 pip install pyaudio       # Reproducción/captura de audio RTP (micrófono/altavoz); desactivado silenciosamente si no está instalado
 pip install tomli         # Soporte de archivos de configuración TOML en Python < 3.11 (3.11+ lo incluye)
 pip install fonttools     # Extracción precisa del nombre de familia PostScript para fuentes personalizadas
+pip install numpy         # FFT más rápida; usa implementación Python pura si no está instalado
 ```
 
 ```bash

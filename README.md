@@ -127,7 +127,7 @@ Each message is one JSON object terminated by `\n`.
 
 **Client → Server (commands):**
 
-```
+```json
 {"cmd": "hello"}
 {"cmd": "set_freq",       "hz": 14195000}
 {"cmd": "set_lo_b_freq",  "hz": 14195000}
@@ -153,7 +153,7 @@ Each message is one JSON object terminated by `\n`.
 {"cmd": "start"}
 {"cmd": "stop"}
 {"cmd": "transport",      "action": "rec"}         # rec|play|pause|stop|ff|rw|infinite
-{"cmd": "ui_button",      "name": "FreqMgr"}       # SDR-Device|Bandwidth|Options|FreqMgr
+{"cmd": "ui_button",      "name": "FreqMgr"}       # SDR-Device|Bandwidth|Options|FreqMgr (Soundcard excluded — opens local dialog only)
 {"cmd": "ui_display",     "box": "rf", "view": "waterfall"}  # box: rf|af  view: waterfall|spectrum
 {"cmd": "ui_smeter_btn",  "name": "Peak"}          # Peak|S-units|Squelch
 {"cmd": "user_button",    "index": 1}              # momentary press (normal type)
@@ -168,21 +168,24 @@ Each message is one JSON object terminated by `\n`.
 > but the GUI currently has no button that sends it. Use it from external
 > clients or extend the GUI to add an "NB" toggle.
 
+> **Note:** `audio_hello` must be sent by any third-party client after connecting
+> to register the client's RTP UDP port with the server before audio will flow.
+
 **Server → Client:**
 
 Sent once on connect (before streaming starts), when the audio channel is
 enabled:
-```
+```json
 {"type": "audio_port", "port": 5004, "sample_rate": 8000, "frame_ms": 20, "codec": "pcmu"}
 ```
 
 Reply to every command:
-```
+```json
 {"resp": "ok", "state": {...current radio state...}}
 ```
 
 Streamed (only while "running"), about 10×/second:
-```
+```json
 {
   "type": "data",
   "f_start": <Hz>, "f_stop": <Hz>,
@@ -190,7 +193,7 @@ Streamed (only while "running"), about 10×/second:
   "af_spectrum": [dBm, ...],         # AF spectrum, 256 points
   "af_range": 3000,
   "smeter_dbm": -73.4,
-  "smeter_text": "S9 +3dB",
+  "smeter_text": "S9+3dB",
   "squelch_open": true,
   "state": {...current radio state...}
 }
@@ -202,6 +205,12 @@ state: `center_freq`, `lo_b_freq`, `lo_active` (`"A"` or `"B"`), `tune_freq`,
 `"Off"`), `agc_thresh`, `rf_gain`, `volume`, `squelch`, `nb`, `nr`, `nbrf`,
 `nbif`, `afc`, `anf`, `notch`, `mute`, `ptt`, `running`, `user_buttons`, and
 `user_btn_state`.
+
+> **Note:** `smeter_text` is a string in the format `"S1"` through `"S9"`,
+> `"S9+20dB"`, or `"S9+40dB"` for overload levels. The `set_zoom` command
+> controls the **RF spectrum zoom** (integer factor 1–32) and is entirely
+> separate from the `--scale` CLI flag, which controls the **HiDPI UI scale**
+> (levels −5 to +5, factor 1.25 per step).
 
 The simulated RF environment is generated deterministically from frequency
 (noise floor + synthetic HF carriers spread across 1.8–30 MHz with slowly
@@ -220,6 +229,7 @@ but with reduced functionality):
 pip install pyaudio       # RTP audio playback/capture (mic/speaker); silently disabled if absent
 pip install tomli         # TOML config file support on Python < 3.11 (3.11+ has it built in)
 pip install fonttools     # Accurate PostScript family-name extraction for custom fonts
+pip install numpy         # Faster FFT computation; falls back to pure-Python if absent
 ```
 
 ```bash
@@ -314,6 +324,12 @@ This is a simulation for demonstration/educational purposes:
   drives the `squelch_open` flag in every data frame, but the GUI has no slider
   for `set_squelch`. The "Squelch" button in the S-meter column sends a
   `ui_smeter_btn` notification only; it does not change the squelch level.
+- The RF spectrum is always computed from LO A's frequency (`center_freq`)
+  regardless of which LO is active. Switching to LO B recentres the display
+  on the client side, but subsequent data frames from the server will reflect
+  LO A's position, not LO B's.
+- ECSS and DIG modes have no default filter passband: selecting them updates
+  the mode label but leaves the filter edges unchanged.
 - Menu system, band-mapping database, recording, DRM decoding, and
   OmniRig/CAT integration are not reproduced — this focuses on the
   core tuning/spectrum/waterfall/meter workflow described above.
