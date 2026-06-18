@@ -41,9 +41,8 @@ Radio control. Key points:
     (narrower if "zoomed").
   - A draggable IF/filter passband overlay drawn directly on the spectrum,
     whose edges set the demodulator bandwidth.
-  - Mode buttons: **AM, ECSS, FM, LSB, USB, CW, DIG**, each with a default
-    filter passband (note: ECSS and DIG do not change the filter on mode
-    switch — only the mode label updates).
+  - Mode buttons: **AM, FM, LSB, USB, CW**, each with a default filter
+    passband set on selection.
   - DSP toggle buttons: **NR** (noise reduction), **NB RF** (noise blanker
     RF), **NB IF** (noise blanker IF), and **AFC** (automatic frequency
     control) on the first row; **Mute**, **AGC Med**, **Notch**, and
@@ -100,8 +99,8 @@ Radio control. Key points:
 | VFO digit displays (LO A, LO B, Tune) | `FreqDisp` — scroll/click each digit, double-click to type a frequency; clicking the LO A or LO B label switches the active LO and immediately recentres the waterfall |
 | RF spectrum + filter overlay | `SpecCanvas` — draggable passband edges, click-to-tune, scroll-to-zoom |
 | RF waterfall | `WFCanvas` (900-bin internal render resolution; server streams 600 points) |
-| AF spectrum + waterfall | second `SpecCanvas` / `WFCanvas` pair, baseband 0..3000 Hz (server streams 256 points; waterfall renders at 600 bins internally) |
-| Mode buttons (AM/ECSS/FM/LSB/USB/CW/DIG) | Mode button row; sets default filter passband for AM, FM, LSB, USB, CW. ECSS and DIG change the mode label only — filter is unchanged |
+| AF spectrum + waterfall | second `SpecCanvas` / `WFCanvas` pair, baseband 0..3000 Hz; computed locally by `RTPAudioClient._af_worker` from decoded RTP audio (512-point FFT, 50% overlap Hamming window) — not streamed from the server |
+| Mode buttons (AM/FM/LSB/USB/CW) | Mode button row; sets default filter passband for each mode |
 | DSP toggles (NR / NB RF / NB IF / AFC / Mute / AGC Med / Notch / ANotch) | Two DSP button rows. There is no standalone NB button; the server's `nb` state flag has no GUI control |
 | User-defined buttons (×6) | Right-aligned in the two DSP rows; labels and types come from the server |
 | User-defined modulation buttons (×5) | Configurable via `--user_mod_1`…`--user_mod_5` / `--user_mod_type_1`…`--user_mod_type_5`; labels and types in `user_mod_labels` / `user_mod_types` state fields |
@@ -135,7 +134,7 @@ Each message is one JSON object terminated by `\n`.
 {"cmd": "set_lo_b_freq",  "hz": 14195000}
 {"cmd": "set_tune_freq",  "hz": 14205000}
 {"cmd": "set_lo",         "lo": "A"}               # "A" or "B" — active LO
-{"cmd": "set_mode",       "mode": "USB"}            # AM|ECSS|FM|LSB|USB|CW|DIG
+{"cmd": "set_mode",       "mode": "USB"}            # AM|FM|LSB|USB|CW
 {"cmd": "set_filter",     "lo": 100, "hi": 2800}   # Hz offsets from carrier
 {"cmd": "set_agc",        "mode": "Med"}            # Off|Med
 {"cmd": "set_agc_thresh", "value": -100.0}          # dBm
@@ -204,14 +203,22 @@ Streamed (only while "running"), about 10×/second:
   "type": "data",
   "f_start": <Hz>, "f_stop": <Hz>,
   "spectrum": [dBm, dBm, ...],       # RF spectrum, 600 points
-  "af_spectrum": [dBm, ...],         # AF spectrum, 256 points
-  "af_range": 3000,
+  "af_range": 3000.0,                # Hz width of the AF display (always 3000)
+  "af_spectrum": [dBm, dBm, ...],    # AF spectrum, 256 points (sent but not used by the GUI — see note below)
   "smeter_dbm": -73.4,
   "smeter_text": "S9",
   "squelch_open": true,
   "state": {...current radio state...}
 }
 ```
+
+> **Note:** The `af_spectrum` / `af_range` fields that may be present in
+> server data frames are **not used by the GUI**. The AF spectrum and
+> waterfall are computed entirely on the client side by
+> `RTPAudioClient._af_worker`, which runs a 512-point Hamming-windowed FFT
+> on decoded RTP audio and posts the result as an `"af_local"` message to the
+> GUI queue. This means the AF display always reflects the actual audio being
+> received, independent of server-side processing.
 
 The `state` dict included in every response and data push contains the full radio
 state: `center_freq`, `lo_b_freq`, `lo_active` (`"A"` or `"B"`), `tune_freq`,
@@ -221,7 +228,7 @@ state: `center_freq`, `lo_b_freq`, `lo_active` (`"A"` or `"B"`), `tune_freq`,
 `user_btn_state`, `user_mod_labels`, and `user_mod_types`.
 
 > **Note:** `smeter_text` is a string in the format `"S1"` through `"S9"`,
-> `"S9+20dB"`, or `"S9+40dB"` for overload levels. The `set_zoom` command
+> or `"S9 +NdB"` (e.g. `"S9 +20dB"`) for levels above S9. The `set_zoom` command
 > controls the **RF spectrum zoom** (integer factor 1–32) and is entirely
 > separate from the `--scale` CLI flag, which controls the **HiDPI UI scale**
 > (levels −5 to +5, factor 1.25 per step).
@@ -272,14 +279,14 @@ python3 cat_gui.py
 | --- | --- |
 | `host [port]` | Positional: host/IP and TCP port to listen on (defaults: `0.0.0.0` `50101`) |
 | `--config PATH` | Load TOML config from PATH (default: `./cat_server.toml`, auto-created on first run) |
-| `--audio_port PORT` | UDP port for the RTP audio channel (default: `5004`) |
+| `--audio-port PORT` | UDP port for the RTP audio channel (default: `5004`) |
 | `--no-audio` | Disable the RTP/UDP audio channel entirely |
 | `--iq_wav PATH` | Feed a real IQ wav file as the RF spectrum/waterfall source instead of the synthetic model |
 | `--audio_wav PATH` | Replace the demo 440 Hz sine tone with a real audio wav file for RTP playback |
 | `--user-button-label-N TEXT` | Label for user button N (1–6, max 7 characters) |
 | `--user-button-type-N TYPE` | Type of user button N: `normal` (momentary) or `push` (push-push/toggle) |
 | `--user_mod_N TEXT` | Label for user-defined modulation button N (1–5) |
-| `--user_mod_type_N TYPE` | Type of user modulation button N: `normal` or `push` |
+| `--user_mod_type_N TYPE` | Type of user modulation button N: `normal` (acts like a standard mode button), `text` (splits the AF/audio box to show a read-only text panel), or `text_input` (same split with an editable RTTY-chat input box below). Requires `--user_mod_N` to also be set. |
 
 ### GUI command-line options
 
@@ -308,8 +315,8 @@ then **Start** to begin streaming. From there:
 - Click the band buttons (160m–6m) to QSY the currently active LO.
 - Click anywhere on the RF spectrum to tune the active LO to that frequency.
 - Drag the edges of the shaded filter overlay to change the passband.
-- Click mode buttons (AM/ECSS/FM/LSB/USB/CW/DIG) to change the demodulation
-  mode; AM, FM, LSB, USB, and CW each set a default passband.
+- Click mode buttons (AM/FM/LSB/USB/CW) to change the demodulation
+  mode; each sets a default passband.
 - Toggle **NR**, **NB RF**, **NB IF**, **AFC**, **Mute**, **AGC Med**,
   **Notch**, and **ANotch** as needed.
 - Use the **Volume** and **AGC Thresh.** sliders.
@@ -352,8 +359,6 @@ This is a simulation for demonstration/educational purposes:
   regardless of which LO is active. Switching to LO B recentres the display
   on the client side, but subsequent data frames from the server will reflect
   LO A's position, not LO B's.
-- ECSS and DIG modes have no default filter passband: selecting them updates
-  the mode label but leaves the filter edges unchanged.
 - Menu system, band-mapping database, recording, DRM decoding, and
   OmniRig/CAT integration are not reproduced — this focuses on the
   core tuning/spectrum/waterfall/meter workflow described above.
