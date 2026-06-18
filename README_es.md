@@ -357,13 +357,6 @@ Esta es una simulación con fines de demostración/educación:
 - Las funciones de audio requieren `pyaudio`. Si no está instalado, el canal de
   audio queda silenciosamente desactivado; el resto de la GUI sigue funcionando
   con normalidad.
-- El espectro RF siempre se calcula a partir de la frecuencia de LO A
-  (`center_freq`) independientemente del LO activo. Seleccionar LO B recentra
-  la pantalla en el lado del cliente, pero los fotogramas de datos posteriores
-  del servidor reflejarán la posición de LO A.
-- Los modos ECSS y DIG no tienen banda de paso de filtro predeterminada: al
-  seleccionarlos se actualiza la etiqueta del modo pero los bordes del filtro
-  permanecen sin cambios.
 - El indicador `nb` (cancelador de ruido independiente) es gestionado por el
   servidor e incluido en el diccionario de estado, pero ningún botón de la GUI
   envía `set_nb`. Actívelo desde un cliente externo o agregue un botón "NB"
