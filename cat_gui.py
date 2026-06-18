@@ -2656,7 +2656,18 @@ class App:
     def _build_text_pane(self,parent):
         """Build the right-hand text/chat panel used by 'text' and
         'text_input' user-mod modes. Built once per _build_right() call;
-        contents are repopulated per-slot by _update_af_text_split()."""
+        contents are repopulated per-slot by _update_af_text_split().
+
+        Each user-mod slot has its own independent text history stored in
+        self._text_buf (dict keyed by 1-based slot index).  Switching
+        between buttons saves the current widget contents to the outgoing
+        slot's buffer and restores the incoming slot's buffer into the
+        widget, so no text is ever lost or bleed across slots."""
+        # Per-slot receive buffers survive _build_text_pane rebuilds
+        # (e.g. HiDPI scale changes) because we only initialise the dict
+        # when it does not already exist on self.
+        if not hasattr(self,"_text_buf"):
+            self._text_buf={}   # {slot_idx: [line, ...]}
         sc=self._sc
         fs=max(7,int(round(9*sc)))
         pane=tk.Frame(parent,bg=C["spec_bg"])
@@ -2731,10 +2742,20 @@ class App:
         self._text_tx.bind("<KeyRelease>",_limit_lines)
 
     def _append_text_rx(self,line):
-        """Append one line to the read-only upper text area and auto-scroll
-        to the bottom."""
+        """Append one line to the read-only upper text area, auto-scroll to
+        the bottom, and persist it in the per-slot buffer so the text is
+        restored when the user switches back to this slot later."""
         if not hasattr(self,"_text_rx"):
             return
+        # Store in the per-slot buffer (keyed by the 1-based slot index that
+        # is active at the moment of the append).
+        idx=getattr(self,"_text_pane_idx",None)
+        if idx is not None:
+            buf=self._text_buf.setdefault(idx,[])
+            buf.append(line)
+            # Limit buffer depth to keep memory bounded (keep last 500 lines)
+            if len(buf)>500:
+                del buf[:-500]
         self._text_rx.config(state="normal")
         self._text_rx.insert("end",line+"\n")
         self._text_rx.see("end")
@@ -2753,7 +2774,19 @@ class App:
             uml=self.state.get("user_mod_labels") or []
             label=(uml[idx-1].strip()[:4] if idx-1<len(uml) else "") or f"MOD{idx}"
             self._text_hdr_lbl.config(text=label)
+            prev_idx=getattr(self,"_text_pane_idx",None)
             self._text_pane_idx=idx
+            # Repopulate the rx widget whenever the active slot changes so each
+            # button has its own independent, isolated text history.
+            if idx!=prev_idx:
+                self._text_rx.config(state="normal")
+                self._text_rx.delete("1.0","end")
+                for buffered_line in self._text_buf.get(idx,[]):
+                    self._text_rx.insert("end",buffered_line+"\n")
+                self._text_rx.see("end")
+                self._text_rx.config(state="disabled")
+                # Also clear the tx entry box so the user starts fresh
+                self._text_tx.delete("1.0","end")
             if not self._audio_text_pane_visible:
                 self._text_pane.pack(side="left",fill="both",expand=True,
                                      padx=(max(2,int(round(2*self._sc))),0))

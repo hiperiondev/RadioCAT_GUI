@@ -780,6 +780,10 @@ class RadioState:
                               ["normal"] * NUM_USER_MODS
         # Simulated periodic status-line counter per text/text_input slot
         self._text_tick = [0] * NUM_USER_MODS
+        # Per-slot text history ring-buffer (last 200 lines).
+        # Keyed by 1-based slot index; populated by both periodic pushes and
+        # GUI-triggered echoes so a slot panel can be seeded on demand.
+        self._text_history = {}  # {1-based idx: [line, ...]}
 
         # AGC smoothing state for the S-meter / AF level
         self._smoothed_signal_db = NOISE_FLOOR_DBM
@@ -940,8 +944,15 @@ class RadioState:
                     if mtype == "text_input" and text:
                         # Demo behaviour: echo the line back so the chat panel
                         # shows a round-trip, like a simple RTTY echo test.
+                        echo_text = f"ECHO: {text}"
                         outgoing = {"type": "user_text", "index": idx + 1,
-                                    "text": f"ECHO: {text}"}
+                                    "text": echo_text}
+                        # Store in per-slot history
+                        slot_key = idx + 1
+                        hist = self._text_history.setdefault(slot_key, [])
+                        hist.append(echo_text)
+                        if len(hist) > 200:
+                            del hist[:-200]
             # unknown commands are simply ignored (still get an "ok" reply)
 
         # Show every change received from the GUI on the server console.
@@ -952,7 +963,10 @@ class RadioState:
         """Return a list of simulated {"type":"user_text",...} messages, one
         for each "text"/"text_input" user-mod slot, advancing a periodic
         counter. Called from the streaming loop so panels that are showing
-        but receiving no user input still display something."""
+        but receiving no user input still display something.
+
+        Each generated line is also stored in the per-slot _text_history
+        ring-buffer (max 200 lines) so the history survives slot switches."""
         msgs = []
         with self.lock:
             for idx in range(NUM_USER_MODS):
@@ -960,10 +974,16 @@ class RadioState:
                 if mtype in ("text", "text_input"):
                     self._text_tick[idx] += 1
                     label = self.user_mod_labels[idx] or f"MOD{idx+1}"
+                    line = f"[{label}] status update #{self._text_tick[idx]}"
+                    slot_key = idx + 1
+                    hist = self._text_history.setdefault(slot_key, [])
+                    hist.append(line)
+                    if len(hist) > 200:
+                        del hist[:-200]
                     msgs.append({
                         "type": "user_text",
-                        "index": idx + 1,
-                        "text": f"[{label}] status update #{self._text_tick[idx]}",
+                        "index": slot_key,
+                        "text": line,
                     })
         return msgs
 
