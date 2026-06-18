@@ -1063,8 +1063,11 @@ class RTPAudioClient:
         pkt = _rtp_pack_gui(payload, self._seq, self._ts)
         self._seq = (self._seq + 1) & 0xFFFF
         self._ts  = (self._ts + frame_count) & 0xFFFFFFFF
+        sock = self._sock          # capture reference once
+        if sock is None:
+            return (None, 0)
         try:
-            self._sock.sendto(pkt, (self._host, self._port))
+            sock.sendto(pkt, (self._host, self._port))
         except OSError:
             pass
         return (None, 0)  # 0 == pyaudio.paContinue
@@ -1187,19 +1190,22 @@ class Net:
         return True,"ok"
 
     def disconnect(self):
-        self.connected=False
-        if self.sock:
-            try: self.sock.shutdown(socket.SHUT_RDWR)
+        with self._lk:
+            self.connected = False
+            sock, self.sock = self.sock, None
+        if sock:
+            try: sock.shutdown(socket.SHUT_RDWR)
             except OSError: pass
-            try: self.sock.close()
+            try: sock.close()
             except OSError: pass
-            self.sock=None
 
     def send(self,obj):
-        if not self.connected or not self.sock: return False
+        with self._lk:
+            if not self.connected or not self.sock: return False
+            sock = self.sock          # capture reference under lock
         d=(json.dumps(obj)+"\n").encode()
         try:
-            with self._lk: self.sock.sendall(d)
+            sock.sendall(d)           # use captured reference, not self.sock
             return True
         except (OSError, socket.timeout):
             self.connected=False
