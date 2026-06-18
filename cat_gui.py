@@ -772,6 +772,8 @@ def _af_fft(x):
     len(x) must be a power of 2.
     """
     n = len(x)
+    if n > 1 and (n & (n - 1)) != 0:
+        raise ValueError(f"_af_fft: length {n} is not a power of 2")
     if n <= 1:
         return x
     even = _af_fft(x[0::2])
@@ -3516,9 +3518,8 @@ def main():
 
     # ── --bg theme override (must happen before App() reads C) ────────────────
     if _ARGS.bg == 'light':
-        _LIGHT_BG = "#FFECD6"
         for _k in ("win_bg", "panel_bg", "panel_mid", "spec_bg", "btn_gray"):
-            C[_k] = _LIGHT_BG
+            C[_k] = "#FFECD6"
 
     if _ARGS.audio_list:
         _print_audio_devices()
