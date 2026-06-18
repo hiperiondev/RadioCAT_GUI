@@ -291,7 +291,7 @@ def _ensure_server_config(path):
                 f.write(_SERVER_CONFIG_TEMPLATE)
             print(f"[config] Created default config: {path}")
         except Exception as e:
-            print(f"[config] WARNING: could not write default config: {e}")
+            print(f"[config] WARNING: could not write default config: {e} — using built-in defaults")
     return _load_server_config(path)
 
 NUM_BINS = 600          # RF spectrum / waterfall bins
@@ -1320,6 +1320,9 @@ class ClientHandler(threading.Thread):
             pass
         finally:
             self.alive = False
+            with self.radio.lock:
+                self.radio.running = False
+                self.radio.ptt     = False   # already done on connect, but good here too
             try:
                 self.sock.close()
             except OSError:
