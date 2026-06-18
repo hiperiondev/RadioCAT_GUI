@@ -12,24 +12,34 @@ no_audio = false
 
 [user_buttons]
 # label: max 7 characters; type: "normal" (momentary) or "push" (toggle)
-label_1 = ""
+label_1 = "UsrBtn1"
 type_1 = "normal"
-label_2 = ""
+label_2 = "UsrBtn2"
 type_2 = "normal"
-label_3 = ""
+label_3 = "UsrBtn3"
 type_3 = "normal"
-label_4 = ""
+label_4 = "UsrBtn4"
 type_4 = "normal"
-label_5 = ""
+label_5 = "UsrBtn5"
 type_5 = "normal"
-label_6 = ""
+label_6 = "UsrBtn6"
 type_6 = "normal"
 
 [user_mods]
 # label: max 4 characters; user-defined modulation button labels shown in the
 # mode row of the GUI. Fill slots in order: 1, 2, 3, 4, 5 (no skipping).
-label_1 = ""
-label_2 = ""
-label_3 = ""
-label_4 = ""
-label_5 = ""
+# type: "normal" (acts like a regular mode button), "text" (splits the AF/
+#       audio box so a read-only text panel shows text sent by the server),
+#       or "text_input" (same split, but the text panel itself is split into
+#       an upper read-only area and a bottom 3-line editable input box that
+#       sends text to the server on Enter, like an RTTY chat).
+label_1 = "APRS"
+type_1 = "text"
+label_2 = "RTTY"
+type_2 = "text_input"
+label_3 = "FT8"
+type_3 = "normal"
+label_4 = "FT2"
+type_4 = "normal"
+label_5 = "WSPR"
+type_5 = "normal"

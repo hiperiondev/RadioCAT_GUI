@@ -2015,6 +2015,7 @@ class App:
             user_buttons=[{"label":"","type":"normal"} for _ in range(6)],
             user_btn_state=[False]*6,
             user_mod_labels=["","","","",""],  # up to 5 user-defined modulation buttons
+            user_mod_types=["normal","normal","normal","normal","normal"],
             # BUG-12 fix: persist toolbar toggle selection so it survives
             # reconnects and scale-change rebuilds.
             toolbar_view_rf="Waterfall",
@@ -2508,24 +2509,161 @@ class App:
         tk.Frame(prog,bg="#aaaa00",width=max(8,int(round(12*sc))),
                  height=max(3,int(round(5*sc)))).pack(side="left",pady=1,padx=2)
 
-    # ── right: AF waterfall + spectrum ────────────────────────────────────────
+    # ── right: AF waterfall + spectrum (optionally split with a text panel) ──
     def _build_right(self,parent):
         sc=self._sc
         rp=tk.Frame(parent,bg=C["spec_bg"])
         rp.pack(side="left",fill="both",expand=True)
         self._rp=rp
 
-        self.af_wf=WFCanvas(rp,af=True)
+        # Horizontal split container: left = waterfall/spectrum (always),
+        # right = text/chat panel (only packed when a "text"/"text_input"
+        # user-mod button is the active mode).
+        split=tk.Frame(rp,bg=C["spec_bg"])
+        split.pack(side="top",fill="both",expand=True)
+        self._audio_split=split
+
+        left=tk.Frame(split,bg=C["spec_bg"])
+        left.pack(side="left",fill="both",expand=True)
+        self._audio_left=left
+
+        self.af_wf=WFCanvas(left,af=True)
         self.af_wf._app=self
         self.af_wf.pack(side="top",fill="both",expand=True)
 
-        af_sf=tk.Frame(rp,bg=C["spec_bg"],height=scaled('af_spec_h',sc))
+        af_sf=tk.Frame(left,bg=C["spec_bg"],height=scaled('af_spec_h',sc))
         af_sf.pack(side="top",fill="x"); af_sf.pack_propagate(False)
         self._af_sf=af_sf
         self.af_spec=SpecCanvas(af_sf,self,show_filter=False,af=True)
         self.af_spec.pack(fill="both",expand=True)
 
-        self._toolbar2=_toolbar(rp,rbw="5.9 Hz",avg="1",sc=sc,app=self,box_id="af",initial_view=self.state.get("toolbar_view_af","Waterfall"))
+        self._toolbar2=_toolbar(left,rbw="5.9 Hz",avg="1",sc=sc,app=self,box_id="af",initial_view=self.state.get("toolbar_view_af","Waterfall"))
+
+        # Right-hand text/chat pane — built once here, hidden until a
+        # text/text_input user-mod mode is selected (see _update_af_text_split).
+        self._build_text_pane(split)
+        self._audio_text_pane_visible=False
+        # Re-apply the split state immediately (handles rebuilds at a new
+        # scale level while a text mode is already active).
+        self._update_af_text_split()
+
+    def _build_text_pane(self,parent):
+        """Build the right-hand text/chat panel used by 'text' and
+        'text_input' user-mod modes. Built once per _build_right() call;
+        contents are repopulated per-slot by _update_af_text_split()."""
+        sc=self._sc
+        fs=max(7,int(round(9*sc)))
+        pane=tk.Frame(parent,bg=C["spec_bg"])
+        self._text_pane=pane
+        # Not packed here — _update_af_text_split() packs/forgets it.
+
+        # Header showing which user-mod slot is active (e.g. "RTTY")
+        hdr=tk.Frame(pane,bg=C["panel_mid"])
+        hdr.pack(side="top",fill="x")
+        self._text_hdr_lbl=tk.Label(hdr,text="",bg=C["panel_mid"],fg=C["text_grn"],
+                                    font=_gui_font(fs,"bold"),anchor="w")
+        self._text_hdr_lbl.pack(side="left",fill="x",expand=True,
+                                padx=max(2,int(round(4*sc))),pady=max(1,int(round(2*sc))))
+
+        # Upper read-only area: text received from the server.
+        rx_fr=tk.Frame(pane,bg=C["spec_bg"])
+        rx_fr.pack(side="top",fill="both",expand=True)
+        rx_scroll=tk.Scrollbar(rx_fr,orient="vertical")
+        rx_scroll.pack(side="right",fill="y")
+        self._text_rx=tk.Text(rx_fr,bg=C["spec_bg"],fg=C["text"],
+                              font=_gui_font(fs),wrap="word",
+                              insertbackground=C["text"],
+                              relief="flat",bd=0,
+                              state="disabled",
+                              yscrollcommand=rx_scroll.set)
+        self._text_rx.pack(side="left",fill="both",expand=True,
+                           padx=max(2,int(round(3*sc))),pady=max(1,int(round(2*sc))))
+        rx_scroll.config(command=self._text_rx.yview)
+
+        # Lower editable input area (only used/packed for "text_input" type):
+        # max 3 visible lines, auto-scrolling, Enter sends to server.
+        tx_fr=tk.Frame(pane,bg=C["panel_mid"])
+        self._text_tx_fr=tx_fr
+        # Not packed here — packed only for "text_input" slots.
+        sep=tk.Frame(tx_fr,bg=C["sep"],height=max(1,int(round(1*sc))))
+        sep.pack(side="top",fill="x")
+        tx_inner=tk.Frame(tx_fr,bg=C["panel_mid"])
+        tx_inner.pack(side="top",fill="both",expand=True,
+                      padx=max(2,int(round(3*sc))),pady=max(2,int(round(3*sc))))
+        tx_scroll=tk.Scrollbar(tx_inner,orient="vertical")
+        tx_scroll.pack(side="right",fill="y")
+        self._text_tx=tk.Text(tx_inner,bg=C["panel_bg"],fg=C["text"],
+                              font=_gui_font(fs),wrap="word",height=3,
+                              insertbackground=C["text_grn"],
+                              relief="flat",bd=0,
+                              yscrollcommand=tx_scroll.set)
+        self._text_tx.pack(side="left",fill="both",expand=True)
+        tx_scroll.config(command=self._text_tx.yview)
+
+        def _send_text(event=None):
+            idx=getattr(self,"_text_pane_idx",None)
+            if idx is None:
+                return "break"
+            text=self._text_tx.get("1.0","end").rstrip("\n")
+            if text:
+                self.net.send({"cmd":"user_text","index":idx,"text":text})
+                self._append_text_rx(f"> {text}")
+            self._text_tx.delete("1.0","end")
+            return "break"   # swallow the newline Enter would otherwise insert
+
+        def _limit_lines(event=None):
+            # Enforce a 3-line maximum by trimming any extra trailing lines
+            # (e.g. pasted multi-line text), keeping auto-scroll at the end.
+            content=self._text_tx.get("1.0","end-1c")
+            lines=content.split("\n")
+            if len(lines)>3:
+                self._text_tx.delete("1.0","end")
+                self._text_tx.insert("1.0","\n".join(lines[:3]))
+            self._text_tx.see("end")
+
+        self._text_tx.bind("<Return>",_send_text)
+        self._text_tx.bind("<KeyRelease>",_limit_lines)
+
+    def _append_text_rx(self,line):
+        """Append one line to the read-only upper text area and auto-scroll
+        to the bottom."""
+        if not hasattr(self,"_text_rx"):
+            return
+        self._text_rx.config(state="normal")
+        self._text_rx.insert("end",line+"\n")
+        self._text_rx.see("end")
+        self._text_rx.config(state="disabled")
+
+    def _update_af_text_split(self):
+        """Show/hide the right-hand text panel in the AF/audio box based on
+        whether the currently active mode is a 'text' or 'text_input'
+        user-mod slot. Safe to call any time _build_right() has already run
+        (including repeatedly from _refresh())."""
+        if not hasattr(self,"_text_pane"):
+            return
+        idx,mtype=self._active_text_mod()
+        want_visible = idx is not None
+        if want_visible:
+            uml=self.state.get("user_mod_labels") or []
+            label=(uml[idx-1].strip()[:4] if idx-1<len(uml) else "") or f"MOD{idx}"
+            self._text_hdr_lbl.config(text=label)
+            self._text_pane_idx=idx
+            if not self._audio_text_pane_visible:
+                self._text_pane.pack(side="left",fill="both",expand=True,
+                                     padx=(max(2,int(round(2*self._sc))),0))
+                self._audio_text_pane_visible=True
+            if mtype=="text_input":
+                try:
+                    self._text_tx_fr.pack_info()
+                except tk.TclError:
+                    self._text_tx_fr.pack(side="bottom",fill="x")
+            else:
+                self._text_tx_fr.pack_forget()
+        else:
+            if self._audio_text_pane_visible:
+                self._text_pane.pack_forget()
+                self._audio_text_pane_visible=False
+            self._text_pane_idx=None
 
     # ── HiDPI scale change ────────────────────────────────────────────────────
     def _build_scale_ctrl(self):
@@ -2726,7 +2864,7 @@ class App:
             _lbl=((_uml[_umidx-1].strip() if _umidx-1<len(_uml) else ""))[:4]
             if _lbl:
                 _umb.config(text=_lbl,
-                            command=lambda lbl=_lbl:self._set_user_mod(lbl),
+                            command=lambda lbl=_lbl,i=_umidx:self._set_user_mod(lbl,i),
                             bg=C["btn_sel"] if self.state["mode"]==_lbl else C["btn_gray"],
                             fg=C["btn_sel_fg"])
                 try:
@@ -2735,6 +2873,8 @@ class App:
                     _umb.pack(side="left",padx=_px)
             else:
                 _umb.pack_forget()
+        # Apply/clear the AF-box text-panel split for the active mode (if any)
+        self._update_af_text_split()
         for k,b in self.dsp_btns.items():
             on=self.state.get(k,False)
             b.config(bg=C["btn_sel"] if on else C["btn_gray"],
@@ -2977,7 +3117,7 @@ class App:
         self.state["filter_lo"]=lo; self.state["filter_hi"]=hi
         self._refresh(); self.net.send({"cmd":"set_mode","mode":m})
 
-    def _set_user_mod(self,label):
+    def _set_user_mod(self,label,idx=None):
         """Select a user-defined modulation mode (exclusive with all other modes)."""
         self.state["mode"]=label
         self._refresh()
@@ -3003,6 +3143,25 @@ class App:
         self._refresh()
 
     # ── user-defined buttons (server-configured, indices 1..6) ─────────────
+    def _active_text_mod(self):
+        """If the currently selected mode (state['mode']) matches a
+        user-defined modulation button whose type is 'text' or 'text_input',
+        return (idx, mtype) with idx in 1..5. Otherwise return (None, None).
+        Derived directly from state so it stays correct across reconnects,
+        server-initiated mode changes, and scale-change rebuilds — no
+        separate "active index" needs to be tracked."""
+        mode=self.state.get("mode")
+        uml=self.state.get("user_mod_labels") or []
+        umt=self.state.get("user_mod_types") or []
+        for i,lbl in enumerate(uml):
+            lbl=(lbl or "").strip()[:4]
+            if lbl and lbl==mode:
+                mtype=umt[i] if i<len(umt) else "normal"
+                if mtype in ("text","text_input"):
+                    return i+1,mtype
+                return None,None
+        return None,None
+
     def _user_btn_cfg(self,idx):
         """Return {"label":..., "type":...} for user button idx (1..6),
         falling back to a default if the server hasn't provided one yet."""
@@ -3186,6 +3345,14 @@ class App:
                 self.af_spec.update_data(0,ar,spec)
                 self.af_wf.set_freq_range(0,ar)
                 self.af_wf.add_row(spec)
+        elif t=="user_text":
+            # Server-pushed text for a "text"/"text_input" user-mod slot.
+            # Only render it if that slot's panel is the one currently shown
+            # (the GUI may have switched to a different mode in the meantime).
+            idx=msg.get("index")
+            text=msg.get("text","")
+            if idx is not None and getattr(self,"_text_pane_idx",None)==idx and text:
+                self._append_text_rx(text)
         elif "state" in msg:
             self.state.update(msg["state"]); self._refresh()
 

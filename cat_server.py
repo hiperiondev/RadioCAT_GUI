@@ -30,6 +30,7 @@ protocol:
         {"cmd": "set_zoom","value": 2}
         {"cmd": "ui_button","name": "Full Screen"}
         {"cmd": "transport","action": "\u25b6"}
+        {"cmd": "user_text", "index": 1, "text": "CQ CQ DE TEST"}
         {"cmd": "start"}
         {"cmd": "stop"}
         {"cmd": "hello"}
@@ -67,6 +68,39 @@ A button the GUI sends becomes:
 
     {"cmd": "user_button", "index": N}                 (normal button press)
     {"cmd": "user_button", "index": N, "enabled": true} (push-push toggle)
+
+User-defined modulation buttons
+--------------------------------
+Up to 5 user-defined modulation buttons (N = 1..5) can be configured via CLI
+flags and are advertised to the GUI in "user_mod_labels" / "user_mod_types"
+lists inside every "state" dict:
+
+    --user_mod_N      LABEL  Label for user-mod button N (max 4 chars)
+    --user_mod_type_N  TYPE  "normal", "text", or "text_input". Default: "normal"
+
+  * "normal"     behaves like a standard mode button (e.g. AM/USB/...).
+  * "text"       when selected, the GUI splits its AF/audio box in two: the
+                 left side keeps the AF waterfall/spectrum, the right side
+                 shows a read-only text panel with text sent by the server.
+  * "text_input" same split, but the right-hand panel itself is split into
+                 an upper read-only area (text sent by the server) and a
+                 bottom editable box (max 3 lines, auto-scroll) that sends
+                 its contents to the server when the user presses Enter,
+                 like an RTTY chat session.
+
+Text sent by the GUI for a text/text_input mode button arrives as:
+
+    {"cmd": "user_text", "index": N, "text": "..."}
+
+The server replies immediately as usual ({"resp": "ok", "state": {...}}) and
+also pushes its own text to the GUI asynchronously as:
+
+    {"type": "user_text", "index": N, "text": "..."}
+
+This demo server echoes back anything received on a "text_input" slot
+(prefixed so it's clearly distinguishable in the chat panel) and, for any
+"text"/"text_input" slot, periodically pushes a simulated status line so the
+read-only panel has something to display even with no user input.
 
 Real IQ recordings (--iq_wav)
 ------------------------------
@@ -136,6 +170,7 @@ _SERVER_CONFIG_DEFAULTS = {
     },
     "user_mods": {
         **{f"label_{n}": "" for n in range(1, 6)},
+        **{f"type_{n}":  "normal" for n in range(1, 6)},
     },
 }
 
@@ -170,11 +205,21 @@ type_6 = "normal"
 [user_mods]
 # label: max 4 characters; user-defined modulation button labels shown in the
 # mode row of the GUI. Fill slots in order: 1, 2, 3, 4, 5 (no skipping).
+# type: "normal" (acts like a regular mode button), "text" (splits the AF/
+#       audio box so a read-only text panel shows text sent by the server),
+#       or "text_input" (same split, but the text panel itself is split into
+#       an upper read-only area and a bottom 3-line editable input box that
+#       sends text to the server on Enter, like an RTTY chat).
 label_1 = ""
+type_1 = "normal"
 label_2 = ""
+type_2 = "normal"
 label_3 = ""
+type_3 = "normal"
 label_4 = ""
+type_4 = "normal"
 label_5 = ""
+type_5 = "normal"
 """
 
 def _parse_simple_toml_srv(text):
@@ -674,7 +719,8 @@ def _crop_and_resample(full_db, num_bins, zoom):
 class RadioState:
     """Holds the simulated 'radio' settings and produces spectrum data."""
 
-    def __init__(self, user_buttons=None, user_mod_labels=None, iq_source=None):
+    def __init__(self, user_buttons=None, user_mod_labels=None, user_mod_types=None,
+                 iq_source=None):
         self.lock = threading.Lock()
         self.center_freq = 14_195_000.0
         self.sample_rate = 192_000.0
@@ -713,6 +759,11 @@ class RadioState:
         # (max 4 chars each). Empty string means the slot is unused.
         self.user_mod_labels = list(user_mod_labels) if user_mod_labels else \
                                [""] * NUM_USER_MODS
+        # Parallel list of types: "normal" | "text" | "text_input"
+        self.user_mod_types = list(user_mod_types) if user_mod_types else \
+                              ["normal"] * NUM_USER_MODS
+        # Simulated periodic status-line counter per text/text_input slot
+        self._text_tick = [0] * NUM_USER_MODS
 
         # AGC smoothing state for the S-meter / AF level
         self._smoothed_signal_db = NOISE_FLOOR_DBM
@@ -775,11 +826,13 @@ class RadioState:
                 "user_buttons": [dict(b) for b in self.user_buttons],
                 "user_btn_state": self.user_btn_state,
                 "user_mod_labels": list(self.user_mod_labels),
+                "user_mod_types": list(self.user_mod_types),
             }
 
     # ----------------------------------------------------------- commands ----
     def apply(self, cmd):
         c = cmd.get("cmd")
+        outgoing = None
         with self.lock:
             if c == "hello":
                 pass
@@ -861,10 +914,42 @@ class RadioState:
                         else:
                             self.user_btn_state[idx] = not self.user_btn_state[idx]
                     # "normal" buttons are momentary - nothing to store
+            elif c == "user_text":
+                # Text sent from a "text_input" user-mod chat panel.
+                # {"cmd": "user_text", "index": N, "text": "..."}
+                idx = int(cmd.get("index", 0)) - 1
+                text = str(cmd.get("text", ""))
+                if 0 <= idx < NUM_USER_MODS:
+                    mtype = self.user_mod_types[idx] if idx < len(self.user_mod_types) else "normal"
+                    if mtype == "text_input" and text:
+                        # Demo behaviour: echo the line back so the chat panel
+                        # shows a round-trip, like a simple RTTY echo test.
+                        outgoing = {"type": "user_text", "index": idx + 1,
+                                    "text": f"ECHO: {text}"}
             # unknown commands are simply ignored (still get an "ok" reply)
 
         # Show every change received from the GUI on the server console.
         self._log_cmd(cmd)
+        return outgoing
+
+    def make_user_text_messages(self):
+        """Return a list of simulated {"type":"user_text",...} messages, one
+        for each "text"/"text_input" user-mod slot, advancing a periodic
+        counter. Called from the streaming loop so panels that are showing
+        but receiving no user input still display something."""
+        msgs = []
+        with self.lock:
+            for idx in range(NUM_USER_MODS):
+                mtype = self.user_mod_types[idx] if idx < len(self.user_mod_types) else "normal"
+                if mtype in ("text", "text_input"):
+                    self._text_tick[idx] += 1
+                    label = self.user_mod_labels[idx] or f"MOD{idx+1}"
+                    msgs.append({
+                        "type": "user_text",
+                        "index": idx + 1,
+                        "text": f"[{label}] status update #{self._text_tick[idx]}",
+                    })
+        return msgs
 
     def _log_cmd(self, cmd):
         c = cmd.get("cmd")
@@ -1195,7 +1280,7 @@ class ClientHandler(threading.Thread):
                         cmd = json.loads(line.decode("utf-8"))
                     except Exception:
                         continue
-                    self.radio.apply(cmd)
+                    outgoing = self.radio.apply(cmd)
                     # When GUI sends its UDP address alongside set_ptt or
                     # audio_hello, register it so the TX loop can reach it.
                     if cmd.get("cmd") in ("set_ptt", "audio_hello"):
@@ -1204,6 +1289,8 @@ class ClientHandler(threading.Thread):
                             gui_ip = self.addr[0]
                             self.audio_channel.set_client_addr((gui_ip, int(udp_port)))
                     self.send_json({"resp": "ok", "state": self.radio.as_dict()})
+                    if outgoing:
+                        self.send_json(outgoing)
         except OSError:
             pass
         finally:
@@ -1217,6 +1304,10 @@ class ClientHandler(threading.Thread):
     def _stream_loop(self):
         period = 1.0 / UPDATE_HZ
         next_tick = time.monotonic()
+        # Simulated text panel updates are much slower than the ~10 Hz
+        # spectrum stream so the chat/status panel doesn't scroll too fast.
+        text_period = 3.0
+        next_text_tick = time.monotonic() + text_period
         while self.alive:
             state = self.radio.as_dict()
             if state["running"]:
@@ -1224,6 +1315,12 @@ class ClientHandler(threading.Thread):
                 msg["state"] = state
                 if not self.send_json(msg):
                     break
+            now = time.monotonic()
+            if now >= next_text_tick:
+                next_text_tick = now + text_period
+                for tmsg in self.radio.make_user_text_messages():
+                    if not self.send_json(tmsg):
+                        break
             next_tick += period
             time.sleep(max(0.0, next_tick - time.monotonic()))
 
@@ -1258,6 +1355,7 @@ def _parse_args():
         _value_flags.add(f'--user-button-type-{_n}')
     for _n in range(1, NUM_USER_MODS + 1):
         _value_flags.add(f'--user_mod_{_n}')
+        _value_flags.add(f'--user_mod_type_{_n}')
     _skip = False
     _positionals = []
     for _a in sys.argv[1:]:
@@ -1314,6 +1412,15 @@ def _parse_args():
                         help=f"Label for user-defined modulation button {n} "
                              f"(max 4 characters). Slots must be filled in order: "
                              f"1, 2, 3 — no skipping.")
+        ap.add_argument(f"--user_mod_type_{n}", choices=["normal", "text", "text_input"],
+                        default=argparse.SUPPRESS,
+                        help=f"Type of user-defined modulation button {n}: "
+                             f"'normal' (acts like a standard mode button), "
+                             f"'text' (splits the GUI's AF/audio box to show a "
+                             f"read-only text panel), or 'text_input' (same "
+                             f"split, but with an editable RTTY-chat-style input "
+                             f"box below the read-only text). Default: normal. "
+                             f"Requires --user_mod_{n} to also be set.")
     _raw = ap.parse_args()
 
     # ── Merge: CLI beats config, config beats built-in default ───────────────
@@ -1341,9 +1448,13 @@ def _parse_args():
     # User mods: CLI beats config, config beats built-in default
     for n in range(1, NUM_USER_MODS + 1):
         _mattr = f"user_mod_{n}"
+        _tattr2 = f"user_mod_type_{n}"
         _cfg_mod_label = _umods.get(f"label_{n}", _D["user_mods"][f"label_{n}"])
+        _cfg_mod_type  = _umods.get(f"type_{n}",  _D["user_mods"][f"type_{n}"])
         if not hasattr(_raw, _mattr):
             setattr(_raw, _mattr, _cfg_mod_label)
+        if not hasattr(_raw, _tattr2):
+            setattr(_raw, _tattr2, _cfg_mod_type)
 
     # ── Validations ───────────────────────────────────────────────────────────
     # Length checks
@@ -1357,6 +1468,14 @@ def _parse_args():
         if len(label) > 4:
             ap.error(f"--user_mod_{n}: label must be at most 4 "
                      f"characters (got {len(label)!r}: {label!r})")
+    # Each user_mod_type_N belongs to its own user_mod_N — an empty label
+    # slot cannot carry a non-default type.
+    for n in range(1, NUM_USER_MODS + 1):
+        label = getattr(_raw, f"user_mod_{n}")
+        mtype = getattr(_raw, f"user_mod_type_{n}")
+        if not label and mtype != "normal":
+            ap.error(f"--user_mod_type_{n} requires --user_mod_{n} to also "
+                     f"be set (a type cannot be set on an empty slot)")
 
     # Sequential checks: no gaps allowed — must fill 1, 2, 3… in order
     _btn_empty = False
@@ -1395,6 +1514,11 @@ def _build_user_mods(args):
     return [getattr(args, f"user_mod_{n}", "") for n in range(1, NUM_USER_MODS + 1)]
 
 
+def _build_user_mod_types(args):
+    """Return a list of NUM_USER_MODS type strings for user-defined mod buttons."""
+    return [getattr(args, f"user_mod_type_{n}", "normal") for n in range(1, NUM_USER_MODS + 1)]
+
+
 def main():
     args = _parse_args()
     host = args.host
@@ -1417,6 +1541,7 @@ def main():
 
     radio = RadioState(user_buttons=_build_user_buttons(args),
                        user_mod_labels=_build_user_mods(args),
+                       user_mod_types=_build_user_mod_types(args),
                        iq_source=iq_source)
 
     # ── Optional: load a wav file to transmit as the downlink audio ──────────
