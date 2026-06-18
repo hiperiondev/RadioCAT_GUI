@@ -362,12 +362,11 @@ def _linear16_to_ulaw(samples: bytes) -> bytes:
             s = -s
         s = min(s, 32767)
         s += 33
+        exp = 0  # defensive default; loop below will override for all valid s
         for e in range(7, -1, -1):
             if s >= (1 << (e + 5)):
                 exp = e
                 break
-        else:
-            exp = 0
         mantissa = (s >> (exp + 1)) & 0x0F
         ulaw = ~(sign | (exp << 4) | mantissa) & 0xFF
         out[i] = ulaw
@@ -646,9 +645,9 @@ class AudioWavSource:
             riff = f.read(12)
             if len(riff) < 12 or riff[0:4] != b"RIFF" or riff[8:12] != b"WAVE":
                 raise ValueError(f"{path}: not a RIFF/WAVE file")
-            channels = 1
-            sample_rate = AUDIO_SAMPLE_RATE
-            bits_per_sample = 16
+            channels = None
+            sample_rate = None
+            bits_per_sample = None
             is_float = False
             data = b""
             while True:
@@ -674,6 +673,8 @@ class AudioWavSource:
                 f.seek(chunk_start + chunk_size + (chunk_size & 1))
             if not data:
                 raise ValueError(f"{path}: no 'data' chunk found")
+            if sample_rate is None:
+                raise ValueError(f"{path}: no 'fmt' chunk found")
             return channels, sample_rate, bits_per_sample, is_float, data
 
     @staticmethod
