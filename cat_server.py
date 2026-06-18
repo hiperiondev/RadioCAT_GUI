@@ -450,7 +450,10 @@ class IQWavSource:
         self._pos = 0                # read offset (bytes) within the data chunk
         self._lock = threading.Lock()
         self._parse_header()
-        self._fh = open(self.path, "rb")
+        try:
+            self._fh = open(self.path, "rb")
+        except Exception:
+            raise
 
     # -- header parsing -------------------------------------------------------
     def _parse_header(self):
@@ -471,7 +474,7 @@ class IQWavSource:
                 elif chunk_id == b"data":
                     self.data_offset = chunk_start
                     self.data_size = chunk_size
-                    break  # 'data' is normally the last chunk we care about
+                    # do NOT break; 'auxi' may appear after 'data' in some recorders
                 # RIFF chunks are word (2-byte) aligned
                 f.seek(chunk_start + chunk_size + (chunk_size & 1))
         if self.data_size == 0:
@@ -572,10 +575,11 @@ class IQWavSource:
         return (i_ch[:n] + 1j * q_ch[:n]).astype(np.complex64)
 
     def close(self):
-        try:
-            self._fh.close()
-        except OSError:
-            pass
+        if hasattr(self, '_fh'):
+            try:
+                self._fh.close()
+            except OSError:
+                pass
 
 
 # ── WAV downlink-audio playback (--audio_wav) ──────────────────────────────
