@@ -2075,6 +2075,10 @@ class App:
             toolbar_view_af="Waterfall",
         )
         self._sup=False
+        # True only when the operator explicitly pressed Stop — used by
+        # _on_connect_result to decide whether to auto-send "start" on
+        # reconnect.  False on first connect so the radio always starts up.
+        self._user_stopped = False
         # HiDPI / 4K scaling state
         self._scale_level = max(-5, min(5, _ARGS.scale))  # from --scale flag
         self._sc = 1.25 ** self._scale_level  # current visual scale factor
@@ -2253,6 +2257,8 @@ class App:
             # rather than waiting for the next data frame to not arrive.
             self.rf_wf.set_tx(new_state)
             self.rf_spec.set_tx(new_state)
+            self.af_wf.set_tx(new_state)    # show TX badge / clear on AF waterfall
+            self.af_spec.set_tx(new_state)  # show TX badge / clear on AF spectrum
             self.net.send({"cmd": "set_ptt", "enabled": new_state,
                            "udp_port": self.rtp_audio.local_udp_port()})
             self.rtp_audio.set_ptt(new_state)
@@ -3159,13 +3165,23 @@ class App:
             self.net.send({"cmd":"set_lo_b_freq","hz":self.state["lo_b_freq"]})
             self.net.send({"cmd":"set_tune_freq","hz":self.state["tune_freq"]})
             self.net.send({"cmd":"set_mode","mode":self.state["mode"]})
-            self.net.send({"cmd":"start"})
+            # Send "start" unless the operator explicitly pressed Stop before
+            # this reconnect.  _user_stopped is False on first connect (the
+            # initial state has running=False but that means "not yet started",
+            # not "deliberately stopped"), so we always start on first connect.
+            if not self._user_stopped:
+                self.net.send({"cmd":"start"})
+        _auto_start = not self._user_stopped
         threading.Thread(target=_send_hello_burst, daemon=True).start()
-        self.state["running"]=True
+        # Keep running state consistent with whether we actually sent "start".
+        self.state["running"] = _auto_start
         self.conn_btn.config(text="Disconnect",state="normal",
                              bg="#2a0e0e",fg=C["btn_red_fg"])
         self.conn_status.config(fg=C["btn_grn_fg"])
-        self.start_btn.config(text="Stop",bg="#6a1414",fg=C["btn_red_fg"])
+        if _auto_start:
+            self.start_btn.config(text="Stop",bg="#6a1414",fg=C["btn_red_fg"])
+        else:
+            self.start_btn.config(text="Start",bg=C["btn_grn"],fg=C["btn_grn_fg"])
 
     def _on_disconnected(self):
         self.state["running"]=False
@@ -3277,9 +3293,11 @@ class App:
         if not self.net.connected: return
         if self.state["running"]:
             self.net.send({"cmd":"stop"}); self.state["running"]=False
+            self._user_stopped = True   # remember the operator chose to stop
             self.start_btn.config(text="Start",bg=C["btn_grn"],fg=C["btn_grn_fg"])
         else:
             self.net.send({"cmd":"start"}); self.state["running"]=True
+            self._user_stopped = False  # operator restarted — clear the flag
             self.start_btn.config(text="Stop",bg="#6a1414",fg=C["btn_red_fg"])
 
     def adj_zoom(self,d):
