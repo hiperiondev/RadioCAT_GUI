@@ -1017,6 +1017,10 @@ class RadioState:
                 (1 - alpha) * self._smoothed_signal_db + alpha * signal_db
             )
             smoothed = self._smoothed_signal_db
+            # Re-read squelch and mute under the same lock so squelch_open is
+            # consistent with the smoothed value we just wrote (BUG-10 fix).
+            squelch = self.squelch
+            mute = self.mute
         smeter_dbm = max(-135.0, min(10.0, smoothed))
         smeter_text = dbm_to_s_text(smeter_dbm)
 
@@ -1330,8 +1334,13 @@ class ClientHandler(threading.Thread):
         text_period = 3.0
         next_text_tick = time.monotonic() + text_period
         while self.alive:
-            state = self.radio.as_dict()
-            if state["running"]:
+            # BUG-11 fix: check running with a single lock-protected read
+            # before calling as_dict() (which acquires the lock and copies all
+            # state) to avoid redundant work while the radio is stopped.
+            with self.radio.lock:
+                is_running = self.radio.running
+            if is_running:
+                state = self.radio.as_dict()
                 msg = self.radio.make_data_message()
                 msg["state"] = state
                 if not self.send_json(msg):
@@ -1370,6 +1379,13 @@ def _parse_args():
 
     # Determine which positional args (host / port) were explicitly on the CLI,
     # ignoring every flag that takes a value (and its value) below.
+    # NOTE: boolean store_true flags (e.g. --no-audio) must NOT be added here;
+    # they consume no following argument and the scanner already skips them
+    # correctly because they start with '-'.  Adding them would cause the
+    # token *after* the flag to be silently dropped from _positionals.
+    # IMPORTANT: host and port positionals must appear before any flags on the
+    # command line to be detected reliably (e.g. `cat_server.py 0.0.0.0 50101
+    # --no-audio`).  Passing them after flags risks ambiguous tokenisation.
     _value_flags = {'--config', '--audio-port', '--iq_wav', '--audio_wav'}
     for _n in range(1, NUM_USER_BUTTONS + 1):
         _value_flags.add(f'--user-button-label-{_n}')
