@@ -819,7 +819,15 @@ class RTPAudioClient:
     (audio features silently disabled with a console warning).
     """
 
-    def __init__(self, server_host: str, server_port: int):
+    def __init__(self, server_host: str = "", server_port: int = 0):
+        """Construct an RTPAudioClient.
+
+        ``server_host`` and ``server_port`` are accepted for backwards
+        compatibility but are **never used** here; the real network
+        parameters are supplied (and the socket is opened) by :meth:`open`.
+        Do not rely on constructor values being honoured without a subsequent
+        call to ``open()``.
+        """
         self._host       = server_host
         self._port       = server_port
         self._sock       = None
@@ -1904,7 +1912,9 @@ class FreqDisp(tk.Frame):
         tk.Label(top,text="Frequency (Hz):",bg=C["panel_bg"],
                  fg=C["text"]).pack(padx=12,pady=(12,4))
         var=tk.StringVar(value=str(self.value))
-        ent=tk.Entry(top,textvariable=var,width=16,justify="right")
+        ent=tk.Entry(top,textvariable=var,width=16,justify="right",
+                     bg=C["btn_gray"],fg=C["text"],
+                     insertbackground=C["text"],relief="flat")
         ent.pack(padx=12,pady=4); ent.select_range(0,"end"); ent.focus_set()
         def apply(_=None):
             try: v=int(float(var.get()))
