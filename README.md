@@ -65,7 +65,7 @@ Radio control. Key points:
     Rewind (◀◀), Fast-forward (▶▶), and Loop (∞).
   - **Start/Stop** control over the receiver stream.
   - S-meter auxiliary buttons: **Peak**, **S-units**, **Squelch**.
-  - Function buttons: **SDR-Device**, **Soundcard**, **Bandwidth**,
+  - Function buttons: **Device**, **Soundcard**, **Bandwidth**,
     **Options**, **FreqMgr**. Note: **Soundcard** opens a local audio device
     selection dialog and does **not** send a command to the server.
   - A live **date/time clock** and a TCP **Connect/Disconnect** button with
@@ -104,6 +104,8 @@ Radio control. Key points:
 | Mode buttons (AM/ECSS/FM/LSB/USB/CW/DIG) | Mode button row; sets default filter passband for AM, FM, LSB, USB, CW. ECSS and DIG change the mode label only — filter is unchanged |
 | DSP toggles (NR / NB RF / NB IF / AFC / Mute / AGC Med / Notch / ANotch) | Two DSP button rows. There is no standalone NB button; the server's `nb` state flag has no GUI control |
 | User-defined buttons (×6) | Right-aligned in the two DSP rows; labels and types come from the server |
+| User-defined modulation buttons (×5) | Configurable via `--user_mod_1`…`--user_mod_5` / `--user_mod_type_1`…`--user_mod_type_5`; labels and types in `user_mod_labels` / `user_mod_types` state fields |
+| IQ wav / audio wav playback | `IQWavSource` (`--iq_wav`) feeds a real IQ wav file to the RF spectrum/waterfall; `AudioWavSource` (`--audio_wav`) replaces the demo sine tone with a real audio file |
 | S-Meter | `SMeter` canvas, S1–S9 + S9+20 dB / S9+40 dB overload scale, digital dBm readout |
 | Volume / AGC Thresh. | Sliders in the left control panel |
 | Zoom / span | Mouse-wheel on the RF spectrum canvas |
@@ -153,12 +155,13 @@ Each message is one JSON object terminated by `\n`.
 {"cmd": "start"}
 {"cmd": "stop"}
 {"cmd": "transport",      "action": "rec"}         # rec|play|pause|stop|ff|rw|infinite
-{"cmd": "ui_button",      "name": "FreqMgr"}       # SDR-Device|Bandwidth|Options|FreqMgr (Soundcard excluded — opens local dialog only)
+{"cmd": "ui_button",      "name": "FreqMgr"}       # Device|Bandwidth|Options|FreqMgr (Soundcard excluded — opens local dialog only)
 {"cmd": "ui_display",     "box": "rf", "view": "waterfall"}  # box: rf|af  view: waterfall|spectrum
 {"cmd": "ui_smeter_btn",  "name": "Peak"}          # Peak|S-units|Squelch
 {"cmd": "user_button",    "index": 1}              # momentary press (normal type)
 {"cmd": "user_button",    "index": 2, "enabled": true}  # push-push toggle state
 {"cmd": "audio_hello",    "udp_port": 5010}        # GUI registers its RTP UDP port with the server
+{"cmd": "user_text",     "index": 1, "text": "CQ CQ DE TEST"}  # write a text string to slot index (1-based)
 ```
 
 > **Note:** The **Soundcard** button opens a local audio device dialog and does
@@ -179,9 +182,20 @@ enabled:
 {"type": "audio_port", "port": 5004, "sample_rate": 8000, "frame_ms": 20, "codec": "pcmu"}
 ```
 
+> **Note on UDP ports:** `5004` is the server's RTP listen port (the port the
+> server opens and the GUI sends audio *to*). The `udp_port` field in
+> `set_ptt` / `audio_hello` commands (e.g. `5010`) is the *GUI's* RTP send
+> port — the port the server should send audio *back to*. These are two
+> different sides of the bidirectional channel.
+
 Reply to every command:
 ```json
 {"resp": "ok", "state": {...current radio state...}}
+```
+
+Asynchronous server-initiated push (sent whenever a `user_text` slot is updated):
+```json
+{"type": "user_text", "index": 1, "text": "CQ CQ DE TEST"}
 ```
 
 Streamed (only while "running"), about 10×/second:
@@ -193,7 +207,7 @@ Streamed (only while "running"), about 10×/second:
   "af_spectrum": [dBm, ...],         # AF spectrum, 256 points
   "af_range": 3000,
   "smeter_dbm": -73.4,
-  "smeter_text": "S9+3dB",
+  "smeter_text": "S9",
   "squelch_open": true,
   "state": {...current radio state...}
 }
@@ -203,8 +217,8 @@ The `state` dict included in every response and data push contains the full radi
 state: `center_freq`, `lo_b_freq`, `lo_active` (`"A"` or `"B"`), `tune_freq`,
 `sample_rate`, `zoom`, `mode`, `filter_lo`, `filter_hi`, `agc` (`"Med"` or
 `"Off"`), `agc_thresh`, `rf_gain`, `volume`, `squelch`, `nb`, `nr`, `nbrf`,
-`nbif`, `afc`, `anf`, `notch`, `mute`, `ptt`, `running`, `user_buttons`, and
-`user_btn_state`.
+`nbif`, `afc`, `anf`, `notch`, `mute`, `ptt`, `running`, `user_buttons`,
+`user_btn_state`, `user_mod_labels`, and `user_mod_types`.
 
 > **Note:** `smeter_text` is a string in the format `"S1"` through `"S9"`,
 > `"S9+20dB"`, or `"S9+40dB"` for overload levels. The `set_zoom` command
@@ -242,6 +256,12 @@ python3 cat_server.py \
     --user-button-label-1 "Gain+" --user-button-type-1 normal \
     --user-button-label-2 "Record" --user-button-type-2 push
 
+# Use a real IQ wav file for the RF spectrum/waterfall instead of the synthetic model
+python3 cat_server.py --iq_wav /path/to/iq_recording.wav
+
+# Use a real audio wav file for RTP playback instead of the 440 Hz demo tone
+python3 cat_server.py --audio_wav /path/to/audio.wav
+
 # Terminal 2 — start the GUI
 python3 cat_gui.py
 ```
@@ -252,10 +272,14 @@ python3 cat_gui.py
 | --- | --- |
 | `host [port]` | Positional: host/IP and TCP port to listen on (defaults: `0.0.0.0` `50101`) |
 | `--config PATH` | Load TOML config from PATH (default: `./cat_server.toml`, auto-created on first run) |
-| `--audio-port PORT` | UDP port for the RTP audio channel (default: `5004`) |
+| `--audio_port PORT` | UDP port for the RTP audio channel (default: `5004`) |
 | `--no-audio` | Disable the RTP/UDP audio channel entirely |
+| `--iq_wav PATH` | Feed a real IQ wav file as the RF spectrum/waterfall source instead of the synthetic model |
+| `--audio_wav PATH` | Replace the demo 440 Hz sine tone with a real audio wav file for RTP playback |
 | `--user-button-label-N TEXT` | Label for user button N (1–6, max 7 characters) |
 | `--user-button-type-N TYPE` | Type of user button N: `normal` (momentary) or `push` (push-push/toggle) |
+| `--user_mod_N TEXT` | Label for user-defined modulation button N (1–5) |
+| `--user_mod_type_N TYPE` | Type of user modulation button N: `normal` or `push` |
 
 ### GUI command-line options
 

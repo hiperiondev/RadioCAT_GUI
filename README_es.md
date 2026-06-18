@@ -71,7 +71,7 @@ Definida por Software. Puntos clave:
     Pausar (⏸), Detener (■), Rebobinar (◀◀), Avance rápido (▶▶) e Infinito (∞).
   - Control **Iniciar/Detener** sobre el flujo del receptor.
   - Botones auxiliares del S-meter: **Pico**, **Unidades S**, **Squelch**.
-  - Botones de función: **SDR-Device**, **Soundcard**, **Bandwidth**,
+  - Botones de función: **Device**, **Soundcard**, **Bandwidth**,
     **Options**, **FreqMgr**. Nota: **Soundcard** abre un cuadro de diálogo
     local de selección de dispositivos de audio y **no** envía ningún comando
     al servidor.
@@ -114,6 +114,8 @@ Definida por Software. Puntos clave:
 | Botones de modo (AM/ECSS/FM/LSB/USB/CW/DIG) | Fila de botones de modo; establece banda de paso predeterminada para AM, FM, LSB, USB, CW. ECSS y DIG cambian solo la etiqueta de modo — el filtro no varía |
 | Alternativas DSP (NR / NB RF / NB IF / AFC / Silencio / AGC Med / Notch / ANotch) | Dos filas de botones DSP. No existe botón NB independiente; el indicador `nb` del servidor no tiene control en la GUI |
 | Botones definidos por el usuario (×6) | Alineados a la derecha en las dos filas DSP; etiquetas y tipos provienen del servidor |
+| Botones de modulación definidos por el usuario (×5) | Configurables con `--user_mod_1`…`--user_mod_5` / `--user_mod_type_1`…`--user_mod_type_5`; etiquetas y tipos en los campos de estado `user_mod_labels` / `user_mod_types` |
+| Reproducción de IQ wav / audio wav | `IQWavSource` (`--iq_wav`) alimenta un archivo IQ wav real al espectro RF/cascada; `AudioWavSource` (`--audio_wav`) reemplaza el tono sinusoidal de demostración con un archivo de audio real |
 | S-Meter | Lienzo `SMeter`, escala S1–S9 + S9+20 dB / S9+40 dB de sobrecarga, lectura digital en dBm |
 | Volumen / Umbral AGC | Controles deslizantes en el panel de control izquierdo |
 | Zoom / span | Rueda del ratón en el lienzo del espectro RF |
@@ -163,12 +165,13 @@ Cada mensaje es un objeto JSON terminado con `\n`.
 {"cmd": "start"}
 {"cmd": "stop"}
 {"cmd": "transport",      "action": "rec"}         # rec|play|pause|stop|ff|rw|infinite
-{"cmd": "ui_button",      "name": "FreqMgr"}       # SDR-Device|Bandwidth|Options|FreqMgr (Soundcard excluido — abre diálogo local únicamente)
+{"cmd": "ui_button",      "name": "FreqMgr"}       # Device|Bandwidth|Options|FreqMgr (Soundcard excluido — abre diálogo local únicamente)
 {"cmd": "ui_display",     "box": "rf", "view": "waterfall"}  # box: rf|af  view: waterfall|spectrum
 {"cmd": "ui_smeter_btn",  "name": "Peak"}          # Peak|S-units|Squelch
 {"cmd": "user_button",    "index": 1}              # pulsación momentánea (tipo normal)
 {"cmd": "user_button",    "index": 2, "enabled": true}  # estado de alternancia pulsador
 {"cmd": "audio_hello",    "udp_port": 5010}        # la GUI registra su puerto UDP RTP en el servidor
+{"cmd": "user_text",     "index": 1, "text": "CQ CQ DE TEST"}  # escribe un texto en la ranura indicada por index (base 1)
 ```
 
 > **Nota:** El botón **Soundcard** abre un cuadro de diálogo local de
@@ -190,9 +193,20 @@ canal de audio está habilitado:
 {"type": "audio_port", "port": 5004, "sample_rate": 8000, "frame_ms": 20, "codec": "pcmu"}
 ```
 
+> **Nota sobre puertos UDP:** `5004` es el puerto de escucha RTP del servidor
+> (el puerto que el servidor abre y al que la GUI envía audio). El campo
+> `udp_port` en los comandos `set_ptt` / `audio_hello` (p. ej. `5010`) es el
+> puerto de envío RTP de *la GUI* — el puerto al que el servidor debe devolver
+> el audio. Son los dos extremos distintos del canal bidireccional.
+
 Respuesta a cada comando:
 ```json
 {"resp": "ok", "state": {...estado actual de la radio...}}
+```
+
+Envío asíncrono iniciado por el servidor (se envía cuando se actualiza una ranura `user_text`):
+```json
+{"type": "user_text", "index": 1, "text": "CQ CQ DE TEST"}
 ```
 
 Transmitido (solo mientras está "en ejecución"), aproximadamente 10 veces por segundo:
@@ -204,7 +218,7 @@ Transmitido (solo mientras está "en ejecución"), aproximadamente 10 veces por 
   "af_spectrum": [dBm, ...],         # Espectro AF, 256 puntos
   "af_range": 3000,
   "smeter_dbm": -73.4,
-  "smeter_text": "S9+3dB",
+  "smeter_text": "S9",
   "squelch_open": true,
   "state": {...estado actual de la radio...}
 }
@@ -215,7 +229,7 @@ el estado completo de la radio: `center_freq`, `lo_b_freq`, `lo_active`
 (`"A"` o `"B"`), `tune_freq`, `sample_rate`, `zoom`, `mode`, `filter_lo`,
 `filter_hi`, `agc` (`"Med"` u `"Off"`), `agc_thresh`, `rf_gain`, `volume`,
 `squelch`, `nb`, `nr`, `nbrf`, `nbif`, `afc`, `anf`, `notch`, `mute`,
-`ptt`, `running`, `user_buttons` y `user_btn_state`.
+`ptt`, `running`, `user_buttons`, `user_btn_state`, `user_mod_labels` y `user_mod_types`.
 
 > **Nota:** `smeter_text` es una cadena con formato `"S1"` a `"S9"`,
 > `"S9+20dB"` o `"S9+40dB"` para niveles de sobrecarga. El comando `set_zoom`
@@ -254,6 +268,12 @@ python3 cat_server.py \
     --user-button-label-1 "Gain+" --user-button-type-1 normal \
     --user-button-label-2 "Record" --user-button-type-2 push
 
+# Usar un archivo IQ wav real para el espectro RF/cascada en lugar del modelo sintético
+python3 cat_server.py --iq_wav /ruta/al/iq_recording.wav
+
+# Usar un archivo de audio wav real para la reproducción RTP en lugar del tono de 440 Hz
+python3 cat_server.py --audio_wav /ruta/al/audio.wav
+
 # Terminal 2 — iniciar la GUI
 python3 cat_gui.py
 ```
@@ -264,10 +284,14 @@ python3 cat_gui.py
 | --- | --- |
 | `host [puerto]` | Posicional: host/IP y puerto TCP en el que escuchar (predeterminados: `0.0.0.0` `50101`) |
 | `--config PATH` | Cargar configuración TOML desde PATH (predeterminado: `./cat_server.toml`, creado automáticamente al inicio) |
-| `--audio-port PUERTO` | Puerto UDP para el canal de audio RTP (predeterminado: `5004`) |
+| `--audio_port PUERTO` | Puerto UDP para el canal de audio RTP (predeterminado: `5004`) |
 | `--no-audio` | Deshabilitar completamente el canal de audio RTP/UDP |
+| `--iq_wav PATH` | Alimentar un archivo IQ wav real como fuente del espectro RF/cascada en lugar del modelo sintético |
+| `--audio_wav PATH` | Reemplazar el tono sinusoidal de 440 Hz de demostración con un archivo de audio wav real para la reproducción RTP |
 | `--user-button-label-N TEXTO` | Etiqueta para el botón de usuario N (1–6, máximo 7 caracteres) |
 | `--user-button-type-N TIPO` | Tipo del botón N: `normal` (momentáneo) o `push` (pulsador/alternancia) |
+| `--user_mod_N TEXTO` | Etiqueta para el botón de modulación definido por el usuario N (1–5) |
+| `--user_mod_type_N TIPO` | Tipo del botón de modulación N: `normal` o `push` |
 
 ### Opciones de línea de comandos de la GUI
 
