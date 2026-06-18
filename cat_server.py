@@ -963,7 +963,7 @@ class RadioState:
     def make_data_message(self):
         """Build one {"type": "data", ...} update from the current state."""
         with self.lock:
-            center = self.center_freq
+            center = self.lo_b_freq if self.lo_active == "B" else self.center_freq
             sample_rate = self.sample_rate
             zoom = max(1, self.zoom)
             rf_gain = self.rf_gain
