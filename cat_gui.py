@@ -1321,6 +1321,23 @@ class WFCanvas(tk.Canvas):
 
     # ── public API ────────────────────────────────────────────────────────────
 
+    def set_tx(self, active: bool):
+        """Freeze (active=True) or unfreeze (active=False) the waterfall during TX.
+
+        When frozen a prominent "● TX" badge is drawn over the top-left corner
+        so the operator sees immediately that the display is paused.  The badge
+        is removed the moment PTT is released and normal scrolling resumes.
+        """
+        self._tx_active = active
+        self.delete("wf_tx_badge")
+        if active:
+            sc  = getattr(self._app, '_sc', 1.0) if self._app else 1.0
+            pad = max(4, int(round(5 * sc)))
+            fs  = max(7, int(round(8 * sc)))
+            self.create_text(pad, pad, text="\u25cf TX", anchor="nw",
+                             fill="#ff3030", font=("TkFixedFont", fs, "bold"),
+                             tags="wf_tx_badge")
+
     def set_freq_range(self,f0,f1):
         self.f0=f0; self.f1=f1; self._draw_overlay()
 
@@ -1476,6 +1493,22 @@ class SpecCanvas(tk.Canvas):
 
     def update_data(self,f0,f1,spec):
         self.f0=f0; self.f1=f1; self.data=spec; self.draw()
+
+    def set_tx(self, active: bool):
+        """Freeze (active=True) or unfreeze (active=False) the spectrum during TX.
+
+        A "● TX" badge is shown top-left while transmitting so the operator
+        knows the trace is paused.  Removed immediately on PTT release.
+        """
+        self._tx_active = active
+        self.delete("spec_tx_badge")
+        if active:
+            sc  = getattr(self.app, '_sc', 1.0)
+            pad = max(4, int(round(5 * sc)))
+            fs  = max(7, int(round(8 * sc)))
+            self.create_text(pad, pad, text="\u25cf TX", anchor="nw",
+                             fill="#ff3030", font=("TkFixedFont", fs, "bold"),
+                             tags="spec_tx_badge")
 
     def draw(self):
         # ── Retained-item draw: no delete("all").  Every canvas object was
@@ -2208,6 +2241,12 @@ class App:
             self.state["ptt"] = new_state
             _draw_ptt_btn(new_state)
             self.smeter.set_tx(new_state)   # freeze meter immediately on PTT press
+            # Freeze / unfreeze the upper RF waterfall and spectrum immediately.
+            # Data frames arriving while ptt=True are already suppressed in
+            # _handle(), but calling set_tx() here shows the TX badge at once
+            # rather than waiting for the next data frame to not arrive.
+            self.rf_wf.set_tx(new_state)
+            self.rf_spec.set_tx(new_state)
             self.net.send({"cmd": "set_ptt", "enabled": new_state,
                            "udp_port": self.rtp_audio.local_udp_port()})
             self.rtp_audio.set_ptt(new_state)
@@ -3100,13 +3139,22 @@ class App:
             return
         # Always start with PTT inactive regardless of any stale server state.
         self.state["ptt"] = False
-        self.net.send({"cmd":"hello"})
-        self.net.send({"cmd":"set_ptt","enabled":False})   # clear any stale TX on server
-        self.net.send({"cmd":"set_freq","hz":self.state["lo_freq"]})
-        self.net.send({"cmd":"set_lo_b_freq","hz":self.state["lo_b_freq"]})
-        self.net.send({"cmd":"set_tune_freq","hz":self.state["tune_freq"]})
-        self.net.send({"cmd":"set_mode","mode":self.state["mode"]})
-        self.net.send({"cmd":"start"})
+        # NOTE: Net.send() calls sock.sendall() synchronously. If the server is
+        # slow to drain its TCP receive buffer (e.g. still spinning up DSP/RTP),
+        # any one of these calls can block for up to the socket's 5s timeout.
+        # Firing all of them back-to-back on the GUI thread could therefore
+        # freeze the entire window for several seconds right after connecting
+        # (audio still plays because PyAudio runs on its own callback thread).
+        # Run them on a background thread instead so the GUI stays responsive.
+        def _send_hello_burst():
+            self.net.send({"cmd":"hello"})
+            self.net.send({"cmd":"set_ptt","enabled":False})   # clear any stale TX on server
+            self.net.send({"cmd":"set_freq","hz":self.state["lo_freq"]})
+            self.net.send({"cmd":"set_lo_b_freq","hz":self.state["lo_b_freq"]})
+            self.net.send({"cmd":"set_tune_freq","hz":self.state["tune_freq"]})
+            self.net.send({"cmd":"set_mode","mode":self.state["mode"]})
+            self.net.send({"cmd":"start"})
+        threading.Thread(target=_send_hello_burst, daemon=True).start()
         self.state["running"]=True
         self.conn_btn.config(text="Disconnect",state="normal",
                              bg="#2a0e0e",fg=C["btn_red_fg"])
@@ -3119,6 +3167,8 @@ class App:
         self.rtp_audio.close()
         self._ptt_enabled = False
         self.smeter.set_tx(False)   # unfreeze meter on disconnect
+        if hasattr(self, 'rf_wf'):    self.rf_wf.set_tx(False)
+        if hasattr(self, 'rf_spec'):  self.rf_spec.set_tx(False)
         if hasattr(self, '_draw_ptt_btn'):
             self._draw_ptt_btn(False, False)
         if hasattr(self, '_ptt_canvas'):
@@ -3324,18 +3374,9 @@ class App:
         if t=="_connect_result":
             self._on_connect_result(msg["ok"], msg["msg"], msg["host"], msg["port"])
             return
-        if t=="disconnected": self._on_disconnected()
-        elif t=="audio_port":
-            # Server is advertising its UDP RTP port — open the audio channel
-            server_host = self.net.sock.getpeername()[0] if self.net.sock else "127.0.0.1"
-            udp_port    = int(msg.get("port", 5004))
-            sr          = int(msg.get("sample_rate", AUDIO_SAMPLE_RATE))
-            fm          = int(msg.get("frame_ms", AUDIO_FRAME_MS))
-            self.rtp_audio.open(server_host, udp_port, sample_rate=sr, frame_ms=fm)
-            # Tell the server our UDP port so TX can reach us
-            local_udp = self.rtp_audio.local_udp_port()
+        if t=="_audio_open_result":
+            local_udp = msg.get("local_udp")
             if local_udp:
-                self.net.send({"cmd": "audio_hello", "udp_port": local_udp})
                 # Only now is it safe to let the user press PTT — the local
                 # socket is bound, so local_udp_port() will never return None.
                 self._ptt_enabled = True
@@ -3346,6 +3387,32 @@ class App:
             else:
                 print("[audio] WARNING: RTP socket failed to bind a local UDP "
                       "port — PTT remains disabled.")
+            return
+        if t=="disconnected": self._on_disconnected()
+        elif t=="audio_port":
+            # Server is advertising its UDP RTP port — open the audio channel.
+            # RTPAudioClient.open() calls pyaudio.PyAudio(), which on some
+            # systems (PulseAudio/ALSA/JACK device enumeration issues) can
+            # block for several seconds or longer. It also does a blocking
+            # net.send() afterward. Both used to run directly on the GUI
+            # thread here, which froze the whole window the instant the
+            # server replied with audio_port — audio would still eventually
+            # play because PyAudio's stream callback runs on its own thread,
+            # completely independent of Tk's main loop. Do the open() call
+            # (and the follow-up send) on a background thread instead, and
+            # post the result back through the queue so widget updates still
+            # happen safely on the GUI thread.
+            server_host = self.net.sock.getpeername()[0] if self.net.sock else "127.0.0.1"
+            udp_port    = int(msg.get("port", 5004))
+            sr          = int(msg.get("sample_rate", AUDIO_SAMPLE_RATE))
+            fm          = int(msg.get("frame_ms", AUDIO_FRAME_MS))
+            def _open_audio():
+                self.rtp_audio.open(server_host, udp_port, sample_rate=sr, frame_ms=fm)
+                local_udp = self.rtp_audio.local_udp_port()
+                if local_udp:
+                    self.net.send({"cmd": "audio_hello", "udp_port": local_udp})
+                self.q.put({"type": "_audio_open_result", "local_udp": local_udp})
+            threading.Thread(target=_open_audio, daemon=True).start()
         elif t=="data":
             # Waterfall/spectrum only update on RX. S-meter set_value() is a
             # no-op during TX because set_tx(True) guards it in SMeter.
