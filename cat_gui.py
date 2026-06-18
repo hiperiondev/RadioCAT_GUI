@@ -1253,6 +1253,9 @@ class Net:
                     "— likely malformed/unterminated JSON; closing socket",
                     self._RX_BUF_MAX,
                 )
+                self._rx_overflow_reason = (
+                    "Receive buffer overflow — malformed server data"
+                )
                 break
             while b"\n" in buf:
                 line,buf=buf.split(b"\n",1)
@@ -1267,7 +1270,12 @@ class Net:
         was_unexpected = self.connected
         self.connected = False
         if was_unexpected:
-            self.app.q.put({"type":"disconnected"})
+            reason = getattr(self, '_rx_overflow_reason', None)
+            self._rx_overflow_reason = None
+            msg = {"type": "disconnected"}
+            if reason:
+                msg["reason"] = reason
+            self.app.q.put(msg)
 
 # ── Waterfall canvas ──────────────────────────────────────────────────────────
 
@@ -2909,8 +2917,16 @@ class App:
         # Rebuild toolbar1 (between RF strip and bot)
         self._toolbar1.destroy()
         self._toolbar1=_toolbar(self._toolbar1_parent,rbw="23.4 Hz",avg="2",sc=sc,app=self,box_id="rf",initial_view=self.state.get("toolbar_view_rf","Waterfall"))
-        # Re-pack toolbar1 before _bot
-        self._toolbar1.pack(before=self._bot)
+        # Re-pack toolbar1 before _bot by temporarily removing _bot from the
+        # geometry manager, letting _toolbar() pack itself in the correct slot,
+        # then re-packing _bot with its original options.  This avoids the
+        # fragile pack(before=...) call which requires both widgets to share
+        # the same geometry manager — a constraint that silently breaks if
+        # either widget is ever re-parented during a future refactor.
+        self._bot.pack_forget()
+        # _toolbar() calls bar.pack(side="top", fill="x") internally; no
+        # additional pack call is needed here.
+        self._bot.pack(side="top", fill="both", expand=False)
 
         # Update the persistent scale label/buttons to show & match the
         # current scale value/size
@@ -3217,7 +3233,7 @@ class App:
         else:
             self.start_btn.config(text="Start",bg=C["btn_grn"],fg=C["btn_grn_fg"])
 
-    def _on_disconnected(self):
+    def _on_disconnected(self, reason=None):
         self.state["running"]=False
         self.state["ptt"]=False
         self.rtp_audio.close()
@@ -3233,6 +3249,8 @@ class App:
                              bg="#0e2a10",fg=C["btn_grn_fg"])
         self.conn_status.config(fg="#331111")
         self.start_btn.config(text="Start",bg=C["btn_grn"],fg=C["btn_grn_fg"])
+        if reason:
+            messagebox.showerror("Disconnected", reason, parent=self.root)
 
     def _set_mode(self,m):
         self.state["mode"]=m
@@ -3446,7 +3464,7 @@ class App:
                 print("[audio] WARNING: RTP socket failed to bind a local UDP "
                       "port — PTT remains disabled.")
             return
-        if t=="disconnected": self._on_disconnected()
+        if t=="disconnected": self._on_disconnected(msg.get("reason"))
         elif t=="audio_port":
             # Server is advertising its UDP RTP port — open the audio channel.
             # RTPAudioClient.open() calls pyaudio.PyAudio(), which on some
