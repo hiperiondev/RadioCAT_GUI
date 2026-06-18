@@ -1676,10 +1676,23 @@ class SMeter(tk.Canvas):
         kw.setdefault("bg",C["panel_bg"]); kw.setdefault("highlightthickness",0)
         super().__init__(master,**kw)
         self.dbm=self.LO; self.txt="S0"
+        self._tx_mode=False   # when True: needle at floor, label forced to 0.0 dBm
         self._sc=1.0   # current scale factor, updated by App
         self.bind("<Configure>",lambda e:self._draw())
 
-    def set_value(self,dbm,txt): self.dbm=dbm; self.txt=txt; self._draw()
+    def set_value(self,dbm,txt):
+        # Ignore incoming RX readings while TX is active.
+        if self._tx_mode:
+            return
+        self.dbm=dbm; self.txt=txt; self._draw()
+
+    def set_tx(self, active):
+        """Switch meter into TX freeze (needle=floor, label=0.0 dBm) or back to RX."""
+        self._tx_mode = bool(active)
+        if active:
+            self.dbm = self.LO   # pins needle to leftmost zero position
+            self.txt = "TX"
+        self._draw()
 
     def _frac(self,db): return (max(self.LO,min(self.HI,db))-self.LO)/(self.HI-self.LO)
     def _ang(self,f): return self.AL-f*(self.AL-self.AR)
@@ -1740,8 +1753,9 @@ class SMeter(tk.Canvas):
         # digital readout
         self.create_rectangle(2,h-dbm_box_h,dbm_box_w,h-2,
                                fill="#0a1820",outline=C["sep"])
+        dbm_label = "0.0 dBm" if self._tx_mode else f"{self.dbm:.1f} dBm"
         self.create_text(max(3,int(round(5*sc))),h-max(2,int(round(4*sc))),
-                         text=f"{self.dbm:.1f} dBm",
+                         text=dbm_label,
                          fill=C["smeter_grn"],
                          font=_gui_font(dbm_fs,"bold"),anchor="sw")
         # needle
@@ -2193,6 +2207,7 @@ class App:
             new_state = not self.state.get("ptt", False)
             self.state["ptt"] = new_state
             _draw_ptt_btn(new_state)
+            self.smeter.set_tx(new_state)   # freeze meter immediately on PTT press
             self.net.send({"cmd": "set_ptt", "enabled": new_state,
                            "udp_port": self.rtp_audio.local_udp_port()})
             self.rtp_audio.set_ptt(new_state)
@@ -3083,7 +3098,10 @@ class App:
             self.conn_btn.config(text="Connect", state="normal")
             messagebox.showerror("Connect", f"Cannot connect to {host}:{port}\n{msg}")
             return
+        # Always start with PTT inactive regardless of any stale server state.
+        self.state["ptt"] = False
         self.net.send({"cmd":"hello"})
+        self.net.send({"cmd":"set_ptt","enabled":False})   # clear any stale TX on server
         self.net.send({"cmd":"set_freq","hz":self.state["lo_freq"]})
         self.net.send({"cmd":"set_lo_b_freq","hz":self.state["lo_b_freq"]})
         self.net.send({"cmd":"set_tune_freq","hz":self.state["tune_freq"]})
@@ -3100,6 +3118,7 @@ class App:
         self.state["ptt"]=False
         self.rtp_audio.close()
         self._ptt_enabled = False
+        self.smeter.set_tx(False)   # unfreeze meter on disconnect
         if hasattr(self, '_draw_ptt_btn'):
             self._draw_ptt_btn(False, False)
         if hasattr(self, '_ptt_canvas'):
@@ -3275,6 +3294,7 @@ class App:
                     if msg.get("type") == "data":
                         # Still update the S-meter even when dropping the spectrum frame
                         # so it doesn't freeze while the queue is backed up.
+                        # set_value() is a no-op during TX (smeter.set_tx blocks it).
                         try:
                             self.smeter.set_value(
                                 msg.get("smeter_dbm", -127.0),
@@ -3327,24 +3347,29 @@ class App:
                 print("[audio] WARNING: RTP socket failed to bind a local UDP "
                       "port — PTT remains disabled.")
         elif t=="data":
-            f0=msg.get("f_start"); f1=msg.get("f_stop")
-            spec=msg.get("spectrum",[])
-            if f0 is not None and f1 is not None and spec:
-                self.rf_spec.update_data(f0,f1,spec)
-                self.rf_wf.set_freq_range(f0,f1)
-                self.rf_wf.add_row(spec)
+            # Waterfall/spectrum only update on RX. S-meter set_value() is a
+            # no-op during TX because set_tx(True) guards it in SMeter.
+            if not self.state.get("ptt", False):
+                f0=msg.get("f_start"); f1=msg.get("f_stop")
+                spec=msg.get("spectrum",[])
+                if f0 is not None and f1 is not None and spec:
+                    self.rf_spec.update_data(f0,f1,spec)
+                    self.rf_wf.set_freq_range(f0,f1)
+                    self.rf_wf.add_row(spec)
             # AF spectrum/waterfall is updated separately via "af_local"
             # messages computed from the real decoded RTP audio (see
             # RTPAudioClient), not from this server-reported message, so it
             # always reflects the actual received signal.
             self.smeter.set_value(msg.get("smeter_dbm",-127.0),msg.get("smeter_text",""))
         elif t=="af_local":
-            ar=msg.get("af_range",_AF_DISPLAY_RANGE_HZ)
-            spec=msg.get("af_spectrum",[])
-            if spec:
-                self.af_spec.update_data(0,ar,spec)
-                self.af_wf.set_freq_range(0,ar)
-                self.af_wf.add_row(spec)
+            # Suppress AF waterfall/spectrum while transmitting.
+            if not self.state.get("ptt", False):
+                ar=msg.get("af_range",_AF_DISPLAY_RANGE_HZ)
+                spec=msg.get("af_spectrum",[])
+                if spec:
+                    self.af_spec.update_data(0,ar,spec)
+                    self.af_wf.set_freq_range(0,ar)
+                    self.af_wf.add_row(spec)
         elif t=="user_text":
             # Server-pushed text for a "text"/"text_input" user-mod slot.
             # Only render it if that slot's panel is the one currently shown
@@ -3354,7 +3379,11 @@ class App:
             if idx is not None and getattr(self,"_text_pane_idx",None)==idx and text:
                 self._append_text_rx(text)
         elif "state" in msg:
-            self.state.update(msg["state"]); self._refresh()
+            incoming = msg["state"]
+            # PTT is owned by the GUI button — never let the server's reflected
+            # state overwrite it.  Any other field is safe to merge normally.
+            incoming.pop("ptt", None)
+            self.state.update(incoming); self._refresh()
 
 # ── entry point ───────────────────────────────────────────────────────────────
 

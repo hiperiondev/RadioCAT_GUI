@@ -1248,6 +1248,11 @@ class ClientHandler(threading.Thread):
 
     def run(self):
         print(f"[cat_server] client connected: {self.addr}")
+        # A new client connection always starts with PTT off.  If the previous
+        # client disconnected while transmitting, radio.ptt would still be True,
+        # which would make the new GUI appear to start in TX mode.
+        with self.radio.lock:
+            self.radio.ptt = False
         # Announce the UDP audio port immediately so the GUI can open the channel
         if self.audio_channel:
             self.send_json({
