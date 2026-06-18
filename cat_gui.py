@@ -99,7 +99,10 @@ def _parse_simple_toml(text):
             k, _, v = line.partition('=')
             k = k.strip(); v = v.strip()
             if v.startswith('"') and v.endswith('"'):
-                section[k] = v[1:-1]
+                try:
+                    section[k] = json.loads(v)   # handles \", \\, \n, etc.
+                except json.JSONDecodeError:
+                    section[k] = v[1:-1]         # fall back for malformed input
             elif v == 'true':
                 section[k] = True
             elif v == 'false':
@@ -1036,8 +1039,18 @@ class RTPAudioClient:
                 if remainder:
                     self._rx_buf.appendleft(remainder)
             else:
-                # Short chunk: pad with silence to fill the frame
-                data = chunk + b"\x00" * (needed - len(chunk))
+                # Short chunk: greedily consume more buffered chunks before padding
+                data = bytearray(chunk)
+                while len(data) < needed:
+                    try:
+                        chunk = self._rx_buf.popleft()
+                        data.extend(chunk)
+                    except IndexError:
+                        break
+                if len(data) > needed:
+                    self._rx_buf.appendleft(bytes(data[needed:]))
+                    data = data[:needed]
+                data = bytes(data) + b"\x00" * (needed - len(data))
         except IndexError:
             # Buffer empty (normal underrun) or cleared by _close_streams()
             # racing between our check and pop — either way, emit silence.
