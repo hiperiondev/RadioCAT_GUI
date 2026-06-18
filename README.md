@@ -303,12 +303,6 @@ This is a simulation for demonstration/educational purposes:
   TX hardware is left as a stub in `UDPAudioChannel._rx_loop`.
 - Audio features require `pyaudio`. If it is not installed, the audio channel
   is silently disabled; all other GUI functions still work.
-- The RF spectrum is always computed from LO A's frequency (`center_freq`)
-  regardless of which LO is currently active. Selecting LO B re-centres the
-  display client-side, but subsequent data frames from the server will
-  reflect LO A's position until the server is also updated.
-- ECSS and DIG modes have no default filter passband defined: clicking them
-  changes the mode label but leaves the filter edges unchanged.
 - The `nb` (standalone noise blanker) state flag is handled by the server and
   included in the state dict, but no GUI button sends `set_nb`. Toggle it
   from an external client or add a dedicated "NB" button.
