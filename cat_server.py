@@ -1215,11 +1215,11 @@ class UDPAudioChannel:
             # Auto-register the GUI's UDP address from any incoming packet
             with self._addr_lock:
                 if self._cli_addr is None or self._cli_addr != addr:
-                    needs_register = True
-                else:
-                    needs_register = False
-            if needs_register:
-                self.set_client_addr(addr)
+                    self._cli_addr = addr
+                    self.radio.ptt_client_addr = addr
+            # Log outside the lock to avoid holding it during I/O
+            # (set_client_addr's print is intentionally skipped here to keep
+            #  the hot RX path lean; the TCP path still logs via set_client_addr)
 
             result = _rtp_unpack(data)
             if result is None:
@@ -1340,7 +1340,7 @@ class ClientHandler(threading.Thread):
                 next_text_tick = now + text_period
                 for tmsg in self.radio.make_user_text_messages():
                     if not self.send_json(tmsg):
-                        break
+                        return   # socket dead — exit _stream_loop entirely
             next_tick += period
             time.sleep(max(0.0, next_tick - time.monotonic()))
 
