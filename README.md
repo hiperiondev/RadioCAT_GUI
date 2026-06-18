@@ -1,4 +1,4 @@
-# CAT GUI Interface (TCP-driven simulation)
+# CAT GUI Interface
 
 <div align="center">
   <a href="https://github.com/hiperiondev/RadioCAT_GUI">
