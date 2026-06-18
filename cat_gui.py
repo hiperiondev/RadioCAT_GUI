@@ -2,7 +2,7 @@
 """
 cat_gui.py
 """
-import argparse, array, cmath, collections, json, logging, math, os, queue, socket, struct, sys, threading, time, datetime
+import argparse, array, cmath, collections, json, logging, math, os, queue, socket, struct, sys, threading, time, traceback, datetime
 import tkinter as tk
 from tkinter import messagebox
 
@@ -3189,9 +3189,11 @@ class App:
             if not self._user_stopped:
                 self.net.send({"cmd":"start"})
         _auto_start = not self._user_stopped
-        threading.Thread(target=_send_hello_burst, daemon=True).start()
-        # Keep running state consistent with whether we actually sent "start".
+        # Set running state *before* starting the thread so that any code on
+        # the receive thread (or a very fast server response arriving via the
+        # queue) sees the correct value from the moment _send_hello_burst begins.
         self.state["running"] = _auto_start
+        threading.Thread(target=_send_hello_burst, daemon=True).start()
         self.conn_btn.config(text="Disconnect",state="normal",
                              bg="#2a0e0e",fg=C["btn_red_fg"])
         self.conn_status.config(fg=C["btn_grn_fg"])
@@ -3391,7 +3393,7 @@ class App:
                                 msg.get("smeter_dbm", -127.0),
                                 msg.get("smeter_text", ""))
                         except Exception:
-                            import traceback; traceback.print_exc()
+                            traceback.print_exc()
                         continue      # discard stale spectrum frame; grab next
                     elif msg.get("type") == "af_local":
                         continue      # discard stale AF frame; grab next
@@ -3400,13 +3402,13 @@ class App:
                 try:
                     self._handle(msg)
                 except Exception:
-                    import traceback; traceback.print_exc()
+                    traceback.print_exc()
         except queue.Empty:
             pass
         except Exception:
             # Belt-and-suspenders: anything else unexpected (e.g. q.get_nowait()
             # itself misbehaving) must not stop the chain from rescheduling.
-            import traceback; traceback.print_exc()
+            traceback.print_exc()
         finally:
             self.root.after(30, self.poll)
 
