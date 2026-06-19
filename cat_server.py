@@ -172,6 +172,10 @@ _SERVER_CONFIG_DEFAULTS = {
         **{f"label_{n}": "" for n in range(1, 6)},
         **{f"type_{n}":  "normal" for n in range(1, 6)},
     },
+    "rf_usr_btns": {
+        **{f"label_{n}": "" for n in range(1, 12)},
+        **{f"mode_{n}":  "normal" for n in range(1, 12)},
+    },
 }
 
 _SERVER_CONFIG_TEMPLATE = """\
@@ -220,6 +224,33 @@ label_4 = ""
 type_4 = "normal"
 label_5 = ""
 type_5 = "normal"
+
+[rf_usr_btns]
+# RF user buttons: shown left of the band buttons in the GUI frequency area.
+# label: max 5 characters; mode: "normal" (momentary) or "push" (toggle).
+# Buttons with empty labels are hidden in the GUI.
+label_1 = ""
+mode_1 = "normal"
+label_2 = ""
+mode_2 = "normal"
+label_3 = ""
+mode_3 = "normal"
+label_4 = ""
+mode_4 = "normal"
+label_5 = ""
+mode_5 = "normal"
+label_6 = ""
+mode_6 = "normal"
+label_7 = ""
+mode_7 = "normal"
+label_8 = ""
+mode_8 = "normal"
+label_9 = ""
+mode_9 = "normal"
+label_10 = ""
+mode_10 = "normal"
+label_11 = ""
+mode_11 = "normal"
 """
 
 def _parse_simple_toml_srv(text):
@@ -300,6 +331,7 @@ AF_RANGE = 3000.0       # Hz shown on the AF display
 UPDATE_HZ = 10.0        # data pushes per second
 NUM_USER_BUTTONS = 6    # number of user-defined buttons (N = 1..6)
 NUM_USER_MODS    = 5    # number of user-defined modulation buttons (N = 1..5)
+NUM_RF_USR_BTNS  = 11   # number of RF user buttons (N = 1..11, left of band buttons)
 IQ_FFT_SIZE = 4096      # FFT size used to turn --iq_wav samples into a spectrum
 
 # ── RTP / UDP audio ──────────────────────────────────────────────────────────
@@ -736,7 +768,7 @@ class RadioState:
     """Holds the simulated 'radio' settings and produces spectrum data."""
 
     def __init__(self, user_buttons=None, user_mod_labels=None, user_mod_types=None,
-                 iq_source=None):
+                 rf_usr_btns=None, iq_source=None):
         self.lock = threading.Lock()
         self.center_freq = 14_195_000.0
         self.sample_rate = 192_000.0
@@ -770,6 +802,13 @@ class RadioState:
             {"label": "", "type": "normal"} for _ in range(NUM_USER_BUTTONS)
         ]
         self.user_btn_state = [False] * NUM_USER_BUTTONS
+
+        # RF user buttons: list of {\"label\": str, \"type\": \"normal\"|\"push\"}
+        # for N = 1..NUM_RF_USR_BTNS, shown left of the band buttons in the GUI.
+        self.rf_usr_btns = rf_usr_btns or [
+            {"label": "", "type": "normal"} for _ in range(NUM_RF_USR_BTNS)
+        ]
+        self.rf_usr_btn_state = [False] * NUM_RF_USR_BTNS
 
         # User-defined modulation buttons: list of up to NUM_USER_MODS labels
         # (max 4 chars each). Empty string means the slot is unused.
@@ -845,6 +884,8 @@ class RadioState:
                 "lo_b_freq": self.lo_b_freq,
                 "user_buttons": [dict(b) for b in self.user_buttons],
                 "user_btn_state": self.user_btn_state,
+                "rf_usr_btns": [dict(b) for b in self.rf_usr_btns],
+                "rf_usr_btn_state": self.rf_usr_btn_state,
                 "user_mod_labels": list(self.user_mod_labels),
                 "user_mod_types": list(self.user_mod_types),
             }
@@ -933,6 +974,17 @@ class RadioState:
                             self.user_btn_state[idx] = bool(cmd["enabled"])
                         else:
                             self.user_btn_state[idx] = not self.user_btn_state[idx]
+                    # "normal" buttons are momentary - nothing to store
+            elif c == "rf_usr_button":
+                # RF user button N (1..NUM_RF_USR_BTNS), left of band buttons.
+                idx = int(cmd.get("index", 0)) - 1
+                if 0 <= idx < NUM_RF_USR_BTNS:
+                    btype = self.rf_usr_btns[idx].get("type", "normal")
+                    if btype == "push":
+                        if "enabled" in cmd:
+                            self.rf_usr_btn_state[idx] = bool(cmd["enabled"])
+                        else:
+                            self.rf_usr_btn_state[idx] = not self.rf_usr_btn_state[idx]
                     # "normal" buttons are momentary - nothing to store
             elif c == "user_text":
                 # Text sent from a "text_input" user-mod chat panel.
@@ -1393,6 +1445,7 @@ def _parse_args():
     _aud  = _cfg.get("audio",        {})
     _ubtn = _cfg.get("user_buttons", {})
     _umods= _cfg.get("user_mods",    {})
+    _rufb = _cfg.get("rf_usr_btns",  {})
     _D    = _SERVER_CONFIG_DEFAULTS
 
     _def_host       = _srv.get("host",       _D["server"]["host"])
@@ -1416,6 +1469,9 @@ def _parse_args():
     for _n in range(1, NUM_USER_MODS + 1):
         _value_flags.add(f'--user_mod_{_n}')
         _value_flags.add(f'--user_mod_type_{_n}')
+    for _n in range(1, NUM_RF_USR_BTNS + 1):
+        _value_flags.add(f'--rf_usr_btn_{_n}')
+        _value_flags.add(f'--rf_usr_btn_mode_{_n}')
     _skip = False
     _positionals = []
     for _a in sys.argv[1:]:
@@ -1481,6 +1537,16 @@ def _parse_args():
                              f"split, but with an editable RTTY-chat-style input "
                              f"box below the read-only text). Default: normal. "
                              f"Requires --user_mod_{n} to also be set.")
+    for n in range(1, NUM_RF_USR_BTNS + 1):
+        ap.add_argument(f"--rf_usr_btn_{n}", metavar="LABEL",
+                        default=argparse.SUPPRESS,
+                        help=f"Label for RF user button {n} shown left of the band "
+                             f"buttons (max 5 characters). Button is hidden when empty.")
+        ap.add_argument(f"--rf_usr_btn_mode_{n}", choices=["normal", "push"],
+                        default=argparse.SUPPRESS,
+                        help=f"Mode of RF user button {n}: 'normal' (momentary press) "
+                             f"or 'push' (push-push/toggle). Default: normal. "
+                             f"Requires --rf_usr_btn_{n} to also be set.")
     _raw = ap.parse_args()
 
     # ── Merge: CLI beats config, config beats built-in default ───────────────
@@ -1516,6 +1582,17 @@ def _parse_args():
         if not hasattr(_raw, _tattr2):
             setattr(_raw, _tattr2, _cfg_mod_type)
 
+    # RF user buttons: CLI beats config, config beats built-in default
+    for n in range(1, NUM_RF_USR_BTNS + 1):
+        _rlattr = f"rf_usr_btn_{n}"
+        _rmattr = f"rf_usr_btn_mode_{n}"
+        _cfg_rf_label = _rufb.get(f"label_{n}", _D["rf_usr_btns"][f"label_{n}"])
+        _cfg_rf_mode  = _rufb.get(f"mode_{n}",  _D["rf_usr_btns"][f"mode_{n}"])
+        if not hasattr(_raw, _rlattr):
+            setattr(_raw, _rlattr, _cfg_rf_label)
+        if not hasattr(_raw, _rmattr):
+            setattr(_raw, _rmattr, _cfg_rf_mode)
+
     # ── Validations ───────────────────────────────────────────────────────────
     # Length checks
     for n in range(1, NUM_USER_BUTTONS + 1):
@@ -1528,6 +1605,18 @@ def _parse_args():
         if len(label) > 4:
             ap.error(f"--user_mod_{n}: label must be at most 4 "
                      f"characters (got {len(label)!r}: {label!r})")
+    for n in range(1, NUM_RF_USR_BTNS + 1):
+        label = getattr(_raw, f"rf_usr_btn_{n}", "")
+        if len(label) > 5:
+            ap.error(f"--rf_usr_btn_{n}: label must be at most 5 "
+                     f"characters (got {len(label)!r}: {label!r})")
+    # Each rf_usr_btn_mode_N requires a non-empty rf_usr_btn_N
+    for n in range(1, NUM_RF_USR_BTNS + 1):
+        label = getattr(_raw, f"rf_usr_btn_{n}", "")
+        mode  = getattr(_raw, f"rf_usr_btn_mode_{n}", "normal")
+        if not label and mode != "normal":
+            ap.error(f"--rf_usr_btn_mode_{n} requires --rf_usr_btn_{n} to also "
+                     f"be set (a mode cannot be set on an empty slot)")
     # Each user_mod_type_N belongs to its own user_mod_N — an empty label
     # slot cannot carry a non-default type.
     for n in range(1, NUM_USER_MODS + 1):
@@ -1579,6 +1668,17 @@ def _build_user_mod_types(args):
     return [getattr(args, f"user_mod_type_{n}", "normal") for n in range(1, NUM_USER_MODS + 1)]
 
 
+def _build_rf_usr_btns(args):
+    """Return a list of NUM_RF_USR_BTNS dicts for the RF user buttons."""
+    buttons = []
+    for n in range(1, NUM_RF_USR_BTNS + 1):
+        buttons.append({
+            "label": getattr(args, f"rf_usr_btn_{n}", ""),
+            "type":  getattr(args, f"rf_usr_btn_mode_{n}", "normal"),
+        })
+    return buttons
+
+
 def main():
     args = _parse_args()
     host = args.host
@@ -1602,6 +1702,7 @@ def main():
     radio = RadioState(user_buttons=_build_user_buttons(args),
                        user_mod_labels=_build_user_mods(args),
                        user_mod_types=_build_user_mod_types(args),
+                       rf_usr_btns=_build_rf_usr_btns(args),
                        iq_source=iq_source)
 
     # ── Optional: load a wav file to transmit as the downlink audio ──────────

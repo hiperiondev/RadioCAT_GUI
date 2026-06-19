@@ -2107,6 +2107,8 @@ class App:
             ptt=False,
             user_buttons=[{"label":"","type":"normal"} for _ in range(6)],
             user_btn_state=[False]*6,
+            rf_usr_btns=[{"label":"","type":"normal"} for _ in range(11)],
+            rf_usr_btn_state=[False]*11,
             user_mod_labels=["","","","",""],  # up to 5 user-defined modulation buttons
             user_mod_types=["normal","normal","normal","normal","normal"],
             # BUG-12 fix: persist toolbar toggle selection so it survives
@@ -2406,12 +2408,15 @@ class App:
         self.lo_disp.set_value(self.state["lo_freq"],notify=False)
 
         # ── Band buttons column — top-aligned to LO A row ─────────────────────
-        band_col=tk.Frame(freq_box,bg=C["spec_bg"])
-        band_col.grid(row=0,column=1,rowspan=3,sticky="n",
+        # Two sub-columns: left = RF user buttons (col=1), right = band buttons (col=2)
+        band_area=tk.Frame(freq_box,bg=C["spec_bg"])
+        band_area.grid(row=0,column=1,rowspan=3,sticky="n",
                        padx=max(2,int(round(3*sc))),
                        pady=(max(1,int(round(2*sc))),0))
         fs_band=max(6,int(round(7*sc)))
-        btn_w=max(4,int(round(5*sc)))
+        # Horizontal padding inside each button so a 5-char label never
+        # touches the border — 3 px at scale=1, scales with sc.
+        _bpx=max(3,int(round(3*sc)))
         self._band_btns={}   # name -> Button
 
         def _band_select(bname, bfreq):
@@ -2423,12 +2428,34 @@ class App:
             else:
                 self.set_frequency(bfreq)
 
+        # ── RF user buttons sub-column (left of band buttons) ──────────────────
+        # No fixed width: button auto-sizes to its label + _bpx padding so any
+        # label up to 5 chars fits without touching borders.
+        rf_usr_col=tk.Frame(band_area,bg=C["spec_bg"])
+        rf_usr_col.pack(side="left",anchor="n",padx=(0,max(1,int(round(1*sc)))))
+        self._rf_usr_btns={}   # idx -> Button
+        for _rui in range(11):
+            _ruidx=_rui+1
+            _rub=tk.Button(rf_usr_col,text="",anchor="center",
+                           bg=C["btn_gray"],fg=C["btn_sel_fg"],
+                           activebackground=C["btn_sel"],activeforeground=C["btn_sel_fg"],
+                           font=_gui_font(fs_band),relief="flat",bd=0,highlightthickness=0,
+                           padx=_bpx,pady=0,
+                           command=lambda i=_ruidx:self._rf_usr_btn_press(i))
+            # Do not pack now — _refresh packs/forgets based on server labels
+            self._rf_usr_btns[_ruidx]=_rub
+
+        # ── Band buttons sub-column (right of RF user buttons) ─────────────────
+        # No fixed width: auto-sizes to widest label ("160m" = 4 chars) + padding.
+        band_col=tk.Frame(band_area,bg=C["spec_bg"])
+        band_col.pack(side="left",anchor="n")
+
         for bname,bfreq in BANDS:
-            b=tk.Button(band_col,text=bname,width=btn_w,anchor="center",
+            b=tk.Button(band_col,text=bname,anchor="center",
                         bg=C["btn_gray"],fg=C["btn_sel_fg"],
                         activebackground=C["btn_sel"],activeforeground=C["btn_sel_fg"],
                         font=_gui_font(fs_band),relief="flat",bd=0,highlightthickness=0,
-                        pady=0,
+                        padx=_bpx,pady=0,
                         command=lambda n=bname,f=bfreq:_band_select(n,f))
             b.pack(fill="x",padx=0,pady=(0,max(0,int(round(1*sc)))))
             self._band_btns[bname]=b
@@ -3041,6 +3068,25 @@ class App:
                          fg=C["btn_sel_fg"])
             else:
                 b.config(bg=C["btn_gray"],fg=C["btn_sel_fg"])
+        # RF user buttons: pack/unpack based on server label; update push highlight
+        _sc=self._sc
+        _px_rf=max(0,int(round(1*_sc)))
+        for idx,b in self._rf_usr_btns.items():
+            lbl=self._rf_usr_btn_label(idx)
+            if lbl:
+                b.config(text=lbl)
+                cfg=self._rf_usr_btn_cfg(idx)
+                if cfg.get("type")=="push":
+                    on=self._rf_usr_btn_state(idx)
+                    b.config(bg=C["btn_sel"] if on else C["btn_gray"],fg=C["btn_sel_fg"])
+                else:
+                    b.config(bg=C["btn_gray"],fg=C["btn_sel_fg"])
+                try:
+                    b.pack_info()
+                except tk.TclError:
+                    b.pack(fill="x",padx=0,pady=(0,_px_rf))
+            else:
+                b.pack_forget()
         # Toolbar toggle buttons (Waterfall / Spectrum)
         # BUG-12 fix: push the persisted view selection into both toolbars so
         # they stay correct after reconnects and server-side view changes.
@@ -3372,6 +3418,40 @@ class App:
             self.net.send({"cmd":"user_button","index":idx,"enabled":new_on})
         else:
             self.net.send({"cmd":"user_button","index":idx})
+        self._refresh()
+
+    # ── RF user buttons (server-configured, indices 1..11, left of band btns) ─
+    def _rf_usr_btn_cfg(self,idx):
+        """Return {"label":..., "type":...} for RF user button idx (1..11)."""
+        ub=self.state.get("rf_usr_btns") or []
+        if 1<=idx<=len(ub) and ub[idx-1]:
+            cfg=ub[idx-1]
+            return {"label":cfg.get("label",""),"type":cfg.get("type","normal")}
+        return {"label":"","type":"normal"}
+
+    def _rf_usr_btn_label(self,idx):
+        return self._rf_usr_btn_cfg(idx).get("label","").strip()[:5]
+
+    def _rf_usr_btn_state(self,idx):
+        st=self.state.get("rf_usr_btn_state") or []
+        if 1<=idx<=len(st):
+            return bool(st[idx-1])
+        return False
+
+    def _rf_usr_btn_press(self,idx):
+        cfg=self._rf_usr_btn_cfg(idx)
+        if cfg.get("type")=="push":
+            new_on=not self._rf_usr_btn_state(idx)
+            st=self.state.get("rf_usr_btn_state")
+            if not st:
+                st=[False]*11
+            elif len(st)<11:
+                st=list(st)+[False]*(11-len(st))
+            st[idx-1]=new_on
+            self.state["rf_usr_btn_state"]=st
+            self.net.send({"cmd":"rf_usr_button","index":idx,"enabled":new_on})
+        else:
+            self.net.send({"cmd":"rf_usr_button","index":idx})
         self._refresh()
 
     def _toggle_run(self):
