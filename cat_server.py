@@ -71,7 +71,7 @@ A button the GUI sends becomes:
 
 User-defined modulation buttons
 --------------------------------
-Up to 5 user-defined modulation buttons (N = 1..5) can be configured via CLI
+Up to 10 user-defined modulation buttons (N = 1..10) can be configured via CLI
 flags and are advertised to the GUI in "user_mod_labels" / "user_mod_types"
 lists inside every "state" dict:
 
@@ -169,8 +169,8 @@ _SERVER_CONFIG_DEFAULTS = {
         **{f"type_{n}":  "normal" for n in range(1, 7)},
     },
     "user_mods": {
-        **{f"label_{n}": "" for n in range(1, 6)},
-        **{f"type_{n}":  "normal" for n in range(1, 6)},
+        **{f"label_{n}": "" for n in range(1, 11)},
+        **{f"type_{n}":  "normal" for n in range(1, 11)},
     },
     "rf_usr_btns": {
         **{f"label_{n}": "" for n in range(1, 12)},
@@ -208,7 +208,7 @@ type_6 = "normal"
 
 [user_mods]
 # label: max 4 characters; user-defined modulation button labels shown in the
-# mode row of the GUI. Fill slots in order: 1, 2, 3, 4, 5 (no skipping).
+# mode row of the GUI. Fill slots in order: 1, 2, ..., 10 (no skipping).
 # type: "normal" (acts like a regular mode button), "text" (splits the AF/
 #       audio box so a read-only text panel shows text sent by the server),
 #       or "text_input" (same split, but the text panel itself is split into
@@ -224,6 +224,16 @@ label_4 = ""
 type_4 = "normal"
 label_5 = ""
 type_5 = "normal"
+label_6 = ""
+type_6 = "normal"
+label_7 = ""
+type_7 = "normal"
+label_8 = ""
+type_8 = "normal"
+label_9 = ""
+type_9 = "normal"
+label_10 = ""
+type_10 = "normal"
 
 [rf_usr_btns]
 # RF user buttons: shown left of the band buttons in the GUI frequency area.
@@ -330,7 +340,7 @@ AF_BINS = 256           # AF spectrum / waterfall bins
 AF_RANGE = 3000.0       # Hz shown on the AF display
 UPDATE_HZ = 10.0        # data pushes per second
 NUM_USER_BUTTONS = 6    # number of user-defined buttons (N = 1..6)
-NUM_USER_MODS    = 5    # number of user-defined modulation buttons (N = 1..5)
+NUM_USER_MODS    = 10   # number of user-defined modulation buttons (N = 1..10)
 NUM_RF_USR_BTNS  = 11   # number of RF user buttons (N = 1..11, left of band buttons)
 IQ_FFT_SIZE = 4096      # FFT size used to turn --iq_wav samples into a spectrum
 

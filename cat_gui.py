@@ -2109,8 +2109,8 @@ class App:
             user_btn_state=[False]*6,
             rf_usr_btns=[{"label":"","type":"normal"} for _ in range(11)],
             rf_usr_btn_state=[False]*11,
-            user_mod_labels=["","","","",""],  # up to 5 user-defined modulation buttons
-            user_mod_types=["normal","normal","normal","normal","normal"],
+            user_mod_labels=[""]*10,  # up to 10 user-defined modulation buttons
+            user_mod_types=["normal"]*10,
             # BUG-12 fix: persist toolbar toggle selection so it survives
             # reconnects and scale-change rebuilds.
             toolbar_view_rf="Waterfall",
@@ -2314,20 +2314,20 @@ class App:
         self.mode_btns={}
         fs_mode=max(6,int(round(8*sc)))
         for m in MODES:
-            b=tk.Button(mode_row,text=m,width=4,
+            b=tk.Button(mode_row,text=m,width=5,
                         command=lambda mm=m:self._set_mode(mm),
                         bg=C["btn_gray"],fg=C["btn_sel_fg"],
                         activebackground=C["btn_sel"],
                         font=_gui_font(fs_mode),relief="flat",bd=1,
                         padx=max(1,int(round(2*sc))),pady=max(1,int(round(1*sc))))
-            b.pack(side="left",padx=max(1,int(round(1*sc)))); self.mode_btns[m]=b
+            b.pack(side="left",padx=max(1,int(round(1*sc))),fill="x",expand=True); self.mode_btns[m]=b
         # ── User-defined modulation buttons (labels from server, max 4 chars) ──
-        # 5 slots; only those with a non-empty label from the server are shown.
+        # 10 slots; only those with a non-empty label from the server are shown.
         # They behave as toggle buttons exclusive with the standard mode buttons.
         self.user_mod_btns={}
-        for _umi in range(5):
+        for _umi in range(10):
             _umidx=_umi+1
-            _umb=tk.Button(mode_row,text="",width=4,
+            _umb=tk.Button(mode_row,text="",width=5,
                            command=lambda i=_umi:None,  # updated in _refresh
                            bg=C["btn_gray"],fg=C["btn_sel_fg"],
                            activebackground=C["btn_sel"],
@@ -2335,11 +2335,7 @@ class App:
                            padx=max(1,int(round(2*sc))),pady=max(1,int(round(1*sc))))
             # Do not pack now — _refresh packs/forgets based on server labels
             self.user_mod_btns[_umidx]=_umb
-        tk.Button(mode_row,text="FreqMgr",bg=C["btn_gray"],fg=C["btn_sel_fg"],
-                  font=_gui_font(fs_mode),relief="flat",bd=1,
-                  padx=max(2,int(round(3*sc))),pady=max(1,int(round(1*sc))),
-                  command=lambda:self.net.send({"cmd":"ui_button","name":"FreqMgr"})
-                  ).pack(side="right",padx=max(1,int(round(2*sc))))
+
 
         # ── LO + Tune freq displays ───────────────────────────────────────────
         freq_box=tk.Frame(lp,bg=C["spec_bg"],bd=0)
@@ -3044,7 +3040,7 @@ class App:
                 try:
                     _umb.pack_info()  # already packed → skip
                 except tk.TclError:
-                    _umb.pack(side="left",padx=_px)
+                    _umb.pack(side="left",padx=_px,fill="x",expand=True)
             else:
                 _umb.pack_forget()
         # Apply/clear the AF-box text-panel split for the active mode (if any)
@@ -3368,7 +3364,7 @@ class App:
     def _active_text_mod(self):
         """If the currently selected mode (state['mode']) matches a
         user-defined modulation button whose type is 'text' or 'text_input',
-        return (idx, mtype) with idx in 1..5. Otherwise return (None, None).
+        return (idx, mtype) with idx in 1..10. Otherwise return (None, None).
         Derived directly from state so it stays correct across reconnects,
         server-initiated mode changes, and scale-change rebuilds — no
         separate "active index" needs to be tracked."""
