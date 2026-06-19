@@ -227,7 +227,7 @@ type_5 = "normal"
 
 [rf_usr_btns]
 # RF user buttons: shown left of the band buttons in the GUI frequency area.
-# label: max 5 characters; mode: "normal" (momentary) or "push" (toggle).
+# label: max 7 characters; mode: "normal" (momentary) or "push" (toggle).
 # Buttons with empty labels are hidden in the GUI.
 label_1 = ""
 mode_1 = "normal"
@@ -1541,7 +1541,7 @@ def _parse_args():
         ap.add_argument(f"--rf_usr_btn_{n}", metavar="LABEL",
                         default=argparse.SUPPRESS,
                         help=f"Label for RF user button {n} shown left of the band "
-                             f"buttons (max 5 characters). Button is hidden when empty.")
+                             f"buttons (max 7 characters). Button is hidden when empty.")
         ap.add_argument(f"--rf_usr_btn_mode_{n}", choices=["normal", "push"],
                         default=argparse.SUPPRESS,
                         help=f"Mode of RF user button {n}: 'normal' (momentary press) "
@@ -1607,8 +1607,8 @@ def _parse_args():
                      f"characters (got {len(label)!r}: {label!r})")
     for n in range(1, NUM_RF_USR_BTNS + 1):
         label = getattr(_raw, f"rf_usr_btn_{n}", "")
-        if len(label) > 5:
-            ap.error(f"--rf_usr_btn_{n}: label must be at most 5 "
+        if len(label) > 7:
+            ap.error(f"--rf_usr_btn_{n}: label must be at most 7 "
                      f"characters (got {len(label)!r}: {label!r})")
     # Each rf_usr_btn_mode_N requires a non-empty rf_usr_btn_N
     for n in range(1, NUM_RF_USR_BTNS + 1):

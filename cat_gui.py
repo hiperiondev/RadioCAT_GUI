@@ -2432,7 +2432,7 @@ class App:
         # No fixed width: button auto-sizes to its label + _bpx padding so any
         # label up to 5 chars fits without touching borders.
         rf_usr_col=tk.Frame(band_area,bg=C["spec_bg"])
-        rf_usr_col.pack(side="left",anchor="n",padx=(0,max(1,int(round(1*sc)))))
+        rf_usr_col.pack(side="left",anchor="n",padx=(0,max(4,int(round(6*sc)))))
         self._rf_usr_btns={}   # idx -> Button
         for _rui in range(11):
             _ruidx=_rui+1
@@ -3430,7 +3430,7 @@ class App:
         return {"label":"","type":"normal"}
 
     def _rf_usr_btn_label(self,idx):
-        return self._rf_usr_btn_cfg(idx).get("label","").strip()[:5]
+        return self._rf_usr_btn_cfg(idx).get("label","").strip()[:7]
 
     def _rf_usr_btn_state(self,idx):
         st=self.state.get("rf_usr_btn_state") or []
