@@ -35,6 +35,7 @@ _GUI_CONFIG_DEFAULTS = {
     "connection": {
         "host": "",
         "port": 0,          # 0 = not set; both host and port must be non-empty/non-zero
+        "autoconnect": False,  # if true, connect on startup and hide the host/port/connect row
     },
     "audio": {
         "mic":                       -1,   # -1 = system default
@@ -58,9 +59,11 @@ gui_font = ""         # path to TTF/OTF font for all other GUI text (empty = sys
 
 [connection]
 # Leave host empty and port 0 to show the GUI connection fields.
-# Both must be filled to enable auto-connect on startup.
+# Both must be filled, with autoconnect = true, to connect automatically
+# on startup (this also hides the host/port/connect row entirely).
 host = ""
 port = 0
+autoconnect = false
 
 [audio]
 # Device indices from --audio-list; -1 means use the system default.
@@ -129,7 +132,7 @@ def _load_gui_config(path):
 
 _GUI_CONFIG_KEY_ORDER = {
     "display": ["bg", "full_screen", "scale", "disable_scale", "freq_font", "gui_font"],
-    "connection": ["host", "port"],
+    "connection": ["host", "port", "autoconnect"],
     "audio": ["mic", "speaker", "disable_soundcard_select"],
 }
 _GUI_CONFIG_SECTION_ORDER = ["display", "connection", "audio"]
@@ -154,7 +157,8 @@ _GUI_CONFIG_KEY_COMMENTS = {
 _GUI_CONFIG_SECTION_COMMENTS = {
     "connection":
         "# Leave host empty and port 0 to show the GUI connection fields.\n"
-        "# Both must be filled to enable auto-connect on startup.",
+        "# Both must be filled, with autoconnect = true, to connect automatically\n"
+        "# on startup (this also hides the host/port/connect row entirely).",
     "audio":
         "# Device indices from --audio-list; -1 means use the system default.\n"
         "# Both mic and speaker must be set together (or both left at -1).",
@@ -272,6 +276,7 @@ def _parse_args():
     _def_host   = _conn.get("host", _D["connection"]["host"]) or None
     _raw_port   = _conn.get("port", _D["connection"]["port"])
     _def_port   = int(_raw_port) if _raw_port else None
+    _def_autoconnect = bool(_conn.get("autoconnect", _D["connection"]["autoconnect"]))
     _raw_mic    = _aud.get("mic",     _D["audio"]["mic"])
     _def_mic    = None if int(_raw_mic) == -1 else int(_raw_mic)
     _raw_spk    = _aud.get("speaker", _D["audio"]["speaker"])
@@ -301,6 +306,10 @@ def _parse_args():
                     help='Server hostname or IP to connect to (must be used together with --port)')
     ap.add_argument('--port', metavar='PORT', type=int, default=argparse.SUPPRESS,
                     help='Server port to connect to (must be used together with --host)')
+    ap.add_argument('--autoconnect', action='store_true', default=argparse.SUPPRESS,
+                    help='Connect to the server automatically on startup. Requires '
+                         'host and port to be set, either via --host/--port or in '
+                         'the config file. Hides the host/port/connect row in the GUI.')
     ap.add_argument('--audio-list', action='store_true', default=False,
                     help='List all audio input/output devices on this system, with the '
                          'same index numbers shown in the GUI Soundcard dialog, then exit. '
@@ -334,6 +343,9 @@ def _parse_args():
     _cli_port = hasattr(_raw, 'port')
     args.host = _raw.host if _cli_host else _def_host
     args.port = _raw.port if _cli_port else _def_port
+
+    _cli_autoconnect = hasattr(_raw, 'autoconnect')
+    args.autoconnect = _raw.autoconnect if _cli_autoconnect else _def_autoconnect
 
     _cli_mic = hasattr(_raw, 'audio_mic')
     _cli_spk = hasattr(_raw, 'audio_speaker')
@@ -373,6 +385,16 @@ def _parse_args():
         else:
             print(f"[config] ERROR: 'mic' and 'speaker' must both be set together in "
                   f"{_config_path}", file=sys.stderr)
+            sys.exit(1)
+    if args.autoconnect and (args.host is None or args.port is None):
+        if _cli_autoconnect:
+            ap.error('--autoconnect requires host and port to be set, either via '
+                      '--host/--port on the command line or in the [connection] '
+                      f'section of {_config_path}')
+        else:
+            print(f"[config] ERROR: 'autoconnect' is true in {_config_path} but "
+                  f"'host'/'port' are not both set (in the config file or via "
+                  f"--host/--port)", file=sys.stderr)
             sys.exit(1)
     return args
 
@@ -2234,6 +2256,12 @@ class App:
         self._refresh()
         self._clock()
         self.poll()
+        if _ARGS.autoconnect:
+            # Kick off the connection attempt once the window has finished
+            # building, reusing the normal connect/result flow so behavior
+            # (hello burst, auto-start, error handling) is identical to a
+            # manual click — there's just no button for the operator to click.
+            self.root.after(50, self._toggle_connect)
 
     # ──────────────────────────────────────────────────────────────────────────
     def _build(self):
@@ -2686,37 +2714,46 @@ class App:
 
         # ── Connect controls (host / port / connect / status dot) ────────────
         cr=tk.Frame(bot_l,bg=C["panel_bg"])
-        cr.pack(fill="x",anchor="w")
         # Determine if host/port were supplied via CLI flags
         _cli_host = _ARGS.host is not None
         # Always create the StringVars; pre-fill from flags if provided
         self.host_var=tk.StringVar(value=_ARGS.host if _cli_host else "127.0.0.1")
         self.port_var=tk.StringVar(value=str(_ARGS.port) if _cli_host else "50101")
-        if not _cli_host:
-            # Show editable host/port fields only when not supplied via CLI
-            tk.Label(cr,text="Host:",bg=C["panel_bg"],fg=C["text_dim"],
-                     font=_gui_font(fs_cr)).pack(side="left",padx=(0,max(1,int(round(2*sc)))))
-            tk.Entry(cr,textvariable=self.host_var,width=13,
-                     bg=C["btn_gray"],fg=C["text"],insertbackground=C["text"],
-                     relief="flat",font=_gui_font(fs_cr)
-                     ).pack(side="left",padx=(0,max(2,int(round(4*sc)))))
-            tk.Label(cr,text="Port:",bg=C["panel_bg"],fg=C["text_dim"],
-                     font=_gui_font(fs_cr)).pack(side="left",padx=(0,max(1,int(round(2*sc)))))
-            tk.Entry(cr,textvariable=self.port_var,width=6,
-                     bg=C["btn_gray"],fg=C["text"],insertbackground=C["text"],
-                     relief="flat",font=_gui_font(fs_cr)
-                     ).pack(side="left",padx=(0,max(2,int(round(4*sc)))))
-        self.conn_btn=tk.Button(cr,text="Connect",
-                                command=self._toggle_connect,
-                                bg="#0e2a10",fg=C["btn_grn_fg"],
-                                activebackground=C["btn_sel"],
-                                font=_gui_font(fs_cr,"bold"),relief="flat",bd=1,
-                                padx=max(4,int(round(6*sc))),pady=max(1,int(round(2*sc))))
-        self.conn_btn.pack(side="left",padx=max(1,int(round(1*sc))))
-        fs_dot=max(9,int(round(BASE['conn_dot_size']*sc)))
-        self.conn_status=tk.Label(cr,text="●",bg=C["panel_bg"],fg="#331111",
-                                  font=_gui_font(fs_dot))
-        self.conn_status.pack(side="left",padx=max(2,int(round(4*sc))))
+        if _ARGS.autoconnect:
+            # Autoconnect mode: the whole host/port/connect/status row is
+            # erased from the GUI (cr is never packed). self.conn_btn and
+            # self.conn_status still need to exist because _toggle_connect /
+            # _on_connect_result / _on_disconnected reference them, so they
+            # are created here but simply never packed/shown.
+            self.conn_btn=tk.Button(cr,text="Connect",command=self._toggle_connect)
+            self.conn_status=tk.Label(cr,text="●")
+        else:
+            cr.pack(fill="x",anchor="w")
+            if not _cli_host:
+                # Show editable host/port fields only when not supplied via CLI
+                tk.Label(cr,text="Host:",bg=C["panel_bg"],fg=C["text_dim"],
+                         font=_gui_font(fs_cr)).pack(side="left",padx=(0,max(1,int(round(2*sc)))))
+                tk.Entry(cr,textvariable=self.host_var,width=13,
+                         bg=C["btn_gray"],fg=C["text"],insertbackground=C["text"],
+                         relief="flat",font=_gui_font(fs_cr)
+                         ).pack(side="left",padx=(0,max(2,int(round(4*sc)))))
+                tk.Label(cr,text="Port:",bg=C["panel_bg"],fg=C["text_dim"],
+                         font=_gui_font(fs_cr)).pack(side="left",padx=(0,max(1,int(round(2*sc)))))
+                tk.Entry(cr,textvariable=self.port_var,width=6,
+                         bg=C["btn_gray"],fg=C["text"],insertbackground=C["text"],
+                         relief="flat",font=_gui_font(fs_cr)
+                         ).pack(side="left",padx=(0,max(2,int(round(4*sc)))))
+            self.conn_btn=tk.Button(cr,text="Connect",
+                                    command=self._toggle_connect,
+                                    bg="#0e2a10",fg=C["btn_grn_fg"],
+                                    activebackground=C["btn_sel"],
+                                    font=_gui_font(fs_cr,"bold"),relief="flat",bd=1,
+                                    padx=max(4,int(round(6*sc))),pady=max(1,int(round(2*sc))))
+            self.conn_btn.pack(side="left",padx=max(1,int(round(1*sc))))
+            fs_dot=max(9,int(round(BASE['conn_dot_size']*sc)))
+            self.conn_status=tk.Label(cr,text="●",bg=C["panel_bg"],fg="#331111",
+                                      font=_gui_font(fs_dot))
+            self.conn_status.pack(side="left",padx=max(2,int(round(4*sc))))
 
         # ── Date / time — own row at very bottom of box ───────────────────────
         self.clock_var=tk.StringVar(value="")

@@ -12,9 +12,11 @@ gui_font = ""  # path to TTF/OTF font for all other GUI text (empty = system def
 
 [connection]
 # Leave host empty and port 0 to show the GUI connection fields.
-# Both must be filled to enable auto-connect on startup.
-host = ""
-port = 0
+# Both must be filled, with autoconnect = true, to connect automatically
+# on startup (this also hides the host/port/connect row entirely).
+host = "127.0.0.1"
+port = 50101
+autoconnect = true
 
 [audio]
 # Device indices from --audio-list; -1 means use the system default.
