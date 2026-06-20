@@ -2211,8 +2211,8 @@ class App:
             agc_thresh=-100.0,
             zoom=1, sample_rate=192_000.0, running=False,
             ptt=False,
-            user_buttons=[{"label":"","type":"normal"} for _ in range(6)],
-            user_btn_state=[False]*6,
+            user_buttons=[{"label":"","type":"normal"} for _ in range(14)],
+            user_btn_state=[False]*14,
             rf_usr_btns=[{"label":"","type":"normal"} for _ in range(11)],
             rf_usr_btn_state=[False]*11,
             user_mod_labels=[""]*10,  # up to 10 user-defined modulation buttons
@@ -2645,28 +2645,35 @@ class App:
         r5=tk.Frame(lp,bg=C["panel_bg"])
         r5.pack(fill="x",padx=max(2,int(round(4*sc))),pady=max(1,int(round(1*sc))))
 
-        # ── User-defined buttons (1-3 on the AFC row, 4-6 on the ANotch row,
-        #    right-aligned). Labels/types come from the server; can be
-        #    "normal" (momentary press) or "push" (push-push/toggle). ──────
+        # ── User-defined buttons (1-7 on row r4, 8-14 on row r5). Labels/
+        #    types come from the server; can be "normal" (momentary press)
+        #    or "push" (push-push/toggle). Buttons use grid with equal
+        #    column weights so every button has the same static width and
+        #    the two rows together fully span the panel width. ───────────
         self.user_btns={}
-        for i in reversed(range(3)):
-            idx=i+1
+        _ubtn_px=max(1,int(round(1*sc)))
+        for col in range(7):
+            r4.grid_columnconfigure(col,weight=1,uniform="userbtn")
+        for col in range(7):
+            idx=col+1
             b=tk.Button(r4,text=self._user_btn_label(idx),
                         command=lambda idx=idx:self._user_btn_press(idx),
                         bg=C["btn_gray"],fg=C["btn_sel_fg"],
                         font=_gui_font(fs_dsp),relief="flat",bd=1,
-                        width=7,anchor="center",
-                        padx=max(3,int(round(5*sc))),pady=max(1,int(round(2*sc))))
-            b.pack(side="right",padx=max(1,int(round(1*sc)))); self.user_btns[idx]=b
-        for i in reversed(range(3)):
-            idx=i+4
+                        anchor="center",
+                        padx=max(2,int(round(2*sc))),pady=max(1,int(round(2*sc))))
+            b.grid(row=0,column=col,padx=_ubtn_px,sticky="ew"); self.user_btns[idx]=b
+        for col in range(7):
+            r5.grid_columnconfigure(col,weight=1,uniform="userbtn")
+        for col in range(7):
+            idx=col+8
             b=tk.Button(r5,text=self._user_btn_label(idx),
                         command=lambda idx=idx:self._user_btn_press(idx),
                         bg=C["btn_gray"],fg=C["btn_sel_fg"],
                         font=_gui_font(fs_dsp),relief="flat",bd=1,
-                        width=7,anchor="center",
-                        padx=max(3,int(round(5*sc))),pady=max(1,int(round(2*sc))))
-            b.pack(side="right",padx=max(1,int(round(1*sc)))); self.user_btns[idx]=b
+                        anchor="center",
+                        padx=max(2,int(round(2*sc))),pady=max(1,int(round(2*sc))))
+            b.grid(row=0,column=col,padx=_ubtn_px,sticky="ew"); self.user_btns[idx]=b
 
         # ── Date/time + connect controls (bottom of left panel) ──────────────
         bot_l=tk.Frame(lp,bg=C["panel_bg"])
@@ -3431,7 +3438,7 @@ class App:
         return None,None
 
     def _user_btn_cfg(self,idx):
-        """Return {"label":..., "type":...} for user button idx (1..6),
+        """Return {"label":..., "type":...} for user button idx (1..14),
         falling back to a default if the server hasn't provided one yet."""
         ub=self.state.get("user_buttons") or []
         if 1<=idx<=len(ub) and ub[idx-1]:
@@ -3456,9 +3463,9 @@ class App:
             new_on=not self._user_btn_state(idx)
             st=self.state.get("user_btn_state")
             if not st:
-                st=[False]*6
-            elif len(st)<6:
-                st=list(st)+[False]*(6-len(st))
+                st=[False]*14
+            elif len(st)<14:
+                st=list(st)+[False]*(14-len(st))
             st[idx-1]=new_on
             self.state["user_btn_state"]=st
             self.net.send({"cmd":"user_button","index":idx,"enabled":new_on})
