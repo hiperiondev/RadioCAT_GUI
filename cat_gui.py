@@ -2659,6 +2659,7 @@ class App:
             b=tk.Button(r4,text=self._user_btn_label(idx),
                         command=lambda idx=idx:self._user_btn_press(idx),
                         bg=C["btn_gray"],fg=C["btn_sel_fg"],
+                        disabledforeground=C["text_dim"],
                         font=_gui_font(fs_dsp),relief="flat",bd=1,
                         anchor="center",
                         padx=max(2,int(round(2*sc))),pady=max(1,int(round(2*sc))))
@@ -2670,6 +2671,7 @@ class App:
             b=tk.Button(r5,text=self._user_btn_label(idx),
                         command=lambda idx=idx:self._user_btn_press(idx),
                         bg=C["btn_gray"],fg=C["btn_sel_fg"],
+                        disabledforeground=C["text_dim"],
                         font=_gui_font(fs_dsp),relief="flat",bd=1,
                         anchor="center",
                         padx=max(2,int(round(2*sc))),pady=max(1,int(round(2*sc))))
@@ -3134,16 +3136,23 @@ class App:
         # Apply/clear the AF-box text-panel split for the active mode (if any)
         self._update_af_text_split()
         # User-defined buttons: refresh label and (for push-push type) the
-        # pressed/released highlight.
+        # pressed/released highlight. A button with no label configured on
+        # the server (empty string) is shown disabled/greyed-out and cannot
+        # be pressed.
         for idx,b in self.user_btns.items():
-            b.config(text=self._user_btn_label(idx))
+            label=self._user_btn_label(idx)
+            b.config(text=label)
+            if not label:
+                b.config(state="disabled",bg=C["panel_mid"],fg=C["text_dim"])
+                continue
             cfg=self._user_btn_cfg(idx)
             if cfg.get("type")=="push":
                 on=self._user_btn_state(idx)
-                b.config(bg=C["btn_sel"] if on else C["btn_gray"],
+                b.config(state="normal",
+                         bg=C["btn_sel"] if on else C["btn_gray"],
                          fg=C["btn_sel_fg"])
             else:
-                b.config(bg=C["btn_gray"],fg=C["btn_sel_fg"])
+                b.config(state="normal",bg=C["btn_gray"],fg=C["btn_sel_fg"])
         # RF user buttons: pack/unpack based on server label; update push highlight
         _sc=self._sc
         _px_rf=max(0,int(round(1*_sc)))
