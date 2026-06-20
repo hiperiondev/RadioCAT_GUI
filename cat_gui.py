@@ -2276,11 +2276,12 @@ class App:
         init_w=min(scaled('win_w',sc), screen_w)
         init_h=min(scaled('win_h',sc), screen_h)
         r.geometry(f"{init_w}x{init_h}")
-        r.minsize(scaled('min_w',sc), scaled('min_h',sc))
+        r.minsize(min(scaled('min_w',sc), screen_w), min(scaled('min_h',sc), screen_h))
 
         # ── top: RF waterfall + spectrum strip ────────────────────────────────
         top=tk.Frame(r,bg=C["win_bg"])
         top.pack(side="top",fill="both",expand=True)
+        self._top=top
 
         self.rf_wf=WFCanvas(top)
         self.rf_wf._app=self
@@ -2309,6 +2310,10 @@ class App:
         # Enforce minimum height so no GUI elements vanish
         self.root.after(100, self._update_minsize)
         self.root.after(120, self._sync_bot_height)
+
+        # ── Bind window resize so bottom panel is always fully visible ─────────
+        self._resize_after_id = None
+        self.root.bind("<Configure>", self._on_resize, add="+")
 
     # ── left control panel ────────────────────────────────────────────────────
     def _build_left(self,parent):
@@ -3051,27 +3056,54 @@ class App:
         self._scale_lbl.config(font=f)
         self._scale_plus_btn.config(font=f)
 
-    def _update_minsize(self):
-        """Compute minimum window size so no GUI element can disappear.
+    def _fit_top_heights(self):
+        """Compute the RF spectrum-strip / waterfall heights for the top of
+        the window, shrinking them if necessary so that the bottom control
+        panel — which holds the S-meter row down through the date/time row —
+        is ALWAYS fully visible on screen, no matter how short the display
+        is. The bottom panel's own height is never reduced; only the upper
+        waterfall/spectrum area (and, indirectly, the AF waterfall/spectrum
+        on the right, which simply fills whatever height _bot ends up with)
+        gives way first.
+        """
+        sc = self._sc
+        screen_h = self.root.winfo_screenheight()
+        # Leave a little headroom for window-manager chrome / taskbars.
+        avail_h  = max(240, screen_h - 90)
+        tb_h     = max(16, int(round(BASE['toolbar_h'] * sc)))
+        bot_h    = self._bot.winfo_reqheight()
 
-        The bottom panel (_bot) has a fixed natural height determined by its
-        children. We measure it after the layout settles, add the toolbar and
-        spec strip heights, and apply that as the window's minimum height so
-        the waterfall (which uses expand=True) absorbs any spare space but
-        never pushes the control rows off-screen.
+        spec_h_full = scaled('spec_h', sc)
+        wf_min_full = max(40, int(round(60 * sc)))
+        top_budget  = avail_h - tb_h - bot_h - 4
+
+        min_wf   = 24   # absolute floors — small but still usable/visible
+        min_spec = 24
+        if top_budget >= spec_h_full + wf_min_full:
+            spec_h, wf_h = spec_h_full, wf_min_full
+        else:
+            top_budget = max(top_budget, min_wf + min_spec)
+            extra = top_budget - min_wf - min_spec
+            # Spectrum strip degrades first (it's secondary to the
+            # waterfall); waterfall keeps the larger share of any room.
+            spec_h = min_spec + int(extra * 0.3)
+            wf_h   = top_budget - spec_h
+        return spec_h, wf_h, tb_h, bot_h
+
+    def _update_minsize(self):
+        """Compute minimum window size so the bottom control panel is always
+        fully visible. The waterfall/spectrum top area is allowed to shrink
+        freely, so min_h only includes the fixed-height content (toolbar +
+        bottom panel). This ensures vertical resize is never blocked.
         """
         self.root.update_idletasks()
         sc = self._sc
-        # Fixed-height regions below the waterfall
-        spec_h   = scaled('spec_h', sc)
-        tb_h     = max(16, int(round(BASE['toolbar_h'] * sc)))
-        bot_h    = self._bot.winfo_reqheight()
+        spec_h, wf_h, tb_h, bot_h = self._fit_top_heights()
         bot_w    = self._bot.winfo_reqwidth()
-        # Minimum waterfall height (keep it visible but can be small)
-        wf_min   = max(40, int(round(60 * sc)))
-        min_h    = wf_min + spec_h + tb_h + bot_h + 4
+        # min_h = only the parts that must always be visible
+        min_h    = tb_h + bot_h + 4
         min_w    = max(scaled('min_w', sc), bot_w)
-        self.root.minsize(min_w, min_h)
+        self.root.minsize(min_w, max(60, min_h))
         return min_w, min_h
 
     def _sync_bot_height(self):
@@ -3101,6 +3133,81 @@ class App:
             self._bot.pack_propagate(False)
             self._bot.config(height=total_h)
             self._update_minsize()
+            self._apply_top_heights()
+
+    def _on_resize(self, event=None):
+        """Debounced handler for window <Configure> events.
+
+        Fires whenever the window is resized (including maximise/restore).
+        Schedules _apply_top_heights() 80 ms after the last resize event so
+        that repeated rapid events collapse into a single layout pass rather
+        than flooding the Tk event queue.
+        """
+        # Only react to root-window resize events, not child-widget configures.
+        if event is not None and event.widget is not self.root:
+            return
+        if self._resize_after_id is not None:
+            try:
+                self.root.after_cancel(self._resize_after_id)
+            except Exception:
+                pass
+        self._resize_after_id = self.root.after(80, self._apply_top_heights)
+
+    def _apply_top_heights(self):
+        """Shrink the RF waterfall/spectrum so the bottom control panel is
+        always fully visible inside the window, no matter the current window
+        height.  Called both on first build (via _sync_bot_height) and on
+        every window resize via the debounced _on_resize handler.
+
+        Algorithm:
+          1. Measure the natural height of _bot — fixed content, never clipped.
+          2. Measure the toolbar strip height (also fixed).
+          3. Whatever height remains is split between the waterfall (expand,
+             gets the lion's share) and the RF spectrum strip (fixed, shrinks first).
+          4. Apply heights by configuring _spec_fr; the waterfall canvas keeps
+             expand=True so it fills any remaining slack automatically.
+
+        minsize is set to ONLY the fixed content (bot + toolbar) so the user
+        can freely drag the window smaller — the top area simply vanishes
+        rather than blocking the resize.
+        """
+        try:
+            self.root.update_idletasks()
+            win_h   = self.root.winfo_height()
+            bot_h   = self._bot.winfo_reqheight()
+            tb_h    = max(16, int(round(BASE['toolbar_h'] * self._sc)))
+            sc      = self._sc
+
+            # Available pixels for the entire top area (waterfall + spec strip)
+            avail_top = win_h - bot_h - tb_h - 4
+            if avail_top < 0:
+                avail_top = 0
+
+            spec_h_full = scaled('spec_h', sc)
+            min_spec    = 0   # spec strip can disappear entirely
+            min_wf      = 0   # waterfall can disappear entirely
+
+            if avail_top >= spec_h_full:
+                spec_h = spec_h_full
+            else:
+                # Spec strip shrinks first; waterfall gets whatever is left
+                spec_h = max(min_spec, min(avail_top, spec_h_full))
+                # If there is truly no room, spec goes to zero
+                if avail_top <= 0:
+                    spec_h = 0
+
+            if self._spec_fr.winfo_reqheight() != max(1, spec_h):
+                self._spec_fr.config(height=max(1, spec_h))
+
+            # Minimum window height = just enough to show the bottom panel +
+            # toolbar. The top waterfall/spectrum area is allowed to shrink to
+            # nothing, so we do NOT add any waterfall floor to min_h.
+            min_h  = bot_h + tb_h + 4
+            bot_w  = self._bot.winfo_reqwidth()
+            min_w  = max(scaled('min_w', sc), bot_w)
+            self.root.minsize(min_w, max(60, min_h))
+        except Exception:
+            import traceback; traceback.print_exc()
 
     def _change_scale(self,delta):
         """Rebuild the GUI at the new scale factor.
@@ -3184,6 +3291,7 @@ class App:
         # widget reflow slightly changed the natural sizes.
         self.root.after(100, self._update_minsize)
         self.root.after(120, self._sync_bot_height)
+        self.root.after(140, self._apply_top_heights)
 
     # ── control logic ──────────────────────────────────────────────────────────
     def _refresh(self):
