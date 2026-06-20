@@ -2206,12 +2206,10 @@ class App:
         self.state=dict(
             lo_freq=28_495_000, lo_b_freq=28_495_000, tune_freq=28_505_000,
             filter_lo=100, filter_hi=600,
-            agc="Med", mode="USB",
+            mode="USB",
             rf_gain=20.0, volume=80.0, squelch=-130.0,
             agc_thresh=-100.0,
             zoom=1, sample_rate=192_000.0, running=False,
-            nr=False, nbrf=False, nbif=False, afc=False,
-            mute=False, notch=False, anotch=False,
             ptt=False,
             user_buttons=[{"label":"","type":"normal"} for _ in range(6)],
             user_btn_state=[False]*6,
@@ -2636,30 +2634,16 @@ class App:
         self.start_btn=_fbtn(r3,"Start",sc=sc,command=self._toggle_run)
         self.start_btn.pack(side="left",padx=max(1,int(round(1*sc))),fill="x",expand=True)
 
-        # ── NR / NB RF / NB IF / AFC ──────────────────────────────────────────
+        # ── User-button rows (NR/NB RF/NB IF/AFC/Mute/AGC Med/Notch/ANotch
+        #    removed — these frames now only hold the user-defined buttons
+        #    below). ──────────────────────────────────────────────────────
         r4=tk.Frame(lp,bg=C["panel_bg"])
         r4.pack(fill="x",padx=max(2,int(round(4*sc))),
                 pady=(max(2,int(round(4*sc))),max(1,int(round(1*sc)))))
-        self.dsp_btns={}
         fs_dsp=max(6,int(round(8*sc)))
-        for t,k in [("NR","nr"),("NB RF","nbrf"),("NB IF","nbif"),("AFC","afc")]:
-            b=tk.Button(r4,text=t,command=lambda k=k:self._toggle(k),
-                        bg=C["btn_gray"],fg=C["btn_sel_fg"],
-                        font=_gui_font(fs_dsp),relief="flat",bd=1,
-                        padx=max(3,int(round(5*sc))),pady=max(1,int(round(2*sc))))
-            b.pack(side="left",padx=max(1,int(round(1*sc)))); self.dsp_btns[k]=b
 
-        # ── Mute / AGC Med / Notch / ANotch ──────────────────────────────────
         r5=tk.Frame(lp,bg=C["panel_bg"])
         r5.pack(fill="x",padx=max(2,int(round(4*sc))),pady=max(1,int(round(1*sc))))
-        self.agc_btns={}
-        for t,k in [("Mute","mute"),("AGC Med","agcmed"),("Notch","notch"),("ANotch","anotch")]:
-            b=tk.Button(r5,text=t,
-                        command=lambda k=k,t=t:self._agc_tog(k,t),
-                        bg=C["btn_gray"],fg=C["btn_sel_fg"],
-                        font=_gui_font(fs_dsp),relief="flat",bd=1,
-                        padx=max(3,int(round(5*sc))),pady=max(1,int(round(2*sc))))
-            b.pack(side="left",padx=max(1,int(round(1*sc)))); self.agc_btns[k]=b
 
         # ── User-defined buttons (1-3 on the AFC row, 4-6 on the ANotch row,
         #    right-aligned). Labels/types come from the server; can be
@@ -3142,14 +3126,6 @@ class App:
                 _umb.pack_forget()
         # Apply/clear the AF-box text-panel split for the active mode (if any)
         self._update_af_text_split()
-        for k,b in self.dsp_btns.items():
-            on=self.state.get(k,False)
-            b.config(bg=C["btn_sel"] if on else C["btn_gray"],
-                     fg=C["btn_sel_fg"])
-        for k,b in self.agc_btns.items():
-            on=(self.state["agc"]=="Med") if k=="agcmed" else self.state.get(k,False)
-            b.config(bg=C["btn_sel"] if on else C["btn_gray"],
-                     fg=C["btn_sel_fg"])
         # User-defined buttons: refresh label and (for push-push type) the
         # pressed/released highlight.
         for idx,b in self.user_btns.items():
@@ -3433,25 +3409,6 @@ class App:
         self.state["mode"]=label
         self._refresh()
         self.net.send({"cmd":"set_mode","mode":label})
-
-    def _toggle(self,k):
-        self.state[k]=not self.state.get(k,False); self._refresh()
-        cmd={"nr":"set_nr","nbrf":"set_nbrf","nbif":"set_nbif","afc":"set_afc"}.get(k)
-        if cmd:
-            self.net.send({"cmd":cmd,"enabled":self.state[k]})
-
-    def _agc_tog(self,k,t):
-        if k=="agcmed":
-            self.state["agc"]="Med" if self.state["agc"]!="Med" else "Off"
-            self.net.send({"cmd":"set_agc","mode":self.state["agc"]})
-        elif k in self.state:
-            self.state[k]=not self.state[k]
-            cmd={"mute":"set_mute","notch":"set_notch","anotch":"set_anf"}.get(k)
-            if cmd:
-                self.net.send({"cmd":cmd,"enabled":self.state[k]})
-        else:
-            logging.warning("_agc_tog: unknown key %r ignored", k)
-        self._refresh()
 
     # ── user-defined buttons (server-configured, indices 1..6) ─────────────
     def _active_text_mod(self):
