@@ -921,6 +921,7 @@ class RadioState:
         self.tune_freq = 14_205_000.0
         self.mute = False
         self.ptt = False
+        self.split = False
         self.ptt_client_addr = None   # (ip, port) of the GUI's UDP endpoint
         self.running = False
         self.lo_active = "A"
@@ -1009,6 +1010,7 @@ class RadioState:
                 "tune_freq": self.tune_freq,
                 "mute": self.mute,
                 "ptt": self.ptt,
+                "split": self.split,
                 "running": self.running,
                 "lo_active": self.lo_active,
                 "lo_b_freq": self.lo_b_freq,
@@ -1064,6 +1066,8 @@ class RadioState:
                 self.mute = bool(cmd.get("enabled", self.mute))
             elif c == "set_ptt":
                 self.ptt = bool(cmd.get("enabled", self.ptt))
+            elif c == "set_split":
+                self.split = bool(cmd.get("enabled", self.split))
             elif c == "set_zoom":
                 self.zoom = max(1, int(cmd.get("value", self.zoom)))
             elif c == "start":

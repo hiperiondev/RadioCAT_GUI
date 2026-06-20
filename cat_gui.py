@@ -2243,6 +2243,7 @@ class App:
             # reconnects and scale-change rebuilds.
             toolbar_view_rf="Waterfall",
             toolbar_view_af="Waterfall",
+            split=False,
         )
         self._sup=False
         # True only when the operator explicitly pressed Stop — used by
@@ -2530,10 +2531,20 @@ class App:
         self.lo_disp.pack(side="left",fill="x",expand=True,padx=max(1,int(round(2*sc))),pady=max(1,int(round(2*sc))))
         self.lo_disp.set_value(self.state["lo_freq"],notify=False)
 
+        # "TX" label shown right of LO A only while SPLIT is enabled.
+        # Packed permanently with a fixed width so its presence/absence
+        # never changes the space available to the FreqDisp digits — only
+        # the text (and thus visibility) toggles in _refresh_split_ui().
+        fs_split_lbl=max(7,int(round(BASE['freq_label_size']*sc)))
+        self._split_tx_lbl=tk.Label(lo_row,text="",bg=C["spec_bg"],fg=C["btn_red_fg"],
+                                     font=_gui_font(fs_split_lbl,"bold"),
+                                     width=2,anchor="center")
+        self._split_tx_lbl.pack(side="right",padx=max(2,int(round(4*sc))))
+
         # ── Band buttons column — top-aligned to LO A row ─────────────────────
         # Two sub-columns: left = RF user buttons (col=1), right = band buttons (col=2)
         band_area=tk.Frame(freq_box,bg=C["spec_bg"])
-        band_area.grid(row=0,column=1,rowspan=3,sticky="n",
+        band_area.grid(row=0,column=1,rowspan=4,sticky="n",
                        padx=max(2,int(round(3*sc))),
                        pady=(max(1,int(round(2*sc))),0))
         fs_band=max(6,int(round(7*sc)))
@@ -2583,8 +2594,22 @@ class App:
             b.pack(fill="x",padx=0,pady=(0,max(0,int(round(1*sc)))))
             self._band_btns[bname]=b
 
+        # ── SPLIT toggle — sits between LO A and LO B rows ─────────────────────
+        split_row=tk.Frame(freq_box,bg=C["spec_bg"])
+        split_row.grid(row=1,column=0,sticky="w",
+                       padx=max(1,int(round(2*sc))),
+                       pady=(0,max(0,int(round(1*sc)))))
+        fs_split=max(6,int(round(7*sc)))
+        self._split_btn=tk.Button(split_row,text="SPLIT",anchor="center",
+                       bg=C["btn_gray"],fg=C["btn_sel_fg"],
+                       activebackground=C["btn_sel"],activeforeground=C["btn_sel_fg"],
+                       font=_gui_font(fs_split,"bold"),relief="flat",bd=0,highlightthickness=0,
+                       padx=max(4,int(round(6*sc))),pady=max(1,int(round(1*sc))),
+                       command=lambda:self._toggle_split())
+        self._split_btn.pack(side="left")
+
         lo_b_row=tk.Frame(freq_box,bg=C["spec_bg"])
-        lo_b_row.grid(row=1,column=0,sticky="ew")
+        lo_b_row.grid(row=2,column=0,sticky="ew")
         self.lo_b_disp=FreqDisp(lo_b_row,self,label="LO B",
                                 on_change=self.on_lo_b_changed,
                                 lo_select_cmd=lambda:_select_lo("B"))
@@ -2593,15 +2618,32 @@ class App:
         self.lo_b_disp.pack(side="left",fill="x",expand=True,padx=max(1,int(round(2*sc))),pady=max(1,int(round(2*sc))))
         self.lo_b_disp.set_value(self.state["lo_b_freq"],notify=False)
 
+        # "RX" label shown right of LO B only while SPLIT is enabled.
+        # Same fixed-width approach as the TX label (see above) so toggling
+        # SPLIT never shifts the LO B frequency digits.
+        self._split_rx_lbl=tk.Label(lo_b_row,text="",bg=C["spec_bg"],fg=C["btn_grn_fg"],
+                                     font=_gui_font(fs_split_lbl,"bold"),
+                                     width=2,anchor="center")
+        self._split_rx_lbl.pack(side="right",padx=max(2,int(round(4*sc))))
+
         # Apply initial LO button colours
         _refresh_lo_btns()
+        # Apply initial SPLIT button/label state
+        self._refresh_split_ui()
 
         tune_row=tk.Frame(freq_box,bg=C["spec_bg"])
-        tune_row.grid(row=2,column=0,sticky="ew")
+        tune_row.grid(row=3,column=0,sticky="ew")
         self.tune_disp=FreqDisp(tune_row,self,label="Tune",on_change=self.on_tune_changed)
         self.tune_disp._label_text="Tune"
         self.tune_disp.pack(side="left",fill="x",expand=True,padx=max(1,int(round(2*sc))),pady=max(1,int(round(2*sc))))
         self.tune_disp.set_value(self.state["tune_freq"],notify=False)
+
+        # Invisible spacer matching the fixed-width TX/RX label slot on the
+        # LO A / LO B rows, so the Tune row's digits line up in the same
+        # column regardless of whether SPLIT is on.
+        tk.Label(tune_row,text="",bg=C["spec_bg"],
+                 font=_gui_font(fs_split_lbl,"bold"),
+                 width=2,anchor="center").pack(side="right",padx=max(2,int(round(4*sc))))
 
         # ── Volume / AGC Thresh sliders ───────────────────────────────────────
         sv=tk.Frame(lp,bg=C["panel_bg"])
@@ -3219,6 +3261,8 @@ class App:
         # PTT button
         if hasattr(self, '_draw_ptt_btn'):
             self._draw_ptt_btn(bool(self.state.get("ptt", False)), self._ptt_enabled)
+        # SPLIT toggle / TX-RX labels
+        self._refresh_split_ui()
 
 
     # ── Soundcard device selection dialog ─────────────────────────────────────
@@ -3518,6 +3562,40 @@ class App:
         else:
             self.net.send({"cmd":"user_button","index":idx})
         self._refresh()
+
+    # ── SPLIT toggle (between LO A and LO B) ────────────────────────────────
+    def _toggle_split(self):
+        new_on=not bool(self.state.get("split",False))
+        self.state["split"]=new_on
+        self.net.send({"cmd":"set_split","enabled":new_on})
+        self._refresh_split_ui()
+
+    def _refresh_split_ui(self):
+        on=bool(self.state.get("split",False))
+        if hasattr(self,'_split_btn'):
+            self._split_btn.config(bg=C["btn_sel"] if on else C["btn_gray"],
+                                    fg=C["btn_sel_fg"])
+        # Toggle label TEXT only (never pack/unpack) — the labels occupy a
+        # fixed-width slot at all times so showing/hiding TX/RX never shifts
+        # the LO A / LO B frequency digits.
+        if hasattr(self,'_split_tx_lbl'):
+            self._split_tx_lbl.config(text="TX" if on else "")
+        if hasattr(self,'_split_rx_lbl'):
+            self._split_rx_lbl.config(text="RX" if on else "")
+        # LO A / LO B selector buttons are disabled while SPLIT is enabled
+        # (the active LO can't be changed mid-split).
+        for disp in (getattr(self,'_lo_a_disp',None), getattr(self,'_lo_b_disp',None)):
+            btn=getattr(disp,'_row_lbl',None) if disp is not None else None
+            if btn is None:
+                continue
+            if on:
+                btn.config(state="disabled",bg=C["btn_gray"],fg=C["text_dim"],
+                           disabledforeground=C["text_dim"])
+            else:
+                btn.config(state="normal")
+        if not on and hasattr(self,'_refresh_lo_btns'):
+            # Restore the normal active/inactive LO highlight colours.
+            self._refresh_lo_btns()
 
     # ── RF user buttons (server-configured, indices 1..11, left of band btns) ─
     def _rf_usr_btn_cfg(self,idx):
