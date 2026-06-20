@@ -654,7 +654,6 @@ C = dict(
 )
 
 
-MODES    = ["AM","FM","LSB","USB","CW"]
 NUM_BINS = 900
 AF_BINS  = 600
 
@@ -2420,20 +2419,13 @@ class App:
         mode_row=tk.Frame(lp,bg=C["panel_bg"])
         mode_row.pack(fill="x",padx=max(2,int(round(4*sc))),
                       pady=(max(1,int(round(2*sc))),max(1,int(round(1*sc)))))
-        self.mode_btns={}
-        fs_mode=max(6,int(round(8*sc)))
-        for m in MODES:
-            b=tk.Button(mode_row,text=m,width=5,
-                        command=lambda mm=m:self._set_mode(mm),
-                        bg=C["btn_gray"],fg=C["btn_sel_fg"],
-                        activebackground=C["btn_sel"],
-                        font=_gui_font(fs_mode),relief="flat",bd=1,
-                        padx=max(1,int(round(2*sc))),pady=max(1,int(round(1*sc))))
-            b.pack(side="left",padx=max(1,int(round(1*sc))),fill="x",expand=True); self.mode_btns[m]=b
-        # ── User-defined modulation buttons (labels from server, max 4 chars) ──
+        # ── Modulation buttons (fully server-configured, max 4 chars) ──────────
         # 10 slots; only those with a non-empty label from the server are shown.
-        # They behave as toggle buttons exclusive with the standard mode buttons.
-        self.user_mod_btns={}
+        # No mode name, label, or type is hardcoded in the GUI — everything
+        # (label + type) is supplied by the server via user_mod_labels /
+        # user_mod_types and may be reconfigured at any time.
+        fs_mode=max(6,int(round(8*sc)))
+        self.mode_btns={}
         for _umi in range(10):
             _umidx=_umi+1
             _umb=tk.Button(mode_row,text="",width=5,
@@ -2443,7 +2435,7 @@ class App:
                            font=_gui_font(fs_mode),relief="flat",bd=1,
                            padx=max(1,int(round(2*sc))),pady=max(1,int(round(1*sc))))
             # Do not pack now — _refresh packs/forgets based on server labels
-            self.user_mod_btns[_umidx]=_umb
+            self.mode_btns[_umidx]=_umb
 
 
         # ── LO + Tune freq displays ───────────────────────────────────────────
@@ -3127,23 +3119,19 @@ class App:
 
     # ── control logic ──────────────────────────────────────────────────────────
     def _refresh(self):
-        for m,b in self.mode_btns.items():
-            if m==self.state["mode"]:
-                b.config(bg=C["btn_sel"],fg=C["btn_sel_fg"])
-            else:
-                b.config(bg=C["btn_gray"],fg=C["btn_sel_fg"])
-        # ── User-defined modulation buttons ───────────────────────────────────
-        # Pack/unpack based on whether the server has provided a label.
-        # Exclusive with standard mode buttons: selecting one deselects all
-        # others (including standard modes) because they all share state["mode"].
+        # ── Modulation buttons ──────────────────────────────────────────────
+        # Pack/unpack based on whether the server has provided a label for
+        # that slot. Label, type, and selection state all come from the
+        # server (user_mod_labels / user_mod_types / state["mode"]) — no
+        # mode name is hardcoded in the GUI.
         _uml=self.state.get("user_mod_labels") or []
         _sc=self._sc
         _px=max(1,int(round(1*_sc)))
-        for _umidx,_umb in self.user_mod_btns.items():
+        for _umidx,_umb in self.mode_btns.items():
             _lbl=((_uml[_umidx-1].strip() if _umidx-1<len(_uml) else ""))[:4]
             if _lbl:
                 _umb.config(text=_lbl,
-                            command=lambda lbl=_lbl,i=_umidx:self._set_user_mod(lbl,i),
+                            command=lambda lbl=_lbl,i=_umidx:self._set_mode(lbl,i),
                             bg=C["btn_sel"] if self.state["mode"]==_lbl else C["btn_gray"],
                             fg=C["btn_sel_fg"])
                 try:
@@ -3436,16 +3424,12 @@ class App:
         if reason:
             messagebox.showerror("Disconnected", reason, parent=self.root)
 
-    def _set_mode(self,m):
-        self.state["mode"]=m
-        defs={"LSB":(-2800,-100),"USB":(100,2800),"AM":(-4500,4500),
-              "FM":(-8000,8000),"CW":(300,700)}
-        lo,hi=defs.get(m,(self.state["filter_lo"],self.state["filter_hi"]))
-        self.state["filter_lo"]=lo; self.state["filter_hi"]=hi
-        self._refresh(); self.net.send({"cmd":"set_mode","mode":m})
-
-    def _set_user_mod(self,label,idx=None):
-        """Select a user-defined modulation mode (exclusive with all other modes)."""
+    def _set_mode(self,label,idx=None):
+        """Select a modulation mode (exclusive across all 10 server-defined
+        slots). Label/type come entirely from the server; the GUI holds no
+        per-mode defaults (e.g. filter passband), so filter_lo/filter_hi are
+        left as-is — the server is free to push its own filter defaults for
+        the new mode via the next state update."""
         self.state["mode"]=label
         self._refresh()
         self.net.send({"cmd":"set_mode","mode":label})
