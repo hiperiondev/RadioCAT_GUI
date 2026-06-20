@@ -2731,8 +2731,11 @@ class App:
         r1=tk.Frame(lp,bg=C["panel_bg"])
         r1.pack(fill="x",padx=max(2,int(round(4*sc))),pady=(max(1,int(round(2*sc))),max(1,int(round(1*sc)))))
         for t in ["Device","Bandwidth","Options"]:
-            _fbtn(r1,t,sc=sc,
-                  command=lambda t=t:self.net.send({"cmd":"ui_button","name":t})
+            if t == "Device":
+                _dcmd = self._request_device_list
+            else:
+                _dcmd = lambda t=t: self.net.send({"cmd":"ui_button","name":t})
+            _fbtn(r1,t,sc=sc,command=_dcmd
                   ).pack(side="left",padx=max(1,int(round(1*sc))),fill="x",expand=True)
         if not _ARGS.disable_soundcard_select:
             _fbtn(r1,"Soundcard",sc=sc,
@@ -3494,6 +3497,82 @@ class App:
         self._refresh_split_ui()
 
 
+    # ── Device selection dialog (populated from server) ───────────────────────
+    def _request_device_list(self):
+        """Send get_devices to the server; reply opens the Device dialog."""
+        if not self.net.connected:
+            messagebox.showinfo("Device", "Not connected to server.", parent=self.root)
+            return
+        self.net.send({"cmd": "get_devices"})
+
+    def _open_device_dialog(self, devices):
+        """Open a modal window listing up to 20 server-provided device profiles.
+        Clicking a device sends select_device to the server, which reloads its
+        configuration from the associated TOML file and tells the GUI to resync."""
+        sc  = self._sc
+        fs  = max(7, int(round(8 * sc)))
+        fs_h= max(8, int(round(9 * sc)))
+        pad = max(4, int(round(6 * sc)))
+
+        top = tk.Toplevel(self.root)
+        top.title("Select Device")
+        top.configure(bg=C["panel_bg"])
+        top.transient(self.root)
+        top.grab_set()
+        top.resizable(False, False)
+
+        tk.Label(top, text="Select a device:", bg=C["panel_bg"], fg=C["btn_grn_fg"],
+                 font=_gui_font(fs_h, "bold")).pack(padx=pad, pady=(pad, 2), anchor="w")
+
+        if not devices:
+            tk.Label(top, text="No devices configured on server.",
+                     bg=C["panel_bg"], fg=C["text_dim"],
+                     font=_gui_font(fs)).pack(padx=pad, pady=(2, pad))
+            tk.Button(top, text="Close", command=top.destroy,
+                      bg=C["btn_gray"], fg=C["btn_sel_fg"],
+                      font=_gui_font(fs), relief="flat", bd=1,
+                      padx=max(6, int(round(8*sc)))
+                      ).pack(pady=(0, pad))
+        else:
+            devices = devices[:20]   # hard cap at 20
+            lst_fr = tk.Frame(top, bg=C["panel_bg"])
+            lst_fr.pack(fill="both", expand=True,
+                        padx=pad, pady=(2, pad))
+
+            def _select(idx):
+                top.destroy()
+                self.net.send({"cmd": "select_device", "index": idx})
+
+            for dev in devices:
+                didx  = dev.get("index", 0)
+                label = dev.get("label", f"Device {didx}")
+                btn = tk.Button(
+                    lst_fr, text=label, anchor="w",
+                    bg=C["btn_gray"], fg=C["btn_sel_fg"],
+                    activebackground=C["btn_sel"], activeforeground=C["btn_sel_fg"],
+                    font=_gui_font(fs), relief="flat", bd=1,
+                    padx=max(6, int(round(8*sc))),
+                    pady=max(1, int(round(2*sc))),
+                    command=lambda i=didx: _select(i))
+                btn.pack(fill="x", pady=(0, max(1, int(round(1*sc)))))
+
+            sep_line = tk.Frame(lst_fr, bg=C["sep"],
+                                height=max(1, int(round(1*sc))))
+            sep_line.pack(fill="x", pady=(max(2, int(round(3*sc))), 0))
+            tk.Button(lst_fr, text="Cancel", command=top.destroy,
+                      bg=C["btn_gray"], fg=C["btn_red_fg"],
+                      font=_gui_font(fs), relief="flat", bd=1,
+                      padx=max(6, int(round(8*sc))),
+                      pady=max(1, int(round(2*sc)))
+                      ).pack(fill="x", pady=(max(2, int(round(3*sc))), 0))
+
+        top.update_idletasks()
+        rw = self.root.winfo_x() + self.root.winfo_width()  // 2
+        rh = self.root.winfo_y() + self.root.winfo_height() // 2
+        tw = top.winfo_reqwidth()
+        th = top.winfo_reqheight()
+        top.geometry(f"+{rw - tw // 2}+{rh - th // 2}")
+
     # ── Soundcard device selection dialog ─────────────────────────────────────
     def _open_soundcard_dialog(self):
         """Open a modal window listing all PyAudio devices.
@@ -4046,6 +4125,33 @@ class App:
             text=msg.get("text","")
             if idx is not None and getattr(self,"_text_pane_idx",None)==idx and text:
                 self._append_text_rx(text)
+        elif t == "device_list":
+            # Server replied to get_devices — open the selection popup on the
+            # GUI thread (we are already on the GUI thread inside poll/_handle).
+            self._open_device_dialog(msg.get("devices", []))
+        elif t == "reload_state":
+            # Server has reloaded its configuration from a device TOML file.
+            # State was already merged via the preceding resp:ok; now resync
+            # every GUI widget from self.state, suppressing round-trip sends
+            # so we don't echo the server's own values back to it.
+            self._sup = True
+            try:
+                if hasattr(self, 'lo_disp'):
+                    self.lo_disp.set_value(
+                        int(self.state.get("lo_freq", 0)), notify=False)
+                if hasattr(self, 'lo_b_disp'):
+                    self.lo_b_disp.set_value(
+                        int(self.state.get("lo_b_freq", 0)), notify=False)
+                if hasattr(self, 'tune_disp'):
+                    self.tune_disp.set_value(
+                        int(self.state.get("tune_freq", 0)), notify=False)
+                if hasattr(self, 'vol_var'):
+                    self.vol_var.set(self.state.get("volume", 80.0))
+                if hasattr(self, 'agct_var'):
+                    self.agct_var.set(self.state.get("agc_thresh", -100.0))
+            finally:
+                self._sup = False
+            self._refresh()
         elif "state" in msg:
             incoming = msg["state"]
             # PTT is owned by the GUI button — never let the server's reflected

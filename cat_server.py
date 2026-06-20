@@ -176,6 +176,10 @@ _SERVER_CONFIG_DEFAULTS = {
         **{f"label_{n}": "" for n in range(1, 12)},
         **{f"mode_{n}":  "normal" for n in range(1, 12)},
     },
+    "devices": {
+        **{f"label_{n}":  "" for n in range(1, 21)},
+        **{f"config_{n}": "" for n in range(1, 21)},
+    },
 }
 
 _SERVER_CONFIG_TEMPLATE = """\
@@ -277,6 +281,51 @@ label_10 = ""
 mode_10 = "normal"
 label_11 = ""
 mode_11 = "normal"
+
+[devices]
+# Up to 20 SDR device profiles. Each profile has a display label (shown in the
+# GUI Device list) and a TOML config file to reload when that device is
+# selected. Devices with empty labels are hidden. Fill slots in order: 1, 2, ...
+label_1 = ""
+config_1 = ""
+label_2 = ""
+config_2 = ""
+label_3 = ""
+config_3 = ""
+label_4 = ""
+config_4 = ""
+label_5 = ""
+config_5 = ""
+label_6 = ""
+config_6 = ""
+label_7 = ""
+config_7 = ""
+label_8 = ""
+config_8 = ""
+label_9 = ""
+config_9 = ""
+label_10 = ""
+config_10 = ""
+label_11 = ""
+config_11 = ""
+label_12 = ""
+config_12 = ""
+label_13 = ""
+config_13 = ""
+label_14 = ""
+config_14 = ""
+label_15 = ""
+config_15 = ""
+label_16 = ""
+config_16 = ""
+label_17 = ""
+config_17 = ""
+label_18 = ""
+config_18 = ""
+label_19 = ""
+config_19 = ""
+label_20 = ""
+config_20 = ""
 """
 
 def _parse_simple_toml_srv(text):
@@ -346,8 +395,9 @@ _SERVER_CONFIG_KEY_ORDER = {
     "user_buttons": [k for n in range(1, 15) for k in (f"label_{n}", f"type_{n}")],
     "user_mods": [k for n in range(1, 11) for k in (f"label_{n}", f"type_{n}")],
     "rf_usr_btns": [k for n in range(1, 12) for k in (f"label_{n}", f"mode_{n}")],
+    "devices": [k for n in range(1, 21) for k in (f"label_{n}", f"config_{n}")],
 }
-_SERVER_CONFIG_SECTION_ORDER = ["server", "audio", "user_buttons", "user_mods", "rf_usr_btns"]
+_SERVER_CONFIG_SECTION_ORDER = ["server", "audio", "user_buttons", "user_mods", "rf_usr_btns", "devices"]
 
 _SERVER_CONFIG_HEADER = (
     "# CAT Server configuration\n"
@@ -370,6 +420,10 @@ _SERVER_CONFIG_SECTION_COMMENTS = {
         '# RF user buttons: shown left of the band buttons in the GUI frequency area.\n'
         '# label: max 7 characters; mode: "normal" (momentary) or "push" (toggle).\n'
         '# Buttons with empty labels are hidden in the GUI.',
+    "devices":
+        '# Up to 20 SDR device profiles. label_N = display name shown in the GUI\n'
+        '# Device list; config_N = path to a TOML config file loaded on selection.\n'
+        '# Devices with empty labels are hidden. Fill slots in order: 1, 2, 3…',
 }
 
 
@@ -898,7 +952,7 @@ class RadioState:
     """Holds the simulated 'radio' settings and produces spectrum data."""
 
     def __init__(self, user_buttons=None, user_mod_labels=None, user_mod_types=None,
-                 rf_usr_btns=None, iq_source=None):
+                 rf_usr_btns=None, iq_source=None, devices=None):
         self.lock = threading.Lock()
         self.center_freq = 14_195_000.0
         self.sample_rate = 192_000.0
@@ -971,6 +1025,10 @@ class RadioState:
             self.sample_rate = float(self.iq_source.sample_rate)
             if self.iq_source.center_freq is not None:
                 self.center_freq = self.iq_source.center_freq
+
+        # Device profiles list: [{"label": str, "config": str}, ...]
+        # Populated from the [devices] section of the server TOML config.
+        self.devices = list(devices) if devices else []
 
     # ------------------------------------------------------------ setup ----
     def _make_signals(self):
@@ -1074,6 +1132,60 @@ class RadioState:
                 self.running = True
             elif c == "stop":
                 self.running = False
+            elif c == "get_devices":
+                # Reply with the list of configured device profiles so the GUI
+                # can show the selection dialog. Only slots with a non-empty
+                # label are included (max 20 entries).
+                dev_list = [
+                    {"index": i + 1, "label": d["label"]}
+                    for i, d in enumerate(self.devices)
+                    if d.get("label", "").strip()
+                ]
+                outgoing = {"type": "device_list", "devices": dev_list}
+            elif c == "select_device":
+                # GUI has chosen a device. Load the associated TOML config file,
+                # update user_buttons / user_mods / rf_usr_btns from it, then
+                # send reload_state so the GUI resyncs all its controls.
+                idx = int(cmd.get("index", 0)) - 1
+                if 0 <= idx < len(self.devices):
+                    dev = self.devices[idx]
+                    cfg_path = dev.get("config", "").strip()
+                    print(f"[cat_server] device selected: {dev.get('label','?')} "
+                          f"(index {idx + 1}, config {cfg_path!r})")
+                    if cfg_path:
+                        # Load the device-specific TOML (safe: inside the lock;
+                        # file reads are fast on local filesystems).
+                        dcfg = _load_server_config(cfg_path)
+                        _ubtn  = dcfg.get("user_buttons", {})
+                        _umods = dcfg.get("user_mods",    {})
+                        _rufb  = dcfg.get("rf_usr_btns",  {})
+                        self.user_buttons = [
+                            {
+                                "label": _ubtn.get(f"label_{n}", ""),
+                                "type":  _ubtn.get(f"type_{n}",  "normal"),
+                            }
+                            for n in range(1, NUM_USER_BUTTONS + 1)
+                        ]
+                        self.user_btn_state = [False] * NUM_USER_BUTTONS
+                        self.user_mod_labels = [
+                            _umods.get(f"label_{n}", "")
+                            for n in range(1, NUM_USER_MODS + 1)
+                        ]
+                        self.user_mod_types = [
+                            _umods.get(f"type_{n}", "normal")
+                            for n in range(1, NUM_USER_MODS + 1)
+                        ]
+                        self.rf_usr_btns = [
+                            {
+                                "label": _rufb.get(f"label_{n}", ""),
+                                "type":  _rufb.get(f"mode_{n}",  "normal"),
+                            }
+                            for n in range(1, NUM_RF_USR_BTNS + 1)
+                        ]
+                        self.rf_usr_btn_state = [False] * NUM_RF_USR_BTNS
+                # Always send reload_state so the GUI resyncs even if the
+                # config path was empty or the file could not be read.
+                outgoing = {"type": "reload_state"}
             elif c == "ui_button":
                 # Generic UI button presses (Full Screen, SDR-Device, FreqMgr,
                 # Minimize, Exit, ...) - nothing to simulate, but still logged
@@ -1580,6 +1692,7 @@ def _parse_args():
     _ubtn = _cfg.get("user_buttons", {})
     _umods= _cfg.get("user_mods",    {})
     _rufb = _cfg.get("rf_usr_btns",  {})
+    _devs = _cfg.get("devices",      {})
     _D    = _SERVER_CONFIG_DEFAULTS
 
     _def_host       = _srv.get("host",       _D["server"]["host"])
@@ -1727,6 +1840,13 @@ def _parse_args():
         if not hasattr(_raw, _rmattr):
             setattr(_raw, _rmattr, _cfg_rf_mode)
 
+    # Devices: read from config (no CLI flags for devices — TOML-only)
+    for n in range(1, 21):
+        _dlattr = f"device_label_{n}"
+        _dcattr = f"device_config_{n}"
+        setattr(_raw, _dlattr, _devs.get(f"label_{n}",  _D["devices"][f"label_{n}"]))
+        setattr(_raw, _dcattr, _devs.get(f"config_{n}", _D["devices"][f"config_{n}"]))
+
     # ── Validations ───────────────────────────────────────────────────────────
     # Length checks
     for n in range(1, NUM_USER_BUTTONS + 1):
@@ -1813,6 +1933,21 @@ def _build_rf_usr_btns(args):
     return buttons
 
 
+def _build_devices(args):
+    """Return a list of device dicts from the [devices] config section.
+
+    Each entry is {"label": str, "config": str}; entries with empty labels
+    are excluded so RadioState.devices contains only usable slots.
+    """
+    devices = []
+    for n in range(1, 21):
+        lbl = getattr(args, f"device_label_{n}", "").strip()
+        cfg = getattr(args, f"device_config_{n}", "").strip()
+        if lbl:
+            devices.append({"label": lbl, "config": cfg})
+    return devices
+
+
 def main():
     args = _parse_args()
     host = args.host
@@ -1837,7 +1972,8 @@ def main():
                        user_mod_labels=_build_user_mods(args),
                        user_mod_types=_build_user_mod_types(args),
                        rf_usr_btns=_build_rf_usr_btns(args),
-                       iq_source=iq_source)
+                       iq_source=iq_source,
+                       devices=_build_devices(args))
 
     # ── Optional: load a wav file to transmit as the downlink audio ──────────
     audio_source = None
