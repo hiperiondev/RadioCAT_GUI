@@ -2514,11 +2514,13 @@ class App:
         self._refresh_band_highlight = _refresh_band_highlight
 
         # ── freq_box: outer container ─────────────────────────────────────────
-        # We use a grid: column 0 = LO/Tune rows (stacked), column 1 = band
-        # column spanning all three rows but anchored to the top, so the
-        # first band button aligns exactly with the LO A row.
+        # We use a grid: column 0 = LO/Tune rows (stacked), column 1 = TX/RX
+        # split-indicator labels (centered in the gap), column 2 = band
+        # column spanning all rows but anchored to the top, so the first
+        # band button aligns exactly with the LO A row.
         freq_box.grid_columnconfigure(0,weight=1)
         freq_box.grid_columnconfigure(1,weight=0)
+        freq_box.grid_columnconfigure(2,weight=0)
 
         lo_row=tk.Frame(freq_box,bg=C["spec_bg"])
         lo_row.grid(row=0,column=0,sticky="ew")
@@ -2531,20 +2533,21 @@ class App:
         self.lo_disp.pack(side="left",fill="x",expand=True,padx=max(1,int(round(2*sc))),pady=max(1,int(round(2*sc))))
         self.lo_disp.set_value(self.state["lo_freq"],notify=False)
 
-        # "TX" label shown right of LO A only while SPLIT is enabled.
-        # Packed permanently with a fixed width so its presence/absence
-        # never changes the space available to the FreqDisp digits — only
-        # the text (and thus visibility) toggles in _refresh_split_ui().
+        # "TX" label — shown only while SPLIT is enabled — sits in its own
+        # grid column centered in the gap between the LO A digits and the
+        # band-buttons column. Text toggles in _refresh_split_ui(); the
+        # column itself is always present so nothing else ever shifts.
         fs_split_lbl=max(7,int(round(BASE['freq_label_size']*sc)))
-        self._split_tx_lbl=tk.Label(lo_row,text="",bg=C["spec_bg"],fg=C["btn_red_fg"],
+        self._split_tx_lbl=tk.Label(freq_box,text="",bg=C["spec_bg"],fg=C["btn_red_fg"],
                                      font=_gui_font(fs_split_lbl,"bold"),
                                      width=2,anchor="center")
-        self._split_tx_lbl.pack(side="right",padx=max(2,int(round(4*sc))))
+        self._split_tx_lbl.grid(row=0,column=1,sticky="ns",
+                                 padx=max(3,int(round(5*sc))))
 
         # ── Band buttons column — top-aligned to LO A row ─────────────────────
         # Two sub-columns: left = RF user buttons (col=1), right = band buttons (col=2)
         band_area=tk.Frame(freq_box,bg=C["spec_bg"])
-        band_area.grid(row=0,column=1,rowspan=4,sticky="n",
+        band_area.grid(row=0,column=2,rowspan=4,sticky="n",
                        padx=max(2,int(round(3*sc))),
                        pady=(max(1,int(round(2*sc))),0))
         fs_band=max(6,int(round(7*sc)))
@@ -2618,13 +2621,13 @@ class App:
         self.lo_b_disp.pack(side="left",fill="x",expand=True,padx=max(1,int(round(2*sc))),pady=max(1,int(round(2*sc))))
         self.lo_b_disp.set_value(self.state["lo_b_freq"],notify=False)
 
-        # "RX" label shown right of LO B only while SPLIT is enabled.
-        # Same fixed-width approach as the TX label (see above) so toggling
-        # SPLIT never shifts the LO B frequency digits.
-        self._split_rx_lbl=tk.Label(lo_b_row,text="",bg=C["spec_bg"],fg=C["btn_grn_fg"],
+        # "RX" label — counterpart to the TX label above, centered in the
+        # same gap column at the LO B row.
+        self._split_rx_lbl=tk.Label(freq_box,text="",bg=C["spec_bg"],fg=C["btn_grn_fg"],
                                      font=_gui_font(fs_split_lbl,"bold"),
                                      width=2,anchor="center")
-        self._split_rx_lbl.pack(side="right",padx=max(2,int(round(4*sc))))
+        self._split_rx_lbl.grid(row=2,column=1,sticky="ns",
+                                 padx=max(3,int(round(5*sc))))
 
         # Apply initial LO button colours
         _refresh_lo_btns()
@@ -2637,13 +2640,6 @@ class App:
         self.tune_disp._label_text="Tune"
         self.tune_disp.pack(side="left",fill="x",expand=True,padx=max(1,int(round(2*sc))),pady=max(1,int(round(2*sc))))
         self.tune_disp.set_value(self.state["tune_freq"],notify=False)
-
-        # Invisible spacer matching the fixed-width TX/RX label slot on the
-        # LO A / LO B rows, so the Tune row's digits line up in the same
-        # column regardless of whether SPLIT is on.
-        tk.Label(tune_row,text="",bg=C["spec_bg"],
-                 font=_gui_font(fs_split_lbl,"bold"),
-                 width=2,anchor="center").pack(side="right",padx=max(2,int(round(4*sc))))
 
         # ── Volume / AGC Thresh sliders ───────────────────────────────────────
         sv=tk.Frame(lp,bg=C["panel_bg"])
@@ -3444,6 +3440,9 @@ class App:
             return
         # Always start with PTT inactive regardless of any stale server state.
         self.state["ptt"] = False
+        # Always start with SPLIT off regardless of any stale server state.
+        self.state["split"] = False
+        self._refresh_split_ui()
         # NOTE: Net.send() calls sock.sendall() synchronously. If the server is
         # slow to drain its TCP receive buffer (e.g. still spinning up DSP/RTP),
         # any one of these calls can block for up to the socket's 5s timeout.
@@ -3454,6 +3453,7 @@ class App:
         def _send_hello_burst():
             self.net.send({"cmd":"hello"})
             self.net.send({"cmd":"set_ptt","enabled":False})   # clear any stale TX on server
+            self.net.send({"cmd":"set_split","enabled":False}) # clear any stale SPLIT on server
             self.net.send({"cmd":"set_freq","hz":self.state["lo_freq"]})
             self.net.send({"cmd":"set_lo_b_freq","hz":self.state["lo_b_freq"]})
             self.net.send({"cmd":"set_tune_freq","hz":self.state["tune_freq"]})
@@ -3481,6 +3481,8 @@ class App:
     def _on_disconnected(self, reason=None):
         self.state["running"]=False
         self.state["ptt"]=False
+        self.state["split"]=False
+        self._refresh_split_ui()
         self.rtp_audio.close()
         self._ptt_enabled = False
         self.smeter.set_tx(False)   # unfreeze meter on disconnect
