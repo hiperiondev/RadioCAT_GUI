@@ -299,6 +299,8 @@ def _parse_args():
                          'backgrounds to #FFECD6, "dark" keeps the default colours')
     ap.add_argument('--full-screen', action='store_true', default=argparse.SUPPRESS,
                     help='Start in full-screen mode')
+    ap.add_argument('--resolution', metavar='WxH', default=argparse.SUPPRESS,
+                    help='Initial window size in pixels, e.g. 1280x720')
     ap.add_argument('--disable-scale', action='store_true', default=argparse.SUPPRESS,
                     help='Hide the HiDPI scale +/- controls and scale level number '
                          '(requires --scale to also be specified on the command line)')
@@ -335,6 +337,19 @@ def _parse_args():
     args.bg        = _raw.bg        if hasattr(_raw, 'bg')        else _def_bg
     args.full_screen              = _raw.full_screen  if hasattr(_raw, 'full_screen')  else _def_full
     args.disable_scale            = _raw.disable_scale if hasattr(_raw, 'disable_scale') else _def_dscale
+
+    # --resolution WxH
+    if hasattr(_raw, 'resolution'):
+        _res = _raw.resolution
+        try:
+            _rw, _rh = _res.lower().split('x')
+            args.resolution = (int(_rw), int(_rh))
+            if args.resolution[0] <= 0 or args.resolution[1] <= 0:
+                raise ValueError
+        except (ValueError, AttributeError):
+            ap.error(f'--resolution must be WIDTHxHEIGHT in pixels, e.g. 1280x720 (got: {_res!r})')
+    else:
+        args.resolution = None
     args.disable_soundcard_select = _raw.disable_soundcard_select \
                                     if hasattr(_raw, 'disable_soundcard_select') else _def_dsc
     args.audio_list = _raw.audio_list   # one-shot flag; intentionally not stored in config
@@ -3951,6 +3966,11 @@ def main():
     # Apply --full-screen flag
     if _ARGS.full_screen:
         root.attributes("-fullscreen", True)
+
+    # Apply --resolution WxH flag (ignored when --full-screen is also set)
+    if _ARGS.resolution and not _ARGS.full_screen:
+        _rw, _rh = _ARGS.resolution
+        root.geometry(f"{_rw}x{_rh}")
 
     # Triple-Esc toggles fullscreen (3 presses within 1 second)
     _esc_times = []
