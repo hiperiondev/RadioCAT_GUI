@@ -334,6 +334,7 @@ def _parse_args():
     args.freq_font = _raw.freq_font if hasattr(_raw, 'freq_font') else _def_ffont
     args.gui_font  = _raw.gui_font  if hasattr(_raw, 'gui_font')  else _def_gfont
     args.scale     = _raw.scale     if hasattr(_raw, 'scale')     else _def_scale
+    args.scale_explicit = hasattr(_raw, 'scale')   # True only when --scale given on CLI
     args.bg        = _raw.bg        if hasattr(_raw, 'bg')        else _def_bg
     args.full_screen              = _raw.full_screen  if hasattr(_raw, 'full_screen')  else _def_full
     args.disable_scale            = _raw.disable_scale if hasattr(_raw, 'disable_scale') else _def_dscale
@@ -727,6 +728,32 @@ BASE = dict(
 )
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
+def _auto_scale_for_screen(screen_w, screen_h):
+    """Return the best integer scale level (-5..5) so the default window
+    (BASE win_w x win_h) fits comfortably inside the given screen resolution.
+
+    Common targets:
+      1024x768   → level  0  (1.00×)
+      1280x720   → level  0
+      1366x768   → level  0
+      1920x1080  → level  1  (1.25×)
+      2560x1440  → level  2  (1.56×)
+      3840x2160  → level  4  (2.44×)
+      4096x2160  → level  4
+    """
+    # Leave 10% margin for window chrome / taskbar
+    avail_w = screen_w * 0.90
+    avail_h = screen_h * 0.90
+    best = 0
+    for lvl in range(5, -6, -1):   # try largest first
+        sc = 1.25 ** lvl
+        w  = BASE['win_w'] * sc
+        h  = BASE['win_h'] * sc
+        if w <= avail_w and h <= avail_h:
+            best = lvl
+            break
+    return best
 
 def db_to_rgb(db, dmin=-150.0, dmax=0.0):
     t = max(0.0, min(1.0, (db-dmin)/(dmax-dmin)))
@@ -2266,7 +2293,17 @@ class App:
         # reconnect.  False on first connect so the radio always starts up.
         self._user_stopped = False
         # HiDPI / 4K scaling state
-        self._scale_level = max(-5, min(5, _ARGS.scale))  # from --scale flag
+        _requested_scale = max(-5, min(5, _ARGS.scale))
+        # When the user hasn't explicitly set a scale (default=0 from config),
+        # auto-pick the best level for the current display resolution so the GUI
+        # fits comfortably from 1024x768 all the way up to 3840x2160 and beyond.
+        # If --scale was given on the CLI, always honour it exactly — never
+        # override it with auto-detection, even when the value happens to be 0.
+        if not _ARGS.scale_explicit:
+            _sw = self.root.winfo_screenwidth()
+            _sh = self.root.winfo_screenheight()
+            _requested_scale = _auto_scale_for_screen(_sw, _sh)
+        self._scale_level = _requested_scale  # from --scale flag (or auto-detected)
         self._sc = 1.25 ** self._scale_level  # current visual scale factor
         self._build()
         self._refresh()
@@ -2325,6 +2362,9 @@ class App:
         # Enforce minimum height so no GUI elements vanish
         self.root.after(100, self._update_minsize)
         self.root.after(120, self._sync_bot_height)
+        # Second pass for any reflow (S-meter / clock row at high DPI)
+        self.root.after(300, self._sync_bot_height)
+        self.root.after(320, self._apply_top_heights)
 
         # ── Bind window resize so bottom panel is always fully visible ─────────
         self._resize_after_id = None
@@ -3086,7 +3126,21 @@ class App:
         # Leave a little headroom for window-manager chrome / taskbars.
         avail_h  = max(240, screen_h - 90)
         tb_h     = max(16, int(round(BASE['toolbar_h'] * sc)))
-        bot_h    = self._bot.winfo_reqheight()
+        # Use real lp child-sum for bot_h so pack_propagate(False) doesn't hide content
+        lp = self._lp
+        lp_h = 0
+        for child in lp.pack_slaves():
+            try:
+                lp_h += max(child.winfo_reqheight(), 1)
+                info = child.pack_info()
+                pady = info.get('pady', 0)
+                if isinstance(pady, (list, tuple)):
+                    lp_h += int(pady[0]) + int(pady[1])
+                else:
+                    lp_h += int(pady) * 2
+            except Exception:
+                pass
+        bot_h = max(lp_h, self._bot.winfo_reqheight(), 60)
 
         spec_h_full = scaled('spec_h', sc)
         wf_min_full = max(40, int(round(60 * sc)))
@@ -3113,7 +3167,23 @@ class App:
         """
         self.root.update_idletasks()
         sc = self._sc
-        spec_h, wf_h, tb_h, bot_h = self._fit_top_heights()
+        # Measure the real required height of lp (left panel) by summing
+        # its packed children, bypassing any pack_propagate(False) suppression.
+        lp = self._lp
+        lp_h = 0
+        for child in lp.pack_slaves():
+            try:
+                lp_h += max(child.winfo_reqheight(), 1)
+                info = child.pack_info()
+                pady = info.get('pady', 0)
+                if isinstance(pady, (list, tuple)):
+                    lp_h += int(pady[0]) + int(pady[1])
+                else:
+                    lp_h += int(pady) * 2
+            except Exception:
+                pass
+        bot_h = max(lp_h, self._bot.winfo_reqheight(), 60)
+        spec_h, wf_h, tb_h, _ = self._fit_top_heights()
         bot_w    = self._bot.winfo_reqwidth()
         # min_h = only the parts that must always be visible
         min_h    = tb_h + bot_h + 4
@@ -3127,24 +3197,31 @@ class App:
         lp uses pack_propagate(False) to enforce a fixed width, but that also
         suppresses height reporting to _bot, causing the bottom control area to
         be clipped at higher scale levels.  We work around this by summing the
-        requisite heights of lp's packed children and applying that as _bot's
-        explicit height, so all controls remain fully visible.
+        requisite heights of ALL of lp's packed children — regardless of whether
+        they are packed side='top' or side='bottom' — and applying that total as
+        _bot's explicit height, so the S-meter row, clock/date line, and connect
+        controls are never clipped off-screen at any resolution.
         """
         self.root.update_idletasks()
-        lp=self._lp
-        total_h=0
+        lp = self._lp
+        total_h = 0
         for child in lp.pack_slaves():
             try:
-                total_h+=child.winfo_reqheight()
-                info=child.pack_info()
-                pady=info.get('pady',0)
-                if isinstance(pady,(list,tuple)):
-                    total_h+=pady[0]+pady[1]
+                ch = child.winfo_reqheight()
+                if ch < 1:
+                    # Widget hasn't been measured yet; ask Tk directly
+                    child.update_idletasks()
+                    ch = child.winfo_reqheight()
+                total_h += max(ch, 1)
+                info = child.pack_info()
+                pady = info.get('pady', 0)
+                if isinstance(pady, (list, tuple)):
+                    total_h += int(pady[0]) + int(pady[1])
                 else:
-                    total_h+=int(pady)*2
+                    total_h += int(pady) * 2
             except Exception:
                 pass
-        if total_h>0:
+        if total_h > 0:
             self._bot.pack_propagate(False)
             self._bot.config(height=total_h)
             self._update_minsize()
@@ -3176,6 +3253,8 @@ class App:
 
         Algorithm:
           1. Measure the natural height of _bot — fixed content, never clipped.
+             When _bot has pack_propagate(False) its winfo_reqheight() may be
+             stale; instead we sum lp's packed children directly.
           2. Measure the toolbar strip height (also fixed).
           3. Whatever height remains is split between the waterfall (expand,
              gets the lion's share) and the RF spectrum strip (fixed, shrinks first).
@@ -3189,9 +3268,27 @@ class App:
         try:
             self.root.update_idletasks()
             win_h   = self.root.winfo_height()
-            bot_h   = self._bot.winfo_reqheight()
             tb_h    = max(16, int(round(BASE['toolbar_h'] * self._sc)))
             sc      = self._sc
+
+            # Compute the true required height of the left panel (lp).
+            # _bot may have pack_propagate(False) so winfo_reqheight() can be
+            # stale — sum lp's children instead for an accurate measurement.
+            lp = self._lp
+            lp_h = 0
+            for child in lp.pack_slaves():
+                try:
+                    lp_h += max(child.winfo_reqheight(), 1)
+                    info = child.pack_info()
+                    pady = info.get('pady', 0)
+                    if isinstance(pady, (list, tuple)):
+                        lp_h += int(pady[0]) + int(pady[1])
+                    else:
+                        lp_h += int(pady) * 2
+                except Exception:
+                    pass
+            # Fall back to winfo_reqheight if we couldn't measure children
+            bot_h = max(lp_h, self._bot.winfo_reqheight(), 60)
 
             # Available pixels for the entire top area (waterfall + spec strip)
             avail_top = win_h - bot_h - tb_h - 4
@@ -3296,10 +3393,19 @@ class App:
         # Clamp the requested window size to both the natural minimum
         # (so nothing is squeezed/hidden) and the available screen size
         # (so the window manager doesn't crop the bottom rows off-screen).
+        # When --resolution was given, the user pinned the window size; only
+        # enforce the minimum so nothing is clipped, but never override their
+        # chosen dimensions with the scale-derived ideal size.
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
-        new_w = max(min_w, min(scaled('win_w', sc), screen_w))
-        new_h = max(min_h, min(scaled('win_h', sc), screen_h))
+        if _ARGS.resolution:
+            cur_w = self.root.winfo_width()
+            cur_h = self.root.winfo_height()
+            new_w = max(min_w, cur_w)
+            new_h = max(min_h, cur_h)
+        else:
+            new_w = max(min_w, min(scaled('win_w', sc), screen_w))
+            new_h = max(min_h, min(scaled('win_h', sc), screen_h))
         self.root.geometry(f"{new_w}x{new_h}")
 
         # Re-apply minsize once more after geometry settles, in case
@@ -3307,6 +3413,10 @@ class App:
         self.root.after(100, self._update_minsize)
         self.root.after(120, self._sync_bot_height)
         self.root.after(140, self._apply_top_heights)
+        # A second sync pass catches any layout changes from the first pass
+        # (e.g. the S-meter / clock row repacking at high scale levels).
+        self.root.after(300, self._sync_bot_height)
+        self.root.after(320, self._apply_top_heights)
 
     # ── control logic ──────────────────────────────────────────────────────────
     def _refresh(self):
