@@ -20,33 +20,43 @@ label_3 = "UsrBtn3"
 type_3 = "normal"
 label_4 = "UsrBtn4"
 type_4 = "normal"
-label_5 = "UsrBtn5"
+label_5 = ""
 type_5 = "normal"
-label_6 = "UsrBtn6"
+label_6 = ""
 type_6 = "normal"
 
 [user_mods]
 # label: max 4 characters; user-defined modulation button labels shown in the
-# mode row of the GUI. Fill slots in order: 1, 2, 3, 4, 5 (no skipping).
+# mode row of the GUI. Fill slots in order: 1, 2, ..., 10 (no skipping).
 # type: "normal" (acts like a regular mode button), "text" (splits the AF/
 #       audio box so a read-only text panel shows text sent by the server),
 #       or "text_input" (same split, but the text panel itself is split into
 #       an upper read-only area and a bottom 3-line editable input box that
 #       sends text to the server on Enter, like an RTTY chat).
-label_1 = "APRS"
-type_1 = "text"
-label_2 = "RTTY"
-type_2 = "text_input"
-label_3 = "FT8"
+label_1 = "AM"
+type_1 = "normal"
+label_2 = "FM"
+type_2 = "normal"
+label_3 = "LSB"
 type_3 = "normal"
-label_4 = "FT2"
+label_4 = "USB"
 type_4 = "normal"
-label_5 = "WSPR"
+label_5 = "CW"
 type_5 = "normal"
+label_6 = "APRS"
+type_6 = "text"
+label_7 = "RTTY"
+type_7 = "text_input"
+label_8 = "FT8"
+type_8 = "normal"
+label_9 = "FT2"
+type_9 = "normal"
+label_10 = "J2CL"
+type_10 = "normal"
 
 [rf_usr_btns]
 # RF user buttons: shown left of the band buttons in the GUI frequency area.
-# label: max 5 characters; mode: "normal" (momentary) or "push" (toggle).
+# label: max 7 characters; mode: "normal" (momentary) or "push" (toggle).
 # Buttons with empty labels are hidden in the GUI.
 label_1 = "BtnUsr1"
 mode_1 = "normal"
@@ -64,7 +74,7 @@ label_7 = "BtnUsr7"
 mode_7 = "normal"
 label_8 = "BtnUsr8"
 mode_8 = "normal"
-label_9 = "BtnUsr9"
+label_9 = ""
 mode_9 = "normal"
 label_10 = "BtnUsra"
 mode_10 = "normal"

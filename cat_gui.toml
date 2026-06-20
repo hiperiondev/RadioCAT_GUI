@@ -3,12 +3,12 @@
 # Use --config PATH to load a file from a non-default location.
 
 [display]
-bg = "dark"           # "light" or "dark"
-full_screen = false   # start in full-screen mode
-scale = 0             # HiDPI scale level, -5 to 5
-disable_scale = false # hide the +/- scale controls (set an explicit scale above too)
-freq_font = ""        # path to TTF/OTF font for frequency digits  (empty = system default)
-gui_font = ""         # path to TTF/OTF font for all other GUI text (empty = system default)
+bg = "dark"  # "light" or "dark"
+full_screen = false  # start in full-screen mode
+scale = 0  # HiDPI scale level, -5 to 5
+disable_scale = false  # hide the +/- scale controls (set an explicit scale above too)
+freq_font = ""  # path to TTF/OTF font for frequency digits  (empty = system default)
+gui_font = ""  # path to TTF/OTF font for all other GUI text (empty = system default)
 
 [connection]
 # Leave host empty and port 0 to show the GUI connection fields.

@@ -127,8 +127,103 @@ def _load_gui_config(path):
         print(f"[config] WARNING: could not read {path}: {e}")
         return {}
 
+_GUI_CONFIG_KEY_ORDER = {
+    "display": ["bg", "full_screen", "scale", "disable_scale", "freq_font", "gui_font"],
+    "connection": ["host", "port"],
+    "audio": ["mic", "speaker", "disable_soundcard_select"],
+}
+_GUI_CONFIG_SECTION_ORDER = ["display", "connection", "audio"]
+
+_GUI_CONFIG_HEADER = (
+    "# CAT GUI configuration\n"
+    "# CLI flags override these values at runtime without modifying this file.\n"
+    "# Use --config PATH to load a file from a non-default location."
+)
+
+# Inline "key = value  # comment" trailers for the [display] section.
+_GUI_CONFIG_KEY_COMMENTS = {
+    "bg":            '"light" or "dark"',
+    "full_screen":   "start in full-screen mode",
+    "scale":         "HiDPI scale level, -5 to 5",
+    "disable_scale": "hide the +/- scale controls (set an explicit scale above too)",
+    "freq_font":     "path to TTF/OTF font for frequency digits  (empty = system default)",
+    "gui_font":      "path to TTF/OTF font for all other GUI text (empty = system default)",
+}
+
+# Block comments shown once, above the key=value lines, for other sections.
+_GUI_CONFIG_SECTION_COMMENTS = {
+    "connection":
+        "# Leave host empty and port 0 to show the GUI connection fields.\n"
+        "# Both must be filled to enable auto-connect on startup.",
+    "audio":
+        "# Device indices from --audio-list; -1 means use the system default.\n"
+        "# Both mic and speaker must be set together (or both left at -1).",
+}
+
+
+def _fmt_toml_value_gui(v):
+    """Render a Python value back into TOML literal syntax."""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, str):
+        return json.dumps(v)
+    return str(v)
+
+
+def _merge_gui_config_with_defaults(cfg):
+    """Fill in any section/key missing from cfg using _GUI_CONFIG_DEFAULTS.
+
+    Returns (merged, added): merged is a complete config dict (every default
+    section/key present, existing values always win) and added is an ordered
+    list of "section.key" strings that were absent from cfg and had to be
+    filled in with their default value.
+    """
+    merged = {}
+    added = []
+    for sec, sec_defaults in _GUI_CONFIG_DEFAULTS.items():
+        _cfg_sec_raw = cfg.get(sec, {})
+        cfg_sec = _cfg_sec_raw if isinstance(_cfg_sec_raw, dict) else {}
+        merged_sec = {}
+        for key, default_val in sec_defaults.items():
+            if key in cfg_sec:
+                merged_sec[key] = cfg_sec[key]
+            else:
+                merged_sec[key] = default_val
+                added.append(f"{sec}.{key}")
+        merged[sec] = merged_sec
+    return merged, added
+
+
+def _render_gui_config(cfg):
+    """Render a complete, well-formed TOML document from a fully-merged config
+    dict, reproducing the same comments/layout as _GUI_CONFIG_TEMPLATE."""
+    lines = [_GUI_CONFIG_HEADER]
+    for sec in _GUI_CONFIG_SECTION_ORDER:
+        lines.append("")
+        lines.append(f"[{sec}]")
+        block_comment = _GUI_CONFIG_SECTION_COMMENTS.get(sec)
+        if block_comment:
+            lines.append(block_comment)
+        sec_vals = cfg.get(sec, {})
+        for key in _GUI_CONFIG_KEY_ORDER[sec]:
+            val = sec_vals.get(key, _GUI_CONFIG_DEFAULTS[sec][key])
+            line = f"{key} = {_fmt_toml_value_gui(val)}"
+            trailer = _GUI_CONFIG_KEY_COMMENTS.get(key) if sec == "display" else None
+            if trailer:
+                line += f"  # {trailer}"
+            lines.append(line)
+    return "\n".join(lines) + "\n"
+
+
 def _ensure_gui_config(path):
-    """Create the config file with defaults if it does not exist, then load it."""
+    """Create the config file with defaults if it does not exist, then load it.
+
+    If the file already exists but is missing a parameter known to this
+    version of the GUI (i.e. one with a corresponding CLI flag/default), the
+    file is corrected in place: the missing parameter is added at its default
+    value and rewritten to disk, so the config keeps itself up to date as new
+    options are introduced in later versions.
+    """
     if not os.path.exists(path):
         try:
             with open(path, "w", encoding="utf-8") as f:
@@ -136,7 +231,21 @@ def _ensure_gui_config(path):
             print(f"[config] Created default config: {path}")
         except Exception as e:
             print(f"[config] WARNING: could not write default config: {e}")
-    return _load_gui_config(path)
+        return _load_gui_config(path)
+
+    _cfg = _load_gui_config(path)
+    merged, added = _merge_gui_config_with_defaults(_cfg)
+    if added:
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(_render_gui_config(merged))
+            print(f"[config] Corrected {path}: added missing parameter(s) with "
+                  f"default value(s) — {', '.join(added)}")
+        except Exception as e:
+            print(f"[config] WARNING: {path} is missing parameter(s) "
+                  f"({', '.join(added)}) but could not be corrected: {e} — "
+                  f"using built-in defaults for this run")
+    return merged
 
 # ── CLI argument parsing ─────────────────────────────────────────────────────
 def _parse_args():

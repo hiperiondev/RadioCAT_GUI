@@ -324,8 +324,98 @@ def _load_server_config(path):
         print(f"[config] WARNING: could not read {path}: {e}")
         return {}
 
+_SERVER_CONFIG_KEY_ORDER = {
+    "server": ["host", "port"],
+    "audio": ["audio_port", "no_audio"],
+    "user_buttons": [k for n in range(1, 7) for k in (f"label_{n}", f"type_{n}")],
+    "user_mods": [k for n in range(1, 11) for k in (f"label_{n}", f"type_{n}")],
+    "rf_usr_btns": [k for n in range(1, 12) for k in (f"label_{n}", f"mode_{n}")],
+}
+_SERVER_CONFIG_SECTION_ORDER = ["server", "audio", "user_buttons", "user_mods", "rf_usr_btns"]
+
+_SERVER_CONFIG_HEADER = (
+    "# CAT Server configuration\n"
+    "# CLI flags override these values at runtime without modifying this file.\n"
+    "# Use --config PATH to load a file from a non-default location."
+)
+
+_SERVER_CONFIG_SECTION_COMMENTS = {
+    "user_buttons":
+        '# label: max 7 characters; type: "normal" (momentary) or "push" (toggle)',
+    "user_mods":
+        '# label: max 4 characters; user-defined modulation button labels shown in the\n'
+        '# mode row of the GUI. Fill slots in order: 1, 2, ..., 10 (no skipping).\n'
+        '# type: "normal" (acts like a regular mode button), "text" (splits the AF/\n'
+        '#       audio box so a read-only text panel shows text sent by the server),\n'
+        '#       or "text_input" (same split, but the text panel itself is split into\n'
+        '#       an upper read-only area and a bottom 3-line editable input box that\n'
+        '#       sends text to the server on Enter, like an RTTY chat).',
+    "rf_usr_btns":
+        '# RF user buttons: shown left of the band buttons in the GUI frequency area.\n'
+        '# label: max 7 characters; mode: "normal" (momentary) or "push" (toggle).\n'
+        '# Buttons with empty labels are hidden in the GUI.',
+}
+
+
+def _fmt_toml_value_srv(v):
+    """Render a Python value back into TOML literal syntax."""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, str):
+        return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return str(v)
+
+
+def _merge_server_config_with_defaults(cfg):
+    """Fill in any section/key missing from cfg using _SERVER_CONFIG_DEFAULTS.
+
+    Returns (merged, added): merged is a complete config dict (every default
+    section/key present, existing values always win) and added is an ordered
+    list of "section.key" strings that were absent from cfg and had to be
+    filled in with their default value.
+    """
+    merged = {}
+    added = []
+    for sec, sec_defaults in _SERVER_CONFIG_DEFAULTS.items():
+        _cfg_sec_raw = cfg.get(sec, {})
+        cfg_sec = _cfg_sec_raw if isinstance(_cfg_sec_raw, dict) else {}
+        merged_sec = {}
+        for key, default_val in sec_defaults.items():
+            if key in cfg_sec:
+                merged_sec[key] = cfg_sec[key]
+            else:
+                merged_sec[key] = default_val
+                added.append(f"{sec}.{key}")
+        merged[sec] = merged_sec
+    return merged, added
+
+
+def _render_server_config(cfg):
+    """Render a complete, well-formed TOML document from a fully-merged config
+    dict, reproducing the same comments/layout as _SERVER_CONFIG_TEMPLATE."""
+    lines = [_SERVER_CONFIG_HEADER]
+    for sec in _SERVER_CONFIG_SECTION_ORDER:
+        lines.append("")
+        lines.append(f"[{sec}]")
+        comment = _SERVER_CONFIG_SECTION_COMMENTS.get(sec)
+        if comment:
+            lines.append(comment)
+        sec_vals = cfg.get(sec, {})
+        for key in _SERVER_CONFIG_KEY_ORDER[sec]:
+            val = sec_vals.get(key, _SERVER_CONFIG_DEFAULTS[sec][key])
+            lines.append(f"{key} = {_fmt_toml_value_srv(val)}")
+    return "\n".join(lines) + "\n"
+
+
 def _ensure_server_config(path):
-    """Create the config file with defaults if it does not exist, then load it."""
+    """Create the config file with defaults if it does not exist, then load it.
+
+    If the file already exists but is missing a parameter known to this
+    version of the server (i.e. one with a corresponding CLI flag/default),
+    the file is corrected in place: the missing parameter is added at its
+    default value and rewritten to disk, so the config keeps itself up to
+    date as new options are introduced in later versions.
+    """
     if not os.path.exists(path):
         try:
             with open(path, "w", encoding="utf-8") as f:
@@ -333,7 +423,21 @@ def _ensure_server_config(path):
             print(f"[config] Created default config: {path}")
         except Exception as e:
             print(f"[config] WARNING: could not write default config: {e} — using built-in defaults")
-    return _load_server_config(path)
+        return _load_server_config(path)
+
+    _cfg = _load_server_config(path)
+    merged, added = _merge_server_config_with_defaults(_cfg)
+    if added:
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(_render_server_config(merged))
+            print(f"[config] Corrected {path}: added missing parameter(s) with "
+                  f"default value(s) — {', '.join(added)}")
+        except Exception as e:
+            print(f"[config] WARNING: {path} is missing parameter(s) "
+                  f"({', '.join(added)}) but could not be corrected: {e} — "
+                  f"using built-in defaults for this run")
+    return merged
 
 NUM_BINS = 600          # RF spectrum / waterfall bins
 AF_BINS = 256           # AF spectrum / waterfall bins
