@@ -2043,9 +2043,12 @@ class FreqDisp(tk.Frame):
         lbl_text=getattr(self,'_label_text','LO A')
         if self._lo_select_cmd:
             # Selectable button for LO A / LO B
+            # width=4 is fixed to the widest label ("LO A"/"LO B") so the
+            # button never resizes when the text is swapped to "TX"/"RX".
             self._row_lbl=tk.Button(self,text=lbl_text,
                      bg=C["btn_sel"],fg=C["btn_sel_fg"],
                      font=_gui_font(lbl_fs,"bold"),relief="flat",bd=0,
+                     width=4,
                      padx=max(2,int(round(3*sc))),pady=0,
                      command=self._lo_select_cmd)
         else:
@@ -3898,24 +3901,27 @@ class App:
         if hasattr(self,'_split_btn'):
             self._split_btn.config(bg=C["btn_sel"] if on else C["btn_gray"],
                                     fg=C["btn_sel_fg"])
-        # Toggle label TEXT only (never pack/unpack) — the labels occupy a
-        # fixed-width slot at all times so showing/hiding TX/RX never shifts
-        # the LO A / LO B frequency digits.
+        # Keep the gap-column TX/RX labels always empty — TX/RX is shown
+        # directly on the LO A / LO B row-label buttons instead.
         if hasattr(self,'_split_tx_lbl'):
-            self._split_tx_lbl.config(text="TX" if on else "")
+            self._split_tx_lbl.config(text="")
         if hasattr(self,'_split_rx_lbl'):
-            self._split_rx_lbl.config(text="RX" if on else "")
-        # LO A / LO B selector buttons are disabled while SPLIT is enabled
-        # (the active LO can't be changed mid-split).
-        for disp in (getattr(self,'_lo_a_disp',None), getattr(self,'_lo_b_disp',None)):
+            self._split_rx_lbl.config(text="")
+        # When SPLIT is on: rename LO A → TX and LO B → RX on their row buttons.
+        # When SPLIT is off: restore original LO A / LO B labels.
+        # The buttons are also disabled while SPLIT is enabled (active LO
+        # can't be changed mid-split).
+        for disp, lbl_normal, lbl_split in (
+                (getattr(self,'_lo_a_disp',None), "LO A", "TX"),
+                (getattr(self,'_lo_b_disp',None), "LO B", "RX")):
             btn=getattr(disp,'_row_lbl',None) if disp is not None else None
             if btn is None:
                 continue
             if on:
-                btn.config(state="disabled",bg=C["btn_gray"],fg=C["text_dim"],
-                           disabledforeground=C["text_dim"])
+                btn.config(text=lbl_split,width=4,state="disabled",bg=C["btn_gray"],
+                           fg=C["text_dim"],disabledforeground=C["text_dim"])
             else:
-                btn.config(state="normal")
+                btn.config(text=lbl_normal,width=4,state="normal")
         if not on and hasattr(self,'_refresh_lo_btns'):
             # Restore the normal active/inactive LO highlight colours.
             self._refresh_lo_btns()
