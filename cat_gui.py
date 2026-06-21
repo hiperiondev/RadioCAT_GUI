@@ -2944,12 +2944,14 @@ class App:
         sv.grid_columnconfigure(1, weight=1)
 
 
-        # ── SDR-Device / Soundcard / Bandwidth / Options ──────────────────────
+        # ── SDR-Device / Soundcard / Bandwidth / Sample Rate ──────────────────
         r1=tk.Frame(lp,bg=C["panel_bg"])
         r1.pack(fill="x",padx=max(2,int(round(4*sc))),pady=(max(1,int(round(2*sc))),max(1,int(round(1*sc)))))
-        for t in ["Device","Bandwidth","Options"]:
+        for t in ["Device","Bandwidth","Sample Rate"]:
             if t == "Device":
                 _dcmd = self._request_device_list
+            elif t == "Sample Rate":
+                _dcmd = self._request_sample_rates
             else:
                 _dcmd = lambda t=t: self.net.send({"cmd":"ui_button","name":t})
             _fbtn(r1,t,sc=sc,command=_dcmd
@@ -3805,6 +3807,99 @@ class App:
         th = top.winfo_reqheight()
         top.geometry(f"+{rw - tw // 2}+{rh - th // 2}")
 
+    # ── Sample rate selection dialog ──────────────────────────────────────────
+    def _request_sample_rates(self):
+        """Send get_sample_rates to the server; reply opens the Sample Rate
+        dialog. The choices come from the active device's per-device TOML
+        file ([sdr].sample_rates) -- they are not hard-coded in the GUI."""
+        if not self.net.connected:
+            messagebox.showinfo("Sample Rate", "Not connected to server.", parent=self.root)
+            return
+        self.net.send({"cmd": "get_sample_rates"})
+
+    @staticmethod
+    def _fmt_sample_rate(hz):
+        """Render a Hz value as a short human-readable string (kHz/MHz)."""
+        try:
+            hz = float(hz)
+        except (TypeError, ValueError):
+            return str(hz)
+        if hz >= 1_000_000:
+            return f"{hz/1_000_000:g} MHz"
+        if hz >= 1000:
+            return f"{hz/1000:g} kHz"
+        return f"{hz:g} Hz"
+
+    def _open_sample_rate_dialog(self, rates, current=None):
+        """Open a modal window listing the sample rates configured for the
+        active device (server-provided, sourced from that device's TOML
+        file). Clicking a rate sends set_sample_rate to the server."""
+        sc  = self._sc
+        fs  = max(7, int(round(8 * sc)))
+        fs_h= max(8, int(round(9 * sc)))
+        pad = max(4, int(round(6 * sc)))
+
+        top = tk.Toplevel(self.root)
+        top.title("Select Sample Rate")
+        top.configure(bg=C["panel_bg"])
+        top.transient(self.root)
+        top.grab_set()
+        top.resizable(False, False)
+
+        tk.Label(top, text="Select a sample rate:", bg=C["panel_bg"], fg=C["btn_grn_fg"],
+                 font=_gui_font(fs_h, "bold")).pack(padx=pad, pady=(pad, 2), anchor="w")
+
+        if not rates:
+            tk.Label(top, text="No sample rates configured for this device.",
+                     bg=C["panel_bg"], fg=C["text_dim"],
+                     font=_gui_font(fs)).pack(padx=pad, pady=(2, pad))
+            tk.Button(top, text="Close", command=top.destroy,
+                      bg=C["btn_gray"], fg=C["btn_sel_fg"],
+                      font=_gui_font(fs), relief="flat", bd=1,
+                      padx=max(6, int(round(8*sc)))
+                      ).pack(pady=(0, pad))
+        else:
+            lst_fr = tk.Frame(top, bg=C["panel_bg"])
+            lst_fr.pack(fill="both", expand=True,
+                        padx=pad, pady=(2, pad))
+
+            def _select(val):
+                top.destroy()
+                self.net.send({"cmd": "set_sample_rate", "value": val})
+
+            for rate in rates:
+                label = self._fmt_sample_rate(rate)
+                is_cur = current is not None and float(rate) == float(current)
+                if is_cur:
+                    label += "  \u2713"   # checkmark on the active rate
+                btn = tk.Button(
+                    lst_fr, text=label, anchor="w",
+                    bg=C["btn_sel"] if is_cur else C["btn_gray"],
+                    fg=C["btn_sel_fg"],
+                    activebackground=C["btn_sel"], activeforeground=C["btn_sel_fg"],
+                    font=_gui_font(fs), relief="flat", bd=1,
+                    padx=max(6, int(round(8*sc))),
+                    pady=max(1, int(round(2*sc))),
+                    command=lambda r=rate: _select(r))
+                btn.pack(fill="x", pady=(0, max(1, int(round(1*sc)))))
+
+            sep_line = tk.Frame(lst_fr, bg=C["sep"],
+                                height=max(1, int(round(1*sc))))
+            sep_line.pack(fill="x", pady=(max(2, int(round(3*sc))), 0))
+            tk.Button(lst_fr, text="Cancel", command=top.destroy,
+                      bg=C["btn_gray"], fg=C["btn_red_fg"],
+                      font=_gui_font(fs), relief="flat", bd=1,
+                      padx=max(6, int(round(8*sc))),
+                      pady=max(1, int(round(2*sc)))
+                      ).pack(fill="x", pady=(max(2, int(round(3*sc))), 0))
+
+        top.update_idletasks()
+        rw = self.root.winfo_x() + self.root.winfo_width()  // 2
+        rh = self.root.winfo_y() + self.root.winfo_height() // 2
+        tw = top.winfo_reqwidth()
+        th = top.winfo_reqheight()
+        top.geometry(f"+{rw - tw // 2}+{rh - th // 2}")
+
     # ── Soundcard device selection dialog ─────────────────────────────────────
     def _open_soundcard_dialog(self):
         """Open a modal window listing all PyAudio devices.
@@ -4606,6 +4701,10 @@ class App:
             # Server replied to get_devices — open the selection popup on the
             # GUI thread (we are already on the GUI thread inside poll/_handle).
             self._open_device_dialog(msg.get("devices", []))
+        elif t == "sample_rate_list":
+            # Server replied to get_sample_rates — open the selection popup
+            # with the choices configured for the active device's TOML file.
+            self._open_sample_rate_dialog(msg.get("rates", []), msg.get("current"))
         elif t == "memory_list":
             # Server replied to get_memories / save_memory — refresh the
             # memory dialog (if still open on the matching position).
@@ -4657,6 +4756,19 @@ class App:
                 if hasattr(self, '_lo_active'):
                     self._lo_active.set(self.state.get("lo_active", "A"))
                     self._refresh_lo_btns()
+                # Re-centre the upper spectrum/waterfall span for the
+                # (possibly new) device's sample rate. _update_rf_view is
+                # normally only triggered by on_freq_changed/on_lo_b_changed
+                # on manual retune -- without this call here, switching to a
+                # device with a different sample_rate (restored above into
+                # self.state by the preceding resp:ok) left the RF view
+                # showing the *previous* device's span/zoom until the
+                # operator next touched a frequency dial.
+                if hasattr(self, 'rf_spec'):
+                    _active_lo = self.state.get("lo_active", "A")
+                    _view_hz = self.state.get("lo_b_freq", 0) if _active_lo == "B" \
+                        else self.state.get("lo_freq", 0)
+                    self._update_rf_view(int(_view_hz))
             finally:
                 self._sup = False
             # _refresh() redraws mode buttons, user buttons, RF user buttons,

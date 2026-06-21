@@ -1,10 +1,15 @@
 # CAT Device configuration
-# Everything that affects GUI behaviour lives here: user-defined
-# buttons, user-defined modulation buttons, RF user buttons, and the
-# list of other devices selectable from the GUI's Device dialog.
-# CLI flags override the [user_buttons]/[user_mods]/[rf_usr_btns] values
-# at runtime without modifying this file.
+# Describes ONE device profile's GUI buttons: user-defined buttons,
+# user-defined modulation buttons, RF user buttons, and the selectable
+# SDR sample rates. No [devices] section here -- the list of selectable
+# device profiles lives only in cat_server.toml's [devices] section.
+# CLI flags override these values at runtime without modifying this file.
 # Use --device-config PATH to load a file from a non-default location.
+#
+# This file's structure is reused for every device profile: each entry
+# in cat_server.toml's [devices] section (config_N) should point to
+# another file shaped exactly like this one -- a 'cat_device.toml-like
+# file' -- loaded wholesale when that device is selected in the GUI.
 
 [user_buttons]
 # label: max 7 characters; type: "normal" (momentary) or "push" (toggle)
@@ -92,3 +97,12 @@ label_10 = "BtnUsra"
 mode_10 = "normal"
 label_11 = "BtnUsrb"
 mode_11 = "normal"
+
+[sdr]
+# sample_rate: SDR hardware sample rate (Hz) applied when this device
+# profile is loaded -- must be one of the values listed in sample_rates.
+# An active --iq_wav recording always overrides this with its own rate.
+# sample_rates: comma-separated list of sample rates (Hz) the operator can
+# choose from the GUI's "Sample Rate" dialog for this device.
+sample_rate = 192000
+sample_rates = "192000,250000,500000,1000000,2000000"

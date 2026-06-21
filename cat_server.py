@@ -30,6 +30,8 @@ protocol:
         {"cmd": "set_zoom","value": 2}
         {"cmd": "set_spec_ref","box": "rf","value": -10}
         {"cmd": "set_spec_ave","box": "rf","value": 4}
+        {"cmd": "get_sample_rates"}
+        {"cmd": "set_sample_rate", "value": 192000}
         {"cmd": "ui_button","name": "Full Screen"}
         {"cmd": "transport","action": "\u25b6"}
         {"cmd": "user_text", "index": 1, "text": "CQ CQ DE TEST"}
@@ -73,19 +75,26 @@ their default value) on every later run:
     any buttons itself.
 
   * cat_device.toml (--device-config PATH)  -- [user_buttons], [user_mods],
-    [rf_usr_btns]. This is one device profile's GUI configuration: its
-    user-defined buttons, user-defined modulation buttons, and RF user
-    buttons. No [devices] section here.
+    [rf_usr_btns], [sdr]. This is one device profile's GUI configuration:
+    its user-defined buttons, user-defined modulation buttons, RF user
+    buttons, and selectable SDR sample rates. No [devices] section here.
+
+    [sdr] holds sample_rate (the rate applied when this profile is loaded)
+    and sample_rates (a comma-separated list of the rates selectable from
+    the GUI's Sample Rate dialog). Pressing "Sample Rate" in the GUI sends
+    {"cmd": "get_sample_rates"}; the server replies with the list defined
+    here. Choosing one sends {"cmd": "set_sample_rate", "value": N}, which
+    is only accepted if N is one of the configured sample_rates.
 
     Each entry in cat_server.toml's [devices] section (config_N) names a
     path to a *cat_device.toml-like file* for that profile -- i.e. a file
-    with this same [user_buttons]/[user_mods]/[rf_usr_btns] structure (no
-    nested [devices]). When the GUI sends
+    with this same [user_buttons]/[user_mods]/[rf_usr_btns]/[sdr] structure
+    (no nested [devices]). When the GUI sends
     {"cmd": "select_device", "index": N}, that file is loaded (and, like
     cat_device.toml, auto-created/self-corrected if needed) and its
-    buttons replace the running radio's buttons. The device *list* itself
-    doesn't change when you switch devices -- it's fixed for the session,
-    read once from cat_server.toml at startup.
+    buttons (and sample rates) replace the running radio's. The device
+    *list* itself doesn't change when you switch devices -- it's fixed for
+    the session, read once from cat_server.toml at startup.
 
 CLI flags always override whichever config file would otherwise supply that
 value; the config files only supply defaults for flags that weren't passed
@@ -232,11 +241,12 @@ _SERVER_CONFIG_DEFAULTS = {
     },
 }
 
-# [user_buttons] + [user_mods] + [rf_usr_btns] only. Anything that modifies
-# the buttons/mods of a single device profile lives here, in cat_device.toml
-# (or whatever file --device-config / a [devices].config_N entry points to).
-# No [devices] section here -- the device *list* lives only in
-# cat_server.toml; a device profile file just describes its own buttons.
+# [user_buttons] + [user_mods] + [rf_usr_btns] + [sdr]. Anything that
+# modifies the buttons/mods/sample-rates of a single device profile lives
+# here, in cat_device.toml (or whatever file --device-config / a
+# [devices].config_N entry points to). No [devices] section here -- the
+# device *list* lives only in cat_server.toml; a device profile file just
+# describes its own buttons and sample rates.
 _DEVICE_CONFIG_DEFAULTS = {
     "user_buttons": {
         **{f"label_{n}": "" for n in range(1, 15)},
@@ -249,6 +259,14 @@ _DEVICE_CONFIG_DEFAULTS = {
     "rf_usr_btns": {
         **{f"label_{n}": "" for n in range(1, 12)},
         **{f"mode_{n}":  "normal" for n in range(1, 12)},
+    },
+    "sdr": {
+        # Sample rate (Hz) applied when this device profile is loaded.
+        # Must be one of the values listed in sample_rates below.
+        "sample_rate": 192000,
+        # Comma-separated list of sample rates (Hz) selectable from the
+        # GUI's Sample Rate dialog for this device.
+        "sample_rates": "192000,250000,500000,1000000,2000000",
     },
 }
 
@@ -371,14 +389,15 @@ _DEVICE_CONFIG_KEY_ORDER = {
     "user_buttons": [k for n in range(1, 15) for k in (f"label_{n}", f"type_{n}")],
     "user_mods": [k for n in range(1, 11) for k in (f"label_{n}", f"type_{n}")],
     "rf_usr_btns": [k for n in range(1, 12) for k in (f"label_{n}", f"mode_{n}")],
+    "sdr": ["sample_rate", "sample_rates"],
 }
-_DEVICE_CONFIG_SECTION_ORDER = ["user_buttons", "user_mods", "rf_usr_btns"]
+_DEVICE_CONFIG_SECTION_ORDER = ["user_buttons", "user_mods", "rf_usr_btns", "sdr"]
 _DEVICE_CONFIG_HEADER = (
     "# CAT Device configuration\n"
     "# Describes ONE device profile's GUI buttons: user-defined buttons,\n"
-    "# user-defined modulation buttons, and RF user buttons. No [devices]\n"
-    "# section here -- the list of selectable device profiles lives only in\n"
-    "# cat_server.toml's [devices] section.\n"
+    "# user-defined modulation buttons, RF user buttons, and the selectable\n"
+    "# SDR sample rates. No [devices] section here -- the list of selectable\n"
+    "# device profiles lives only in cat_server.toml's [devices] section.\n"
     "# CLI flags override these values at runtime without modifying this file.\n"
     "# Use --device-config PATH to load a file from a non-default location.\n"
     "#\n"
@@ -403,7 +422,14 @@ _DEVICE_CONFIG_SECTION_COMMENTS = {
         '# RF user buttons: shown left of the band buttons in the GUI frequency area.\n'
         '# label: max 7 characters; mode: "normal" (momentary) or "push" (toggle).\n'
         '# Buttons with empty labels are hidden in the GUI.',
+    "sdr":
+        '# sample_rate: SDR hardware sample rate (Hz) applied when this device\n'
+        '# profile is loaded -- must be one of the values listed in sample_rates.\n'
+        '# An active --iq_wav recording always overrides this with its own rate.\n'
+        '# sample_rates: comma-separated list of sample rates (Hz) the operator can\n'
+        '# choose from the GUI\'s "Sample Rate" dialog for this device.',
 }
+
 
 SERVER_CONFIG_SPEC = _ConfigSpec(
     defaults=_SERVER_CONFIG_DEFAULTS,
@@ -429,6 +455,26 @@ def _fmt_toml_value(v):
     if isinstance(v, str):
         return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
     return str(v)
+
+
+def _parse_sample_rates(raw):
+    """Parse a device config's 'sdr.sample_rates' value into a sorted list
+    of unique positive ints. Accepts either the comma-separated string
+    stored in the TOML file (e.g. "192000,250000,500000") or an existing
+    list/tuple of values. Any unparsable entries are silently skipped; if
+    nothing valid is found, falls back to a single 192000 Hz entry so the
+    GUI's Sample Rate dialog always has at least one choice to show.
+    """
+    items = raw if isinstance(raw, (list, tuple)) else str(raw).split(",")
+    rates = set()
+    for item in items:
+        try:
+            v = int(float(str(item).strip()))
+            if v > 0:
+                rates.add(v)
+        except (TypeError, ValueError):
+            continue
+    return sorted(rates) if rates else [192000]
 
 
 def _merge_config_with_defaults(cfg, spec):
@@ -504,7 +550,7 @@ def _ensure_config(path, spec, kind="config"):
         print(f"[config] NOTE: {path} has section(s) not used by this file "
               f"({kind}): {', '.join(_extra)} — they are ignored here. "
               f"[server]/[audio]/[devices] belong in cat_server.toml; "
-              f"[user_buttons]/[user_mods]/[rf_usr_btns] belong in "
+              f"[user_buttons]/[user_mods]/[rf_usr_btns]/[sdr] belong in "
               f"cat_device.toml (or your --device-config / [devices].config_N "
               f"file).")
     merged, added = _merge_config_with_defaults(_cfg, spec)
@@ -987,7 +1033,12 @@ def _memory_file_for_device(device_cfg_path):
 
 # ── Per-device GUI state persistence ─────────────────────────────────────────
 # Keys saved/restored — excludes running, ptt, split (session transients),
-# sample_rate (hardware property), and button *definitions* (from TOML).
+# and button *definitions* (from TOML). sample_rate IS included: it must
+# persist across a server restart and across switching back and forth
+# between devices, the same as any other operator-adjustable setting.
+# (self.sample_rates, the plural *list* of selectable rates, stays a
+# hardware property reloaded fresh from each device's TOML — only the
+# single currently-active rate is persisted here.)
 _GUI_STATE_KEYS = (
     "center_freq", "tune_freq", "lo_b_freq", "lo_active",
     "zoom", "mode",
@@ -999,6 +1050,8 @@ _GUI_STATE_KEYS = (
     # Spectrum display controls (G90 SCALE and AVE)
     "spec_ref_rf", "spec_ave_rf",
     "spec_ref_af", "spec_ave_af",
+    # Active SDR sample rate (Hz) — see comment above.
+    "sample_rate",
 )
 
 
@@ -1116,7 +1169,8 @@ class RadioState:
     """Holds the simulated 'radio' settings and produces spectrum data."""
 
     def __init__(self, user_buttons=None, user_mod_labels=None, user_mod_types=None,
-                 rf_usr_btns=None, iq_source=None, devices=None, device_cfg_path=None):
+                 rf_usr_btns=None, iq_source=None, devices=None, device_cfg_path=None,
+                 sample_rates=None, default_sample_rate=None):
         self.lock = threading.Lock()
         self.center_freq = 14_195_000.0
         self.sample_rate = 192_000.0
@@ -1198,6 +1252,28 @@ class RadioState:
             if self.iq_source.center_freq is not None:
                 self.center_freq = self.iq_source.center_freq
 
+        # ── SDR sample-rate choices for the active device ───────────────────
+        # self.sample_rates is the list shown in the GUI's Sample Rate dialog
+        # (populated from this device profile's [sdr].sample_rates). It is a
+        # *hardware* property of the device profile, not a session/GUI-state
+        # setting -- it's reloaded fresh on every "select_device", same as
+        # the buttons above, and is never saved/restored via _GUI_STATE_KEYS.
+        # self.sample_rate (singular, the *active* choice) is different: it
+        # IS part of _GUI_STATE_KEYS and persists across restarts and device
+        # switches, same as center_freq/mode/etc. The default below is only
+        # the fallback used the first time this device profile is ever
+        # loaded (before any GUI state has been saved for it); an active
+        # --iq_wav recording always wins over both the default and any
+        # restored value, since its real sample rate is the radio's rate.
+        self.sample_rates = list(sample_rates) if sample_rates else [192000]
+        if self.iq_source is None and default_sample_rate is not None:
+            try:
+                _dsr = int(float(default_sample_rate))
+            except (TypeError, ValueError):
+                _dsr = None
+            if _dsr is not None and _dsr in self.sample_rates:
+                self.sample_rate = float(_dsr)
+
         # Device profiles list: [{"label": str, "config": str}, ...]
         # Populated from the [devices] section of the server TOML config.
         self.devices = list(devices) if devices else []
@@ -1244,6 +1320,22 @@ class RadioState:
                 setattr(self, key, (list(val) + [False] * n)[:n])
             else:
                 setattr(self, key, val)
+
+        # sample_rate is restored above like any other setting, but it's
+        # still constrained by hardware: an active --iq_wav recording's
+        # real rate always wins, and otherwise the restored value must be
+        # one of this device's currently configured sample_rates (the TOML
+        # may have changed since the state was saved) — fall back to the
+        # first configured choice if not.
+        if self.iq_source is not None:
+            self.sample_rate = float(self.iq_source.sample_rate)
+        elif self.sample_rate not in self.sample_rates:
+            if self.sample_rates:
+                print(f"[gui_state] WARNING: restored sample_rate "
+                      f"{self.sample_rate!r} not in configured "
+                      f"sample_rates {self.sample_rates} — using "
+                      f"{self.sample_rates[0]}")
+                self.sample_rate = float(self.sample_rates[0])
 
     def _autosave_gui_state(self):
         """Capture current state and persist it for the active device.
@@ -1417,6 +1509,7 @@ class RadioState:
                         _ubtn  = dcfg.get("user_buttons", {})
                         _umods = dcfg.get("user_mods",    {})
                         _rufb  = dcfg.get("rf_usr_btns",  {})
+                        _sdr   = dcfg.get("sdr",          {})
                         self.user_buttons = [
                             {
                                 "label": _ubtn.get(f"label_{n}", ""),
@@ -1442,6 +1535,29 @@ class RadioState:
                         ]
                         self.rf_usr_btn_state = [False] * NUM_RF_USR_BTNS
 
+                        # SDR sample-rate choices: same hardware-property
+                        # treatment as the buttons above -- reloaded fresh
+                        # from this device's [sdr] section. The line below
+                        # sets sample_rate to this device's configured
+                        # default only as a fallback; if a GUI-state file
+                        # exists for this device (loaded further down) its
+                        # last-used sample_rate is restored over this
+                        # default. An active --iq_wav recording's real
+                        # sample rate wins over both either way.
+                        self.sample_rates = _parse_sample_rates(
+                            _sdr.get("sample_rates",
+                                     _DEVICE_CONFIG_DEFAULTS["sdr"]["sample_rates"]))
+                        if self.iq_source is None:
+                            _def_sr = _sdr.get(
+                                "sample_rate",
+                                _DEVICE_CONFIG_DEFAULTS["sdr"]["sample_rate"])
+                            try:
+                                _dsr = int(float(_def_sr))
+                            except (TypeError, ValueError):
+                                _dsr = None
+                            self.sample_rate = float(_dsr) if _dsr in self.sample_rates \
+                                else float(self.sample_rates[0])
+
                     # Switch device identity: memories + GUI-state file.
                     self.device_cfg_path = cfg_path
                     self.memory_file = _memory_file_for_device(cfg_path)
@@ -1459,6 +1575,30 @@ class RadioState:
                 # reload_state tells the GUI to resync all widgets from the
                 # state dict that arrives in the preceding resp:ok.
                 outgoing = {"type": "reload_state"}
+            elif c == "get_sample_rates":
+                # GUI's "Sample Rate" button was pressed. Reply with the
+                # active device's configured sample-rate choices (from its
+                # [sdr].sample_rates) plus the rate currently in effect, so
+                # the GUI can open its Sample Rate dialog.
+                outgoing = {"type": "sample_rate_list",
+                            "rates": list(self.sample_rates),
+                            "current": self.sample_rate}
+            elif c == "set_sample_rate":
+                # {"cmd": "set_sample_rate", "value": <Hz>} — only accepted
+                # if value is one of this device's configured sample_rates
+                # (see [sdr] in the per-device TOML file). The new value is
+                # reflected back to the GUI via the normal "sample_rate" key
+                # in the resp:ok state dict that follows every command.
+                try:
+                    _req_sr = int(float(cmd.get("value")))
+                except (TypeError, ValueError):
+                    _req_sr = None
+                if _req_sr is not None and _req_sr in self.sample_rates:
+                    self.sample_rate = float(_req_sr)
+                else:
+                    print(f"[cat_server] WARNING: rejected set_sample_rate "
+                          f"{cmd.get('value')!r} — not in this device's "
+                          f"configured sample_rates {self.sample_rates}")
             elif c == "ui_button":
                 # Generic UI button presses (Full Screen, SDR-Device, FreqMgr,
                 # Minimize, Exit, ...) - nothing to simulate, but still logged
@@ -1579,7 +1719,7 @@ class RadioState:
             "set_nb", "set_nr", "set_nbrf", "set_nbif",
             "set_afc", "set_anf", "set_notch", "set_mute",
             "set_zoom", "user_button", "rf_usr_button",
-            "set_spec_ref", "set_spec_ave",
+            "set_spec_ref", "set_spec_ave", "set_sample_rate",
         }
         if c in _STATE_MUTATING_CMDS:
             with self.lock:
@@ -2026,13 +2166,14 @@ def _parse_args():
     _devs = _cfg.get("devices", {})
     _D    = _SERVER_CONFIG_DEFAULTS
 
-    # cat_device.toml: [user_buttons] + [user_mods] + [rf_usr_btns] -- the
-    # buttons/mods for the *default* device profile (everything that affects
-    # GUI behaviour for one profile).
+    # cat_device.toml: [user_buttons] + [user_mods] + [rf_usr_btns] + [sdr]
+    # -- the buttons/mods/sample-rates for the *default* device profile
+    # (everything that affects GUI behaviour for one profile).
     _dcfg  = _ensure_config(_device_config_path, DEVICE_CONFIG_SPEC, kind="device config")
     _ubtn  = _dcfg.get("user_buttons", {})
     _umods = _dcfg.get("user_mods",    {})
     _rufb  = _dcfg.get("rf_usr_btns",  {})
+    _sdr   = _dcfg.get("sdr",          {})
     _DD    = _DEVICE_CONFIG_DEFAULTS
 
     _def_host       = _srv.get("host",       _D["server"]["host"])
@@ -2083,7 +2224,7 @@ def _parse_args():
     ap.add_argument('--device-config', metavar='PATH', default=None,
                     help=f'Path to TOML device config file for the default device '
                          f'profile -- [user_buttons] + [user_mods] + [rf_usr_btns] '
-                         f'(default: ./{_DEVICE_CONFIG_NAME})')
+                         f'+ [sdr] (default: ./{_DEVICE_CONFIG_NAME})')
     ap.add_argument("host", nargs="?",
                     default=_def_host if not _cli_host_given else None,
                     help=f"Host/IP to listen on (default: {_def_host})")
@@ -2144,6 +2285,12 @@ def _parse_args():
     # ── Merge: CLI beats config, config beats built-in default ───────────────
     _raw.config        = _config_path
     _raw.device_config = _device_config_path
+    # Track whether --device-config was explicitly given on the CLI (vs. just
+    # falling back to the default ./cat_device.toml). main() uses this to
+    # decide whether the server should auto-adopt the [devices] list's first
+    # entry as its starting identity -- see comment at the RadioState
+    # construction site for why this matters.
+    _raw.device_config_explicit = bool(_pre_args.device_config)
     _raw.audio_port = _raw.audio_port if hasattr(_raw, 'audio_port') else _def_audio_port
     _raw.no_audio   = _raw.no_audio   if hasattr(_raw, 'no_audio')   else _def_no_audio
 
@@ -2192,6 +2339,11 @@ def _parse_args():
         _dcattr = f"device_config_{n}"
         setattr(_raw, _dlattr, _devs.get(f"label_{n}",  _D["devices"][f"label_{n}"]))
         setattr(_raw, _dcattr, _devs.get(f"config_{n}", _D["devices"][f"config_{n}"]))
+
+    # SDR sample rates for the default device profile (no CLI flags —
+    # TOML-only, from cat_device.toml's [sdr] section).
+    _raw.sdr_sample_rate  = _sdr.get("sample_rate",  _DD["sdr"]["sample_rate"])
+    _raw.sdr_sample_rates = _sdr.get("sample_rates", _DD["sdr"]["sample_rates"])
 
     # ── Validations ───────────────────────────────────────────────────────────
     # Length checks
@@ -2323,7 +2475,45 @@ def main():
                        rf_usr_btns=_build_rf_usr_btns(args),
                        iq_source=iq_source,
                        devices=_build_devices(args),
-                       device_cfg_path=args.device_config)
+                       device_cfg_path=args.device_config,
+                       sample_rates=_parse_sample_rates(args.sdr_sample_rates),
+                       default_sample_rate=args.sdr_sample_rate)
+
+    # BUG FIX: device identity mismatch on startup.
+    # ----------------------------------------------------------------------
+    # RadioState above was just constructed with device_cfg_path =
+    # args.device_config, which defaults to the generic ./cat_device.toml --
+    # a path that is *not* the same as any entry in the [devices] list
+    # (configs there are typically named files like devcfg1.toml). Per-device
+    # GUI state and memories are persisted/restored by matching this exact
+    # path (see _gui_state_file_for_device / _memory_file_for_device), so the
+    # server's very first identity was a "phantom" profile distinct from
+    # every device the operator can actually pick from the GUI's Device
+    # dialog -- even device #1, which is conceptually "the same" radio.
+    #
+    # Symptom this caused: settings adjusted right after connecting (e.g.
+    # sample rate) got saved under cat_device.gui_state.json when the
+    # operator first opened the Device dialog and picked an entry. Returning
+    # to that same entry later loaded *its own* (different, often empty)
+    # state file instead -- so the sample rate (and every other persisted
+    # setting) silently reverted to that device's TOML default, and the
+    # Sample Rate dialog's checkmark correctly, but confusingly, pointed at
+    # the wrong rate.
+    #
+    # Fix: if a [devices] list is configured and the operator did not
+    # explicitly pass --device-config (the common case -- --device-config is
+    # meant for ad-hoc/standalone profiles outside the list), immediately
+    # adopt device #1's identity, exactly as if the operator had picked it
+    # from the Device dialog. This reuses select_device's own (already
+    # correct) load logic, so buttons/sample-rates/gui-state/memories all
+    # come from devices[0]'s own config file from the very first connection
+    # -- there is no longer a separate "starting" identity to fall out of
+    # sync with.
+    if radio.devices and not args.device_config_explicit:
+        radio.apply({"cmd": "select_device", "index": 1})
+        print(f"[cat_server] startup device auto-selected: "
+              f"{radio.devices[0].get('label', '?')!r} "
+              f"(config {radio.devices[0].get('config', '')!r})")
 
     # ── Optional: load a wav file to transmit as the downlink audio ──────────
     audio_source = None
