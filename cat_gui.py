@@ -2588,16 +2588,45 @@ class App:
         self._refresh_band_highlight = _refresh_band_highlight
 
         # ── freq_box: outer container ─────────────────────────────────────────
-        # We use a grid: column 0 = LO/Tune rows (stacked), column 1 = TX/RX
-        # split-indicator labels (centered in the gap), column 2 = band
-        # column spanning all rows but anchored to the top, so the first
-        # band button aligns exactly with the LO A row.
+        # We use a grid: column 0 = LO/Tune rows (stacked, flexible width),
+        # column 1 = memory ("M") buttons (one per LO/Tune row), column 2 =
+        # TX/RX split-indicator labels (centered in the gap), column 3 =
+        # band column spanning all rows but anchored to the top, so the
+        # first band button aligns exactly with the LO A row.
         freq_box.grid_columnconfigure(0,weight=1)
         freq_box.grid_columnconfigure(1,weight=0)
         freq_box.grid_columnconfigure(2,weight=0)
+        freq_box.grid_columnconfigure(3,weight=0)
+
+        # ── Memory ("M") buttons — one per frequency row (LO A / LO B / Tune) ──
+        # Grid columns 0/1/2/3 (digits / M-gap / TX-RX-gap / band buttons)
+        # keep their original indices and contents untouched — nothing here
+        # moves any other widget's column. The M buttons themselves are no
+        # longer grid()'d into column 1 though: at small widths the digit
+        # display (column 0) centers its content using the FreqDisp's own
+        # internal weight=1 column, so its right edge can drift right and
+        # collide with a button that's grid-pinned immediately next door.
+        # Instead each M button is a fixed-size square placed with place(),
+        # pinned every layout pass to the exact horizontal midpoint between
+        # the live right edge of that row's last digit and the live left
+        # edge of band_area (the button column at the right) — see
+        # _position_mem_btns() below, called after all rows/band_area exist.
+        fs_mem=max(7,int(round(8*sc)))
+        mem_sq=max(16,int(round(20*sc)))   # fixed pixel side -> always square
+        self._mem_btns={}   # position string ("LO A"/"LO B"/"Tune") -> Button
+        def _mem_btn(position):
+            btn=tk.Button(freq_box,text="M",anchor="center",
+                          bg=C["btn_gray"],fg=C["btn_sel_fg"],
+                          activebackground=C["btn_sel"],activeforeground=C["btn_sel_fg"],
+                          font=_gui_font(fs_mem,"bold"),relief="flat",bd=0,
+                          highlightthickness=0,padx=0,pady=0,
+                          command=lambda p=position:self._mem_btn_press(p))
+            self._mem_btns[position]=btn
+            return btn
 
         lo_row=tk.Frame(freq_box,bg=C["spec_bg"])
         lo_row.grid(row=0,column=0,sticky="ew")
+        _mem_btn("LO A")
 
         # Left side: LO A display
         self.lo_disp=FreqDisp(lo_row,self,label="LO A",
@@ -2615,13 +2644,13 @@ class App:
         self._split_tx_lbl=tk.Label(freq_box,text="",bg=C["spec_bg"],fg=C["btn_red_fg"],
                                      font=_gui_font(fs_split_lbl,"bold"),
                                      width=2,anchor="center")
-        self._split_tx_lbl.grid(row=0,column=1,sticky="ns",
+        self._split_tx_lbl.grid(row=0,column=2,sticky="ns",
                                  padx=max(3,int(round(5*sc))))
 
         # ── Band buttons column — top-aligned to LO A row ─────────────────────
         # Two sub-columns: left = RF user buttons (col=1), right = band buttons (col=2)
         band_area=tk.Frame(freq_box,bg=C["spec_bg"])
-        band_area.grid(row=0,column=2,rowspan=4,sticky="n",
+        band_area.grid(row=0,column=3,rowspan=4,sticky="n",
                        padx=max(2,int(round(3*sc))),
                        pady=(max(1,int(round(2*sc))),0))
         fs_band=max(6,int(round(7*sc)))
@@ -2687,6 +2716,7 @@ class App:
 
         lo_b_row=tk.Frame(freq_box,bg=C["spec_bg"])
         lo_b_row.grid(row=2,column=0,sticky="ew")
+        _mem_btn("LO B")
         self.lo_b_disp=FreqDisp(lo_b_row,self,label="LO B",
                                 on_change=self.on_lo_b_changed,
                                 lo_select_cmd=lambda:_select_lo("B"))
@@ -2700,7 +2730,7 @@ class App:
         self._split_rx_lbl=tk.Label(freq_box,text="",bg=C["spec_bg"],fg=C["btn_grn_fg"],
                                      font=_gui_font(fs_split_lbl,"bold"),
                                      width=2,anchor="center")
-        self._split_rx_lbl.grid(row=2,column=1,sticky="ns",
+        self._split_rx_lbl.grid(row=2,column=2,sticky="ns",
                                  padx=max(3,int(round(5*sc))))
 
         # Apply initial LO button colours
@@ -2710,10 +2740,46 @@ class App:
 
         tune_row=tk.Frame(freq_box,bg=C["spec_bg"])
         tune_row.grid(row=3,column=0,sticky="ew")
+        _mem_btn("Tune")
         self.tune_disp=FreqDisp(tune_row,self,label="Tune",on_change=self.on_tune_changed)
         self.tune_disp._label_text="Tune"
         self.tune_disp.pack(side="left",fill="x",expand=True,padx=max(1,int(round(2*sc))),pady=max(1,int(round(2*sc))))
         self.tune_disp.set_value(self.state["tune_freq"],notify=False)
+
+        # ── Position the M buttons ──────────────────────────────────────────
+        # Square (mem_sq x mem_sq, fixed pixel size) and pinned every layout
+        # pass to the exact horizontal midpoint between the live right edge
+        # of that row's last digit and the live left edge of band_area (the
+        # button column at the right). Uses place() purely for the M
+        # buttons themselves — every other widget here keeps its original
+        # grid column, so nothing else moves.
+        _mem_rows={"LO A":self.lo_disp,"LO B":self.lo_b_disp,"Tune":self.tune_disp}
+        def _position_mem_btns(event=None):
+            try:
+                freq_box.update_idletasks()
+                fb_x=freq_box.winfo_rootx()
+                band_left=band_area.winfo_rootx()-fb_x
+                for position,btn in self._mem_btns.items():
+                    disp=_mem_rows[position]
+                    last_digit=disp._lbl[-1]
+                    digit_right=last_digit.winfo_rootx()+last_digit.winfo_width()-fb_x
+                    row_mid_y=disp.winfo_rooty()-freq_box.winfo_rooty()+disp.winfo_height()/2
+                    mid_x=(digit_right+band_left)/2
+                    btn.place(in_=freq_box,x=mid_x,y=row_mid_y,
+                              width=mem_sq,height=mem_sq,anchor="center")
+                    # The TX/RX labels (column 2) are created after these M
+                    # buttons, so without this they'd stack on top of the M
+                    # buttons near LO A / LO B (Tk z-orders later-created
+                    # siblings above earlier ones) — covering both the
+                    # button's label and its click target. Lifting here
+                    # keeps the M buttons clickable and visible every pass.
+                    btn.lift()
+            except Exception:
+                pass
+        self._position_mem_btns=_position_mem_btns
+        freq_box.bind("<Configure>",_position_mem_btns)
+        freq_box.after(0,_position_mem_btns)
+        freq_box.after(120,_position_mem_btns)
 
         # ── Volume / AGC Thresh sliders ───────────────────────────────────────
         sv=tk.Frame(lp,bg=C["panel_bg"])
@@ -3335,6 +3401,8 @@ class App:
             bot_w  = self._bot.winfo_reqwidth()
             min_w  = max(scaled('min_w', sc), bot_w)
             self.root.minsize(min_w, max(60, min_h))
+            if hasattr(self, '_position_mem_btns'):
+                self._position_mem_btns()
         except Exception:
             import traceback; traceback.print_exc()
 
@@ -3888,6 +3956,13 @@ class App:
         else:
             self.net.send({"cmd":"user_button","index":idx})
         self._refresh()
+
+    # ── Memory ("M") buttons — one per LO A / LO B / Tune row ──────────────
+    def _mem_btn_press(self,position):
+        """Send a momentary 'memory' command to the server, tagged with the
+        frequency-row position ("LO A", "LO B", or "Tune") that was
+        pressed."""
+        self.net.send({"cmd":"memory","position":position})
 
     # ── SPLIT toggle (between LO A and LO B) ────────────────────────────────
     def _toggle_split(self):

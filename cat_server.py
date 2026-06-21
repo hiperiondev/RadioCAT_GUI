@@ -31,6 +31,7 @@ protocol:
         {"cmd": "ui_button","name": "Full Screen"}
         {"cmd": "transport","action": "\u25b6"}
         {"cmd": "user_text", "index": 1, "text": "CQ CQ DE TEST"}
+        {"cmd": "memory", "position": "LO A"}
         {"cmd": "start"}
         {"cmd": "stop"}
         {"cmd": "hello"}
@@ -1200,6 +1201,13 @@ class RadioState:
             elif c == "transport":
                 # Transport-bar button presses (record/play/pause/etc.) -
                 # nothing to simulate, but still logged below.
+                pass
+            elif c == "memory":
+                # Memory ("M") button press, sent from the GUI alongside the
+                # frequency row it belongs to: {"cmd":"memory","position":
+                # "LO A"|"LO B"|"Tune"}. Momentary signal only — nothing to
+                # simulate here, but still logged below so it's visible on
+                # the server console.
                 pass
             elif c == "user_button":
                 # User-defined button N (1..NUM_USER_BUTTONS).
