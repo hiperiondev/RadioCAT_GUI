@@ -6,7 +6,7 @@
   </a>
 </div>
 
-Este proyecto es una **Interfaz GUI CAT** en Python/Tkinter — un front-end SDR simulado cuyo cada control está conectado a un pequeño "radio" de backend simulado a través de un socket TCP simple.
+Este proyecto es una **Interfaz GUI CAT** en Python/Tkinter — un front-end SDR cuyo cada control está conectado a un pequeño radio de backend a través de un socket TCP simple.
 
 Consta de dos archivos:
 
