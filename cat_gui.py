@@ -2511,8 +2511,17 @@ class App:
         # No mode name, label, or type is hardcoded in the GUI — everything
         # (label + type) is supplied by the server via user_mod_labels /
         # user_mod_types and may be reconfigured at any time.
+        # Buttons use grid with equal column weights (10 fixed columns), the
+        # same pattern as the user-button rows below, so every button keeps
+        # the same static size no matter how many of the 10 slots currently
+        # have a label. pack(fill="x", expand=True) was used previously, but
+        # that resizes every visible button each time a sibling slot is
+        # shown or hidden — exactly the bug being fixed here.
         fs_mode=max(6,int(round(8*sc)))
         self.mode_btns={}
+        _px_mode=max(1,int(round(1*sc)))
+        for col in range(10):
+            mode_row.grid_columnconfigure(col,weight=1,uniform="modebtn")
         for _umi in range(10):
             _umidx=_umi+1
             _umb=tk.Button(mode_row,text="",width=5,
@@ -2521,7 +2530,9 @@ class App:
                            activebackground=C["btn_sel"],
                            font=_gui_font(fs_mode),relief="flat",bd=1,
                            padx=max(1,int(round(2*sc))),pady=max(1,int(round(1*sc))))
-            # Do not pack now — _refresh packs/forgets based on server labels
+            _umb.grid(row=0,column=_umi,padx=_px_mode,sticky="ew")
+            # Slot's column is reserved even while hidden, so the fixed size
+            # never shifts — _refresh shows/hides it with grid()/grid_remove().
             self.mode_btns[_umidx]=_umb
 
 
@@ -3424,13 +3435,14 @@ class App:
     # ── control logic ──────────────────────────────────────────────────────────
     def _refresh(self):
         # ── Modulation buttons ──────────────────────────────────────────────
-        # Pack/unpack based on whether the server has provided a label for
+        # Show/hide based on whether the server has provided a label for
         # that slot. Label, type, and selection state all come from the
         # server (user_mod_labels / user_mod_types / state["mode"]) — no
-        # mode name is hardcoded in the GUI.
+        # mode name is hardcoded in the GUI. Visibility is toggled with
+        # grid()/grid_remove() rather than pack(fill="x", expand=True)/
+        # pack_forget() — each slot keeps its own fixed grid column, so a
+        # button's size never changes as other slots are shown or hidden.
         _uml=self.state.get("user_mod_labels") or []
-        _sc=self._sc
-        _px=max(1,int(round(1*_sc)))
         for _umidx,_umb in self.mode_btns.items():
             _lbl=((_uml[_umidx-1].strip() if _umidx-1<len(_uml) else ""))[:4]
             if _lbl:
@@ -3438,12 +3450,9 @@ class App:
                             command=lambda lbl=_lbl,i=_umidx:self._set_mode(lbl,i),
                             bg=C["btn_sel"] if self.state["mode"]==_lbl else C["btn_gray"],
                             fg=C["btn_sel_fg"])
-                try:
-                    _umb.pack_info()  # already packed → skip
-                except tk.TclError:
-                    _umb.pack(side="left",padx=_px,fill="x",expand=True)
+                _umb.grid()
             else:
-                _umb.pack_forget()
+                _umb.grid_remove()
         # Apply/clear the AF-box text-panel split for the active mode (if any)
         self._update_af_text_split()
         # User-defined buttons: refresh label and (for push-push type) the
