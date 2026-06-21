@@ -1367,6 +1367,10 @@ class RadioState:
                     print(f"[cat_server] device selected: {dev.get('label','?')} "
                           f"(index {idx + 1}, config {cfg_path!r})")
 
+                    # PTT must always be off when switching device —
+                    # never carry TX state across a device change.
+                    self.ptt = False
+
                     # Save current device's full GUI state before switching.
                     _out_snap = self._capture_gui_state()
                     _save_gui_state(self._gui_state_file, _out_snap)

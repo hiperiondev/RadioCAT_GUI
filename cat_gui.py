@@ -4472,6 +4472,22 @@ class App:
             # preceding resp:ok message.  Now resync every widget from
             # self.state, suppressing round-trip sends so we don't echo the
             # server's own values back to it.
+            #
+            # PTT is always forced OFF on connect and device change — it is a
+            # session-only transient and must never be inherited from a
+            # previous session or a different device.
+            self.state["ptt"] = False
+            self.rtp_audio.set_ptt(False)
+            # Unfreeze every display component that set_tx(True) may have
+            # locked while PTT was active — identical to _on_disconnected,
+            # so nothing stays blocked after a device switch or reconnect.
+            self.smeter.set_tx(False)
+            if hasattr(self, 'rf_wf'):   self.rf_wf.set_tx(False)
+            if hasattr(self, 'rf_spec'): self.rf_spec.set_tx(False)
+            if hasattr(self, 'af_wf'):   self.af_wf.set_tx(False)
+            if hasattr(self, 'af_spec'): self.af_spec.set_tx(False)
+            if hasattr(self, '_draw_ptt_btn'):
+                self._draw_ptt_btn(False, self._ptt_enabled)
             self._sup = True
             try:
                 # Frequency displays
