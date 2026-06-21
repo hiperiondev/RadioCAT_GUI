@@ -2714,6 +2714,14 @@ class App:
                        command=lambda:self._toggle_split())
         self._split_btn.pack(side="left")
 
+        self._swap_btn=tk.Button(split_row,text="SWAP",anchor="center",
+                       bg=C["btn_gray"],fg=C["btn_sel_fg"],
+                       activebackground=C["btn_sel"],activeforeground=C["btn_sel_fg"],
+                       font=_gui_font(fs_split,"bold"),relief="flat",bd=0,highlightthickness=0,
+                       padx=max(4,int(round(6*sc))),pady=max(1,int(round(1*sc))),
+                       command=lambda:self._swap_lo_a_b())
+        self._swap_btn.pack(side="left",padx=(max(2,int(round(3*sc))),0))
+
         lo_b_row=tk.Frame(freq_box,bg=C["spec_bg"])
         lo_b_row.grid(row=2,column=0,sticky="ew")
         _mem_btn("LO B")
@@ -3846,7 +3854,7 @@ class App:
             self.net.send({"cmd":"hello"})
             self.net.send({"cmd":"set_ptt","enabled":False})   # clear any stale TX on server
             self.net.send({"cmd":"set_split","enabled":False}) # clear any stale SPLIT on server
-            self.net.send({"cmd":"set_freq","hz":self.state["lo_freq"]})
+            self.net.send({"cmd":"set_lo_a_freq","hz":self.state["lo_freq"]})
             self.net.send({"cmd":"set_lo_b_freq","hz":self.state["lo_b_freq"]})
             self.net.send({"cmd":"set_tune_freq","hz":self.state["tune_freq"]})
             self.net.send({"cmd":"set_mode","mode":self.state["mode"]})
@@ -4285,7 +4293,31 @@ class App:
         # Re-centre upper spectrum/waterfall only if LO A is the active LO
         if self._lo_active.get()=="A":
             self._update_rf_view(hz)
-        if not self._sup: self.net.send({"cmd":"set_freq","hz":hz})
+        if not self._sup: self.net.send({"cmd":"set_lo_a_freq","hz":hz})
+
+    def _swap_lo_a_b(self):
+        """Swap the LO A and LO B frequencies and push both changes to the server."""
+        a_hz=self.lo_disp.value
+        b_hz=self.lo_b_disp.value
+        if a_hz==b_hz:
+            return
+        # Update on-screen digits without notify — state and server sends are
+        # driven explicitly below so both messages are always sent regardless
+        # of FreqDisp on_change wiring or any _sup suppression flag.
+        self.lo_disp.set_value(b_hz,notify=False)
+        self.lo_b_disp.set_value(a_hz,notify=False)
+        # Update internal state for both LOs.
+        self.state["lo_freq"]=b_hz
+        self.state["lo_b_freq"]=a_hz
+        # Re-centre RF view for whichever LO is currently active.
+        active=self._lo_active.get()
+        if active=="A":
+            self._update_rf_view(b_hz)
+        elif active=="B":
+            self._update_rf_view(a_hz)
+        # Send both frequency changes to the server unconditionally.
+        self.net.send({"cmd":"set_lo_a_freq","hz":b_hz})
+        self.net.send({"cmd":"set_lo_b_freq","hz":a_hz})
 
     def on_lo_b_changed(self,hz):
         self.state["lo_b_freq"]=hz

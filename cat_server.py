@@ -1205,7 +1205,7 @@ class RadioState:
         with self.lock:
             if c == "hello":
                 pass
-            elif c == "set_freq":
+            elif c == "set_freq" or c == "set_lo_a_freq":
                 self.center_freq = float(cmd.get("hz", self.center_freq))
             elif c == "set_tune_freq":
                 self.tune_freq = float(cmd.get("hz", self.tune_freq))
