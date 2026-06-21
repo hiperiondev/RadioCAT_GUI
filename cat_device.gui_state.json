@@ -48,5 +48,9 @@
     false,
     false,
     false
-  ]
+  ],
+  "spec_ref_rf": 5.0,
+  "spec_ave_rf": 6,
+  "spec_ref_af": 0.0,
+  "spec_ave_af": 1
 }

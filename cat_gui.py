@@ -1631,12 +1631,16 @@ class WFCanvas(tk.Canvas):
 # ── Spectrum canvas ───────────────────────────────────────────────────────────
 
 class SpecCanvas(tk.Canvas):
-    DB_MIN=-150.0; DB_MAX=0.0; GRAB=6
+    GRAB=6
 
     def __init__(self,master,app,show_filter=False,af=False,**kw):
         kw.setdefault("bg",C["spec_bg"]); kw.setdefault("highlightthickness",0)
         super().__init__(master,**kw)
         self.app=app; self.show_filter=show_filter; self.af=af
+        # Reference level: DB_MAX is the top of the display (adjustable via
+        # SCALE control); DB_MIN is always 150 dB below it.
+        self.DB_MAX = 0.0
+        self.DB_MIN = -150.0
         if af:
             self.f0 = 0.0
             self.f1 = float(_AF_DISPLAY_RANGE_HZ)   # 3000.0
@@ -1726,6 +1730,17 @@ class SpecCanvas(tk.Canvas):
                              fill="#ff3030", font=("TkFixedFont", fs, "bold"),
                              tags="spec_tx_badge")
 
+    def set_ref(self, db):
+        """Set spectrum reference level (top of display) in dB and redraw.
+
+        ``db`` is snapped to the nearest 5-dB step and clamped to [-50, +10].
+        DB_MIN is always 150 dB below DB_MAX so the displayed range is fixed.
+        """
+        db = float(max(-50, min(10, round(db / 5) * 5)))
+        self.DB_MAX = db
+        self.DB_MIN = db - 150.0
+        self.draw()
+
     def draw(self):
         # ── Retained-item draw: no delete("all").  Every canvas object was
         # created once in __init__; here we only reposition and show/hide them.
@@ -1785,11 +1800,21 @@ class SpecCanvas(tk.Canvas):
             self.itemconfig(self._id_vfo,     state="hidden")
 
         # ── 3. dB grid lines + labels (ON TOP of trace) ───────────────────────
-        for idx, db in enumerate(self._db_labels):
+        # Compute grid labels dynamically so they shift with DB_MAX (SCALE control).
+        # Always 31 levels from DB_MAX down to DB_MIN in 5-dB steps; text only
+        # every 5th line (every 25 dB).  The pre-allocated item pool is exactly
+        # 31 items, matching this count regardless of the reference offset.
+        _dyn_labels = [self.DB_MAX - i * 5 for i in range(31)]
+        for idx, db in enumerate(_dyn_labels):
             y = self._dy(db, draw_h)
             self.coords(self._id_db_lines[idx], 0, y, w, y)
             self.coords(self._id_db_texts[idx], 2, y+1)
-            self.itemconfig(self._id_db_texts[idx], font=gfont)
+            if idx % 5 == 0:
+                _db_int = int(db)
+                txt = (f"{_db_int} dB" if _db_int == 0 else str(_db_int))
+            else:
+                txt = ""
+            self.itemconfig(self._id_db_texts[idx], text=txt, font=gfont)
 
         # ── 4. Frequency grid lines + labels (ON TOP of trace) ────────────────
         # BUG-12: measure the actual rendered width of the widest dB label
@@ -2130,12 +2155,18 @@ class FreqDisp(tk.Frame):
 
 # ── toolbar strip (between RF waterfall and AF area) ─────────────────────────
 
-def _toolbar(parent,rbw="23.4 Hz",avg="2",bg=None,sc=1.0,app=None,box_id="rf",initial_view=None):
+def _toolbar(parent,rbw="23.4 Hz",avg="2",bg=None,sc=1.0,app=None,box_id="rf",initial_view=None,
+             spec_ref=0,spec_ave=None):
     if bg is None: bg=C["panel_mid"]
     h=max(16,int(round(BASE['toolbar_h']*sc)))
     fs=max(6,int(round(8*sc)))
     bar=tk.Frame(parent,bg=bg,height=h)
     bar.pack(side="top",fill="x"); bar.pack_propagate(False)
+
+    # Resolve initial AVE: caller may pass spec_ave (int) or fall back to avg string
+    if spec_ave is None:
+        try:    spec_ave = max(1, min(10, int(avg)))
+        except (ValueError, TypeError): spec_ave = 2
 
     def lbl(txt,fg,font=None):
         if font is None: font=_gui_font(fs)
@@ -2198,10 +2229,100 @@ def _toolbar(parent,rbw="23.4 Hz",avg="2",bg=None,sc=1.0,app=None,box_id="rf",in
 
     for t in ["◀","◀◀"]: lbl(t,C["text_dim"])
     sep()
-    lbl(f"RBW {rbw}",C["text_dim"])
-    tk.Label(bar,text=avg,bg=C["btn_gray"],fg=C["text"],
-             font=_gui_font(fs),width=2,relief="flat").pack(side="left",padx=max(1,int(round(2*sc))))
-    lbl("Avg",C["text_dim"]); sep()
+
+    # ── SCALE control: adjusts spectrum reference level (top of display) ─────
+    # Step 5 dB, range −50..+10. Sends set_spec_ref to server and updates the
+    # SpecCanvas directly so the display shifts without waiting for a data frame.
+    _bfs = max(6, int(round(7*sc)))   # slightly smaller font for ± buttons
+    _ref_state = {"v": max(-50, min(10, int(round(spec_ref / 5)) * 5))}
+
+    def _spec_canvas():
+        """Return the SpecCanvas for this toolbar's box (rf or af)."""
+        if app is None:
+            return None
+        return getattr(app, "rf_spec" if box_id == "rf" else "af_spec", None)
+
+    lbl("SCALE", C["text_dim"])
+    _ref_lbl = tk.Label(bar, text=str(_ref_state["v"]), bg=C["btn_gray"],
+                        fg=C["text"], font=_gui_font(_bfs), width=4, relief="flat",
+                        anchor="center")
+    _ref_lbl.pack(side="left", padx=max(1,int(round(1*sc))))
+
+    def _adj_ref(delta):
+        new_v = max(-50, min(10, _ref_state["v"] + delta))
+        if new_v == _ref_state["v"]:
+            return
+        _ref_state["v"] = new_v
+        _ref_lbl.config(text=str(new_v))
+        sc_obj = _spec_canvas()
+        if sc_obj:
+            sc_obj.set_ref(new_v)
+        if app:
+            app.state[f"spec_ref_{box_id}"] = new_v
+            app.net.send({"cmd": "set_spec_ref", "box": box_id, "value": new_v})
+
+    tk.Button(bar, text="−", bg=C["btn_gray"], fg=C["text"],
+              font=_gui_font(_bfs), relief="flat", bd=0,
+              padx=max(1,int(round(2*sc))), pady=0,
+              command=lambda: _adj_ref(-5)).pack(side="left", padx=0)
+    tk.Button(bar, text="+", bg=C["btn_gray"], fg=C["text"],
+              font=_gui_font(_bfs), relief="flat", bd=0,
+              padx=max(1,int(round(2*sc))), pady=0,
+              command=lambda: _adj_ref(+5)).pack(side="left", padx=0)
+    lbl("dB", C["text_dim"])
+    sep()
+
+    # ── AVE control: FFT averaging count 1–10 ────────────────────────────────
+    # Sent to the server as set_spec_ave; the server applies it on the SDR side.
+    _ave_state = {"v": max(1, min(10, int(spec_ave)))}
+
+    lbl("AVE", C["text_dim"])
+    _ave_lbl = tk.Label(bar, text=str(_ave_state["v"]), bg=C["btn_gray"],
+                        fg=C["text"], font=_gui_font(_bfs), width=2, relief="flat",
+                        anchor="center")
+    _ave_lbl.pack(side="left", padx=max(1,int(round(1*sc))))
+
+    def _adj_ave(delta):
+        new_v = max(1, min(10, _ave_state["v"] + delta))
+        if new_v == _ave_state["v"]:
+            return
+        _ave_state["v"] = new_v
+        _ave_lbl.config(text=str(new_v))
+        if app:
+            app.state[f"spec_ave_{box_id}"] = new_v
+            app.net.send({"cmd": "set_spec_ave", "box": box_id, "value": new_v})
+
+    tk.Button(bar, text="−", bg=C["btn_gray"], fg=C["text"],
+              font=_gui_font(_bfs), relief="flat", bd=0,
+              padx=max(1,int(round(2*sc))), pady=0,
+              command=lambda: _adj_ave(-1)).pack(side="left", padx=0)
+    tk.Button(bar, text="+", bg=C["btn_gray"], fg=C["text"],
+              font=_gui_font(_bfs), relief="flat", bd=0,
+              padx=max(1,int(round(2*sc))), pady=0,
+              command=lambda: _adj_ave(+1)).pack(side="left", padx=0)
+    sep()
+
+    # ── Expose state-sync methods for _refresh() ──────────────────────────────
+    def _set_ref_from_state(db):
+        """Push a reference-level value from app.state into the toolbar and canvas."""
+        new_v = max(-50, min(10, int(round(float(db) / 5)) * 5))
+        if new_v != _ref_state["v"]:
+            _ref_state["v"] = new_v
+            _ref_lbl.config(text=str(new_v))
+            sc_obj = _spec_canvas()
+            if sc_obj:
+                sc_obj.set_ref(new_v)
+
+    def _set_ave_from_state(n):
+        """Push an AVE value from app.state into the toolbar label."""
+        new_v = max(1, min(10, int(n)))
+        if new_v != _ave_state["v"]:
+            _ave_state["v"] = new_v
+            _ave_lbl.config(text=str(new_v))
+
+    bar.set_ref = _set_ref_from_state
+    bar.set_ave = _set_ave_from_state
+
     lbl("Zoom",C["text_dim"]); sep()
     lbl("Speed",C["text_dim"])
     return bar
@@ -2288,6 +2409,11 @@ class App:
             # reconnects and scale-change rebuilds.
             toolbar_view_rf="Waterfall",
             toolbar_view_af="Waterfall",
+            # Spectrum display controls (G90 SCALE and AVE).
+            # spec_ref_* = reference level in dB (top of spectrum, step 5 dB).
+            # spec_ave_* = FFT averaging count (1–10).
+            spec_ref_rf=0, spec_ave_rf=2,
+            spec_ref_af=0, spec_ave_af=1,
             split=False,
         )
         self._sup=False
@@ -2350,7 +2476,10 @@ class App:
 
         # ── toolbar between RF and bottom ─────────────────────────────────────
         self._toolbar1_parent=r
-        self._toolbar1=_toolbar(r,rbw="23.4 Hz",avg="2",sc=sc,app=self,box_id="rf",initial_view=self.state.get("toolbar_view_rf","Waterfall"))
+        self._toolbar1=_toolbar(r,rbw="23.4 Hz",avg="2",sc=sc,app=self,box_id="rf",
+                                initial_view=self.state.get("toolbar_view_rf","Waterfall"),
+                                spec_ref=self.state.get("spec_ref_rf",0),
+                                spec_ave=self.state.get("spec_ave_rf",2))
 
         # ── bottom row: left control panel + right AF ─────────────────────────
         bot=tk.Frame(r,bg=C["win_bg"])
@@ -2986,7 +3115,10 @@ class App:
         self.af_spec=SpecCanvas(af_sf,self,show_filter=False,af=True)
         self.af_spec.pack(fill="both",expand=True)
 
-        self._toolbar2=_toolbar(left,rbw="5.9 Hz",avg="1",sc=sc,app=self,box_id="af",initial_view=self.state.get("toolbar_view_af","Waterfall"))
+        self._toolbar2=_toolbar(left,rbw="5.9 Hz",avg="1",sc=sc,app=self,box_id="af",
+                                initial_view=self.state.get("toolbar_view_af","Waterfall"),
+                                spec_ref=self.state.get("spec_ref_af",0),
+                                spec_ave=self.state.get("spec_ave_af",1))
 
         # Right-hand text/chat pane — built once here, hidden until a
         # text/text_input user-mod mode is selected (see _update_af_text_split).
@@ -3453,7 +3585,11 @@ class App:
 
         # Rebuild toolbar1 (between RF strip and bot)
         self._toolbar1.destroy()
-        self._toolbar1=_toolbar(self._toolbar1_parent,rbw="23.4 Hz",avg="2",sc=sc,app=self,box_id="rf",initial_view=self.state.get("toolbar_view_rf","Waterfall"))
+        self._toolbar1=_toolbar(self._toolbar1_parent,rbw="23.4 Hz",avg="2",sc=sc,app=self,
+                                box_id="rf",
+                                initial_view=self.state.get("toolbar_view_rf","Waterfall"),
+                                spec_ref=self.state.get("spec_ref_rf",0),
+                                spec_ave=self.state.get("spec_ave_rf",2))
         # Re-pack toolbar1 before _bot by temporarily removing _bot from the
         # geometry manager, letting _toolbar() pack itself in the correct slot,
         # then re-packing _bot with its original options.  This avoids the
@@ -3574,10 +3710,18 @@ class App:
         # Toolbar toggle buttons (Waterfall / Spectrum)
         # BUG-12 fix: push the persisted view selection into both toolbars so
         # they stay correct after reconnects and server-side view changes.
-        for _tb_attr, _tb_key in (("_toolbar1","toolbar_view_rf"),("_toolbar2","toolbar_view_af")):
+        for _tb_attr, _tb_key, _box in (
+                ("_toolbar1","toolbar_view_rf","rf"),
+                ("_toolbar2","toolbar_view_af","af")):
             _tb = getattr(self, _tb_attr, None)
             if _tb and hasattr(_tb, "set_view"):
                 _tb.set_view(self.state.get(_tb_key, "Waterfall"))
+            # Sync SCALE and AVE controls from state (survives reconnect /
+            # server-pushed state updates).
+            if _tb and hasattr(_tb, "set_ref"):
+                _tb.set_ref(self.state.get(f"spec_ref_{_box}", 0))
+            if _tb and hasattr(_tb, "set_ave"):
+                _tb.set_ave(self.state.get(f"spec_ave_{_box}", 2 if _box=="rf" else 1))
         # PTT button
         if hasattr(self, '_draw_ptt_btn'):
             self._draw_ptt_btn(bool(self.state.get("ptt", False)), self._ptt_enabled)

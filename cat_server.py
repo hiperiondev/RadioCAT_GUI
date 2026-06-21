@@ -28,6 +28,8 @@ protocol:
         {"cmd": "set_notch","enabled": true}
         {"cmd": "set_mute","enabled": true}
         {"cmd": "set_zoom","value": 2}
+        {"cmd": "set_spec_ref","box": "rf","value": -10}
+        {"cmd": "set_spec_ave","box": "rf","value": 4}
         {"cmd": "ui_button","name": "Full Screen"}
         {"cmd": "transport","action": "\u25b6"}
         {"cmd": "user_text", "index": 1, "text": "CQ CQ DE TEST"}
@@ -994,6 +996,9 @@ _GUI_STATE_KEYS = (
     "rf_gain", "volume", "squelch",
     "nb", "nr", "nbrf", "nbif", "afc", "anf", "notch", "mute",
     "user_btn_state", "rf_usr_btn_state",
+    # Spectrum display controls (G90 SCALE and AVE)
+    "spec_ref_rf", "spec_ave_rf",
+    "spec_ref_af", "spec_ave_af",
 )
 
 
@@ -1139,6 +1144,14 @@ class RadioState:
         self.running = False
         self.lo_active = "A"
         self.lo_b_freq = self.center_freq
+
+        # Spectrum display controls (G90 SCALE and AVE).
+        # spec_ref_*: reference level in dBm (top of spectrum display), step 5.
+        # spec_ave_*: FFT averaging count (1–10).
+        self.spec_ref_rf = 0.0
+        self.spec_ave_rf = 2
+        self.spec_ref_af = 0.0
+        self.spec_ave_af = 1
 
         # User-defined buttons: list of {"label": str, "type": "normal"|"push"}
         # for N = 1..NUM_USER_BUTTONS, plus per-button push-push (toggle) state.
@@ -1292,6 +1305,11 @@ class RadioState:
                 "rf_usr_btn_state": self.rf_usr_btn_state,
                 "user_mod_labels": list(self.user_mod_labels),
                 "user_mod_types": list(self.user_mod_types),
+                # Spectrum display controls (SCALE and AVE)
+                "spec_ref_rf": self.spec_ref_rf,
+                "spec_ave_rf": self.spec_ave_rf,
+                "spec_ref_af": self.spec_ref_af,
+                "spec_ave_af": self.spec_ave_af,
             }
 
     # ----------------------------------------------------------- commands ----
@@ -1345,6 +1363,24 @@ class RadioState:
                 self.split = bool(cmd.get("enabled", self.split))
             elif c == "set_zoom":
                 self.zoom = max(1, int(cmd.get("value", self.zoom)))
+            elif c == "set_spec_ref":
+                # Spectrum reference level (top of display) in dBm.
+                # {"cmd": "set_spec_ref", "box": "rf"|"af", "value": <float>}
+                box = cmd.get("box", "rf")
+                val = float(max(-50, min(10, round(float(cmd.get("value", 0)) / 5) * 5)))
+                if box == "af":
+                    self.spec_ref_af = val
+                else:
+                    self.spec_ref_rf = val
+            elif c == "set_spec_ave":
+                # FFT averaging count 1–10.
+                # {"cmd": "set_spec_ave", "box": "rf"|"af", "value": <int>}
+                box = cmd.get("box", "rf")
+                val = max(1, min(10, int(cmd.get("value", 2))))
+                if box == "af":
+                    self.spec_ave_af = val
+                else:
+                    self.spec_ave_rf = val
             elif c == "start":
                 self.running = True
             elif c == "stop":
@@ -1543,6 +1579,7 @@ class RadioState:
             "set_nb", "set_nr", "set_nbrf", "set_nbif",
             "set_afc", "set_anf", "set_notch", "set_mute",
             "set_zoom", "user_button", "rf_usr_button",
+            "set_spec_ref", "set_spec_ave",
         }
         if c in _STATE_MUTATING_CMDS:
             with self.lock:
