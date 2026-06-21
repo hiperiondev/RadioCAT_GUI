@@ -1499,10 +1499,19 @@ class RadioState:
                     # never carry TX state across a device change.
                     self.ptt = False
 
-                    # Save current device's full GUI state before switching.
-                    _out_snap = self._capture_gui_state()
-                    _save_gui_state(self._gui_state_file, _out_snap)
-                    print(f"[gui_state] saved state for {self.device_cfg_path!r}")
+                    # Save current device's full GUI state before switching —
+                    # but only when we are actually leaving a *different* device.
+                    # If cfg_path matches self.device_cfg_path (startup auto-select
+                    # or operator re-picking the already-active device) the outgoing
+                    # and incoming device are identical: writing a fresh snapshot here
+                    # would overwrite the persisted file with in-memory defaults
+                    # *before* we load it back, silently discarding the operator's
+                    # last-saved sample_rate, frequencies, and every other setting.
+                    _switching_device = (cfg_path != self.device_cfg_path)
+                    if _switching_device:
+                        _out_snap = self._capture_gui_state()
+                        _save_gui_state(self._gui_state_file, _out_snap)
+                        print(f"[gui_state] saved state for {self.device_cfg_path!r}")
 
                     if cfg_path:
                         dcfg = _ensure_config(cfg_path, DEVICE_CONFIG_SPEC, kind="device config")

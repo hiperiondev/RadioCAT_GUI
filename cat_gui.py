@@ -4704,7 +4704,14 @@ class App:
         elif t == "sample_rate_list":
             # Server replied to get_sample_rates — open the selection popup
             # with the choices configured for the active device's TOML file.
-            self._open_sample_rate_dialog(msg.get("rates", []), msg.get("current"))
+            # Prefer the server's "current" field: it is read under the
+            # server's lock at reply time and is always accurate, including
+            # after a device change where self.state["sample_rate"] may still
+            # hold a value from the previous device or the pre-change state.
+            # Fall back to self.state only when the server omits "current"
+            # (older server versions).
+            _cur_sr = msg.get("current") or self.state.get("sample_rate")
+            self._open_sample_rate_dialog(msg.get("rates", []), _cur_sr)
         elif t == "memory_list":
             # Server replied to get_memories / save_memory — refresh the
             # memory dialog (if still open on the matching position).
@@ -4782,10 +4789,28 @@ class App:
                                "position": self._mem_dialog_position})
         elif "state" in msg:
             incoming = msg["state"]
+            # Print the persistent values as retrieved from the server,
+            # before any local mutation (e.g. the ptt pop below) touches them.
+            print("[state] Retrieved persistent values from server:")
+            for _k in sorted(incoming.keys()):
+                print(f"[state]   {_k} = {incoming[_k]!r}")
             # PTT is owned by the GUI button — never let the server's reflected
             # state overwrite it.  Any other field is safe to merge normally.
             incoming.pop("ptt", None)
+            _old_sr = self.state.get("sample_rate")
             self.state.update(incoming); self._refresh()
+            # If the server reports a new sample_rate (e.g. after set_sample_rate
+            # or a device switch whose reload_state hasn't arrived yet), immediately
+            # re-centre the RF spectrum/waterfall so its frequency span reflects
+            # the new bandwidth.  reload_state does this too, but set_sample_rate
+            # only produces a resp:ok — no reload_state follows — so without this
+            # the span stays wrong until the operator next touches a frequency dial.
+            _new_sr = self.state.get("sample_rate")
+            if _new_sr != _old_sr and hasattr(self, "rf_spec"):
+                _active_lo = self.state.get("lo_active", "A")
+                _view_hz = self.state.get("lo_b_freq", 0) if _active_lo == "B" \
+                    else self.state.get("lo_freq", 0)
+                self._update_rf_view(int(_view_hz))
 
 # ── entry point ───────────────────────────────────────────────────────────────
 
