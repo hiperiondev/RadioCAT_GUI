@@ -1478,6 +1478,15 @@ class WFCanvas(tk.Canvas):
         self._img_h=0           # height of _img in pixels
         self._iid=self.create_image(0,0,anchor="nw")
         self._tx_active=False
+        # Scroll-speed throttle: 1 (slowest) .. 10 (fastest/full-rate).
+        # Default 10 preserves legacy behaviour (a row is added on every
+        # incoming frame) unless the operator turns the Speed control down.
+        # _speed_acc is a fixed-point accumulator: it gains `speed` units on
+        # every incoming frame and a row is drawn whenever it reaches 10,
+        # so speed=10 draws every frame and speed=1 draws roughly 1 frame
+        # in 10 (i.e. the waterfall scrolls ~10x slower).
+        self.speed=10
+        self._speed_acc=0
         self.bind("<Configure>",self._on_resize)
 
     # ── internal helpers ──────────────────────────────────────────────────────
@@ -1554,6 +1563,10 @@ class WFCanvas(tk.Canvas):
     def set_freq_range(self,f0,f1):
         self.f0=f0; self.f1=f1; self._draw_overlay()
 
+    def set_speed(self,v):
+        """Set waterfall scroll speed, 1 (slowest) .. 10 (fastest/full-rate)."""
+        self.speed=max(1,min(10,int(v)))
+
     def add_row(self,spectrum,dmin=-150,dmax=0):
         """Add one new row at the top of the waterfall (newest = top).
 
@@ -1563,6 +1576,16 @@ class WFCanvas(tk.Canvas):
         """
         if self._tx_active: return
         if len(spectrum)==0: return
+
+        # Throttle scroll rate per the Speed control: accumulate `speed`
+        # units per incoming frame and only draw once the accumulator
+        # reaches 10. This skips frames (rather than time-averaging them),
+        # which is cheap and keeps the waterfall in sync with whatever the
+        # most recent spectrum looked like.
+        self._speed_acc+=self.speed
+        if self._speed_acc<10:
+            return
+        self._speed_acc-=10
 
         # Ensure backing image exists and matches current canvas size
         cw=max(self.winfo_width(),1)
@@ -2323,8 +2346,102 @@ def _toolbar(parent,rbw="23.4 Hz",avg="2",bg=None,sc=1.0,app=None,box_id="rf",in
     bar.set_ref = _set_ref_from_state
     bar.set_ave = _set_ave_from_state
 
-    lbl("Zoom",C["text_dim"]); sep()
-    lbl("Speed",C["text_dim"])
+    # ── ZOOM control: adjusts the RF spectrum/waterfall span ─────────────────
+    # Mirrors app.adj_zoom()'s doubling/halving steps (1x..32x). This is a
+    # property of the RF receiver span only — the AF box always shows a
+    # fixed 0-3 kHz range — so the control is only shown on the RF toolbar.
+    # (Mouse-wheel over the RF spectrum already calls the same adj_zoom();
+    # these buttons just expose it directly with a readout.)
+    if box_id == "rf":
+        _zoom_state = {"v": int(app.state.get("zoom", 1)) if app else 1}
+
+        lbl("Zoom", C["text_dim"])
+        _zoom_lbl = tk.Label(bar, text=f'{_zoom_state["v"]}x', bg=C["btn_gray"],
+                             fg=C["text"], font=_gui_font(_bfs), width=3, relief="flat",
+                             anchor="center")
+        _zoom_lbl.pack(side="left", padx=max(1,int(round(1*sc))))
+
+        def _adj_zoom(delta):
+            if not app:
+                return
+            app.adj_zoom(delta)
+            new_v = int(app.state.get("zoom", _zoom_state["v"]))
+            if new_v != _zoom_state["v"]:
+                _zoom_state["v"] = new_v
+                _zoom_lbl.config(text=f"{new_v}x")
+
+        tk.Button(bar, text="−", bg=C["btn_gray"], fg=C["text"],
+                  font=_gui_font(_bfs), relief="flat", bd=0,
+                  padx=max(1,int(round(2*sc))), pady=0,
+                  command=lambda: _adj_zoom(-1)).pack(side="left", padx=0)
+        tk.Button(bar, text="+", bg=C["btn_gray"], fg=C["text"],
+                  font=_gui_font(_bfs), relief="flat", bd=0,
+                  padx=max(1,int(round(2*sc))), pady=0,
+                  command=lambda: _adj_zoom(+1)).pack(side="left", padx=0)
+
+        def _set_zoom_from_state(z):
+            """Push a zoom value (e.g. after a server-side change) into the toolbar."""
+            new_v = max(1, min(32, int(z)))
+            if new_v != _zoom_state["v"]:
+                _zoom_state["v"] = new_v
+                _zoom_lbl.config(text=f"{new_v}x")
+
+        bar.set_zoom = _set_zoom_from_state
+        sep()
+
+    # ── SPEED control: waterfall scroll speed for this box's canvas ──────────
+    # 1 (slowest) .. 10 (fastest/full-rate). Throttles how often an incoming
+    # spectrum frame is actually drawn as a new waterfall row — see
+    # WFCanvas.add_row()/set_speed(). Each box (RF / AF) has its own
+    # waterfall canvas and its own independent speed setting.
+    _wf_attr = "rf_wf" if box_id == "rf" else "af_wf"
+    _speed_state = {"v": max(1, min(10, int(app.state.get(f"wf_speed_{box_id}", 10)))) if app else 10}
+
+    def _wf_canvas():
+        return getattr(app, _wf_attr, None) if app else None
+
+    lbl("Speed", C["text_dim"])
+    _speed_lbl = tk.Label(bar, text=str(_speed_state["v"]), bg=C["btn_gray"],
+                          fg=C["text"], font=_gui_font(_bfs), width=2, relief="flat",
+                          anchor="center")
+    _speed_lbl.pack(side="left", padx=max(1,int(round(1*sc))))
+
+    def _adj_speed(delta):
+        new_v = max(1, min(10, _speed_state["v"] + delta))
+        if new_v == _speed_state["v"]:
+            return
+        _speed_state["v"] = new_v
+        _speed_lbl.config(text=str(new_v))
+        wf = _wf_canvas()
+        if wf:
+            wf.set_speed(new_v)
+        if app:
+            app.state[f"wf_speed_{box_id}"] = new_v
+
+    tk.Button(bar, text="−", bg=C["btn_gray"], fg=C["text"],
+              font=_gui_font(_bfs), relief="flat", bd=0,
+              padx=max(1,int(round(2*sc))), pady=0,
+              command=lambda: _adj_speed(-1)).pack(side="left", padx=0)
+    tk.Button(bar, text="+", bg=C["btn_gray"], fg=C["text"],
+              font=_gui_font(_bfs), relief="flat", bd=0,
+              padx=max(1,int(round(2*sc))), pady=0,
+              command=lambda: _adj_speed(+1)).pack(side="left", padx=0)
+
+    def _set_speed_from_state(v):
+        """Push a speed value into the toolbar label and the live canvas."""
+        new_v = max(1, min(10, int(v)))
+        if new_v != _speed_state["v"]:
+            _speed_state["v"] = new_v
+            _speed_lbl.config(text=str(new_v))
+        wf = _wf_canvas()
+        if wf:
+            wf.set_speed(new_v)
+
+    bar.set_speed = _set_speed_from_state
+    # Apply the initial speed to the canvas now (it already exists by the
+    # time the toolbar is built — see _build_left()/_build_main()).
+    _set_speed_from_state(_speed_state["v"])
+
     return bar
 
 # ── CAT GUI function button helper ──────────────────────────────────────────────
@@ -2414,6 +2531,9 @@ class App:
             # spec_ave_* = FFT averaging count (1–10).
             spec_ref_rf=0, spec_ave_rf=2,
             spec_ref_af=0, spec_ave_af=1,
+            # Waterfall scroll speed per box (1 slowest .. 10 fastest); see
+            # WFCanvas.set_speed(). Default 10 = full rate (legacy behaviour).
+            wf_speed_rf=10, wf_speed_af=10,
             split=False,
         )
         self._sup=False
@@ -3724,6 +3844,10 @@ class App:
                 _tb.set_ref(self.state.get(f"spec_ref_{_box}", 0))
             if _tb and hasattr(_tb, "set_ave"):
                 _tb.set_ave(self.state.get(f"spec_ave_{_box}", 2 if _box=="rf" else 1))
+            if _tb and hasattr(_tb, "set_zoom"):
+                _tb.set_zoom(self.state.get("zoom", 1))
+            if _tb and hasattr(_tb, "set_speed"):
+                _tb.set_speed(self.state.get(f"wf_speed_{_box}", 10))
         # PTT button
         if hasattr(self, '_draw_ptt_btn'):
             self._draw_ptt_btn(bool(self.state.get("ptt", False)), self._ptt_enabled)
@@ -4508,6 +4632,12 @@ class App:
         z=int(self.state["zoom"])
         z=min(32,z*2) if d>0 else max(1,z//2)
         self.state["zoom"]=z; self.net.send({"cmd":"set_zoom","value":z})
+        # Keep the RF toolbar's Zoom readout in sync even when zoom is
+        # changed via mouse-wheel over the spectrum rather than the
+        # toolbar's own +/- buttons.
+        _tb=getattr(self,"_toolbar1",None)
+        if _tb and hasattr(_tb,"set_zoom"):
+            _tb.set_zoom(z)
 
     def _update_rf_view(self,hz):
         """Re-centre the upper spectrum/waterfall frequency scale on hz."""
