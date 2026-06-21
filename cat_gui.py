@@ -3838,45 +3838,35 @@ class App:
             self.conn_btn.config(text="Connect", state="normal")
             messagebox.showerror("Connect", f"Cannot connect to {host}:{port}\n{msg}")
             return
-        # Always start with PTT inactive regardless of any stale server state.
+        # PTT and SPLIT are always inactive on a fresh connection — these are
+        # session-only transients that the server also resets on new connections.
         self.state["ptt"] = False
-        # Always start with SPLIT off regardless of any stale server state.
         self.state["split"] = False
         self._refresh_split_ui()
-        # NOTE: Net.send() calls sock.sendall() synchronously. If the server is
-        # slow to drain its TCP receive buffer (e.g. still spinning up DSP/RTP),
-        # any one of these calls can block for up to the socket's 5s timeout.
-        # Firing all of them back-to-back on the GUI thread could therefore
-        # freeze the entire window for several seconds right after connecting
-        # (audio still plays because PyAudio runs on its own callback thread).
-        # Run them on a background thread instead so the GUI stays responsive.
+        # Send hello so the server returns its full saved state for the active
+        # device in the resp:ok.  That state arrives via the queue and is merged
+        # into self.state by the normal "state" in msg branch, then the
+        # reload_state message that follows resyncs every widget.
+        # We do NOT push local GUI values (freq, mode, …) to the server here —
+        # the server is the source of truth; we read from it, not the reverse.
+        # PTT and SPLIT resets are sent explicitly because they are transient
+        # and the server must clear any stale TX state from a previous session.
         def _send_hello_burst():
-            self.net.send({"cmd":"hello"})
-            self.net.send({"cmd":"set_ptt","enabled":False})   # clear any stale TX on server
-            self.net.send({"cmd":"set_split","enabled":False}) # clear any stale SPLIT on server
-            self.net.send({"cmd":"set_lo_a_freq","hz":self.state["lo_freq"]})
-            self.net.send({"cmd":"set_lo_b_freq","hz":self.state["lo_b_freq"]})
-            self.net.send({"cmd":"set_tune_freq","hz":self.state["tune_freq"]})
-            self.net.send({"cmd":"set_mode","mode":self.state["mode"]})
-            # Send "start" unless the operator explicitly pressed Stop before
-            # this reconnect.  _user_stopped is False on first connect (the
-            # initial state has running=False but that means "not yet started",
-            # not "deliberately stopped"), so we always start on first connect.
+            self.net.send({"cmd": "hello"})
+            self.net.send({"cmd": "set_ptt",   "enabled": False})
+            self.net.send({"cmd": "set_split",  "enabled": False})
             if not self._user_stopped:
-                self.net.send({"cmd":"start"})
+                self.net.send({"cmd": "start"})
         _auto_start = not self._user_stopped
-        # Set running state *before* starting the thread so that any code on
-        # the receive thread (or a very fast server response arriving via the
-        # queue) sees the correct value from the moment _send_hello_burst begins.
         self.state["running"] = _auto_start
         threading.Thread(target=_send_hello_burst, daemon=True).start()
-        self.conn_btn.config(text="Disconnect",state="normal",
-                             bg="#2a0e0e",fg=C["btn_red_fg"])
+        self.conn_btn.config(text="Disconnect", state="normal",
+                             bg="#2a0e0e", fg=C["btn_red_fg"])
         self.conn_status.config(fg=C["btn_grn_fg"])
         if _auto_start:
-            self.start_btn.config(text="Stop",bg="#6a1414",fg=C["btn_red_fg"])
+            self.start_btn.config(text="Stop", bg="#6a1414", fg=C["btn_red_fg"])
         else:
-            self.start_btn.config(text="Start",bg=C["btn_grn"],fg=C["btn_grn_fg"])
+            self.start_btn.config(text="Start", bg=C["btn_grn"], fg=C["btn_grn_fg"])
 
     def _on_disconnected(self, reason=None):
         self.state["running"]=False
@@ -4477,12 +4467,14 @@ class App:
             # memory dialog (if still open on the matching position).
             self._on_memory_list(msg)
         elif t == "reload_state":
-            # Server has reloaded its configuration from a device TOML file.
-            # State was already merged via the preceding resp:ok; now resync
-            # every GUI widget from self.state, suppressing round-trip sends
-            # so we don't echo the server's own values back to it.
+            # Server has pushed a new device state (via select_device or on
+            # initial hello).  self.state was already fully updated by the
+            # preceding resp:ok message.  Now resync every widget from
+            # self.state, suppressing round-trip sends so we don't echo the
+            # server's own values back to it.
             self._sup = True
             try:
+                # Frequency displays
                 if hasattr(self, 'lo_disp'):
                     self.lo_disp.set_value(
                         int(self.state.get("lo_freq", 0)), notify=False)
@@ -4492,12 +4484,24 @@ class App:
                 if hasattr(self, 'tune_disp'):
                     self.tune_disp.set_value(
                         int(self.state.get("tune_freq", 0)), notify=False)
+                # Sliders / scale variables
                 if hasattr(self, 'vol_var'):
                     self.vol_var.set(self.state.get("volume", 80.0))
                 if hasattr(self, 'agct_var'):
                     self.agct_var.set(self.state.get("agc_thresh", -100.0))
+                if hasattr(self, 'rfg_var'):
+                    self.rfg_var.set(self.state.get("rf_gain", 20.0))
+                if hasattr(self, 'sql_var'):
+                    self.sql_var.set(self.state.get("squelch", -130.0))
+                # LO A/B selector
+                if hasattr(self, '_lo_active'):
+                    self._lo_active.set(self.state.get("lo_active", "A"))
+                    self._refresh_lo_btns()
             finally:
                 self._sup = False
+            # _refresh() redraws mode buttons, user buttons, RF user buttons,
+            # AGC, filter, NB/NR/AFC/ANF/notch/mute toggles, zoom, PTT, SPLIT
+            # — everything that reads directly from self.state.
             self._refresh()
             # If a memory dialog is open, the active device (and therefore
             # its memory bank) may have just changed — refresh it.

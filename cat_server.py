@@ -983,6 +983,57 @@ def _memory_file_for_device(device_cfg_path):
     return os.path.join(os.getcwd(), "cat_default.memories.json")
 
 
+# ── Per-device GUI state persistence ─────────────────────────────────────────
+# Keys saved/restored — excludes running, ptt, split (session transients),
+# sample_rate (hardware property), and button *definitions* (from TOML).
+_GUI_STATE_KEYS = (
+    "center_freq", "tune_freq", "lo_b_freq", "lo_active",
+    "zoom", "mode",
+    "filter_lo", "filter_hi",
+    "agc", "agc_thresh",
+    "rf_gain", "volume", "squelch",
+    "nb", "nr", "nbrf", "nbif", "afc", "anf", "notch", "mute",
+    "user_btn_state", "rf_usr_btn_state",
+)
+
+
+def _gui_state_file_for_device(device_cfg_path):
+    """Return path of the GUI-state JSON file for this device config.
+    Mirrors the naming convention of _memory_file_for_device."""
+    if device_cfg_path:
+        base, _ext = os.path.splitext(device_cfg_path)
+        return base + ".gui_state.json"
+    return os.path.join(os.getcwd(), "cat_default.gui_state.json")
+
+
+def _load_gui_state(path):
+    """Load GUI-state dict from *path*, returning {} on any error."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"[gui_state] WARNING: could not read {path}: {e}")
+    return {}
+
+
+def _save_gui_state(path, state):
+    """Atomically write *state* dict to *path* (write-then-rename)."""
+    try:
+        d = os.path.dirname(path)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+        os.replace(tmp, path)
+    except Exception as e:
+        print(f"[gui_state] WARNING: could not save {path}: {e}")
+
+
 def _empty_memory_slots():
     return [{"label": "", "freq": 0.0} for _ in range(NUM_MEMORY_SLOTS)]
 
@@ -1148,6 +1199,48 @@ class RadioState:
         self.memory_file = _memory_file_for_device(self.device_cfg_path)
         self.memories = _load_memories(self.memory_file)
 
+        # ── Per-device GUI state (frequencies, mode, gain, toggles, …) ────────
+        # Restored immediately so the very first GUI connection already gets
+        # the last-used state for this device.
+        self._gui_state_file = _gui_state_file_for_device(self.device_cfg_path)
+        _saved = _load_gui_state(self._gui_state_file)
+        if _saved:
+            self._apply_gui_state(_saved)
+            print(f"[gui_state] restored state for {self.device_cfg_path!r}")
+
+    # ─────────────────────────────────── per-device GUI state helpers ────────
+
+    def _capture_gui_state(self):
+        """Snapshot every operator-adjustable parameter. Called under self.lock."""
+        snap = {}
+        for key in _GUI_STATE_KEYS:
+            val = getattr(self, key, None)
+            snap[key] = list(val) if isinstance(val, list) else val
+        return snap
+
+    def _apply_gui_state(self, snap):
+        """Restore a previously captured snapshot onto self.
+        Called under self.lock (or before threads start, as in __init__)."""
+        for key in _GUI_STATE_KEYS:
+            if key not in snap:
+                continue
+            val = snap[key]
+            cur = getattr(self, key, None)
+            if isinstance(cur, list) and isinstance(val, list):
+                n = len(cur)
+                setattr(self, key, (list(val) + [False] * n)[:n])
+            else:
+                setattr(self, key, val)
+
+    def _autosave_gui_state(self):
+        """Capture current state and persist it for the active device.
+        Must be called under self.lock; file I/O happens on a daemon thread."""
+        snap = self._capture_gui_state()
+        path = self._gui_state_file
+        threading.Thread(
+            target=_save_gui_state, args=(path, snap), daemon=True
+        ).start()
+
     # ------------------------------------------------------------ setup ----
     def _make_signals(self):
         sigs = []
@@ -1166,6 +1259,9 @@ class RadioState:
         with self.lock:
             return {
                 "center_freq": self.center_freq,
+                # GUI uses "lo_freq" as the key for LO A — provide both names
+                # so state.update() on the GUI side always populates lo_freq.
+                "lo_freq": self.center_freq,
                 "sample_rate": self.sample_rate,
                 "zoom": self.zoom,
                 "mode": self.mode,
@@ -1204,7 +1300,10 @@ class RadioState:
         outgoing = None
         with self.lock:
             if c == "hello":
-                pass
+                # Reply with full state so GUI can resync all widgets.
+                # Also send reload_state so the GUI's freq displays, sliders,
+                # and LO selector are explicitly updated (not just _refresh()).
+                outgoing = {"type": "reload_state"}
             elif c == "set_freq" or c == "set_lo_a_freq":
                 self.center_freq = float(cmd.get("hz", self.center_freq))
             elif c == "set_tune_freq":
@@ -1261,22 +1360,19 @@ class RadioState:
                 ]
                 outgoing = {"type": "device_list", "devices": dev_list}
             elif c == "select_device":
-                # GUI has chosen a device. Load the associated cat_device.toml-
-                # like config file, update user_buttons / user_mods /
-                # rf_usr_btns from it, then send reload_state so the GUI
-                # resyncs all its controls.
                 idx = int(cmd.get("index", 0)) - 1
                 if 0 <= idx < len(self.devices):
                     dev = self.devices[idx]
                     cfg_path = dev.get("config", "").strip()
                     print(f"[cat_server] device selected: {dev.get('label','?')} "
                           f"(index {idx + 1}, config {cfg_path!r})")
+
+                    # Save current device's full GUI state before switching.
+                    _out_snap = self._capture_gui_state()
+                    _save_gui_state(self._gui_state_file, _out_snap)
+                    print(f"[gui_state] saved state for {self.device_cfg_path!r}")
+
                     if cfg_path:
-                        # Load the device-specific TOML using the same
-                        # DEVICE_CONFIG_SPEC as cat_device.toml itself, so it
-                        # gets created with defaults if missing and
-                        # self-corrected if it's missing newer keys (safe:
-                        # inside the lock; file I/O is fast on local disks).
                         dcfg = _ensure_config(cfg_path, DEVICE_CONFIG_SPEC, kind="device config")
                         _ubtn  = dcfg.get("user_buttons", {})
                         _umods = dcfg.get("user_mods",    {})
@@ -1305,15 +1401,23 @@ class RadioState:
                             for n in range(1, NUM_RF_USR_BTNS + 1)
                         ]
                         self.rf_usr_btn_state = [False] * NUM_RF_USR_BTNS
-                    # Memories are independent per device: switch to (and
-                    # load) this device's own memory file, even if it has
-                    # no separate button-config path of its own (falls back
-                    # to the shared default memory file in that case).
+
+                    # Switch device identity: memories + GUI-state file.
                     self.device_cfg_path = cfg_path
                     self.memory_file = _memory_file_for_device(cfg_path)
                     self.memories = _load_memories(self.memory_file)
-                # Always send reload_state so the GUI resyncs even if the
-                # config path was empty or the file could not be read.
+                    self._gui_state_file = _gui_state_file_for_device(cfg_path)
+
+                    # Restore the incoming device's saved GUI state (if any).
+                    _in_snap = _load_gui_state(self._gui_state_file)
+                    if _in_snap:
+                        self._apply_gui_state(_in_snap)
+                        print(f"[gui_state] restored state for {cfg_path!r}")
+                    else:
+                        print(f"[gui_state] no saved state for {cfg_path!r} — keeping defaults")
+
+                # reload_state tells the GUI to resync all widgets from the
+                # state dict that arrives in the preceding resp:ok.
                 outgoing = {"type": "reload_state"}
             elif c == "ui_button":
                 # Generic UI button presses (Full Screen, SDR-Device, FreqMgr,
@@ -1424,6 +1528,22 @@ class RadioState:
 
         # Show every change received from the GUI on the server console.
         self._log_cmd(cmd)
+
+        # Persist the updated GUI state for the active device after any
+        # operator-adjustable parameter change.  select_device handles its
+        # own save/restore above and is excluded here.
+        _STATE_MUTATING_CMDS = {
+            "set_freq", "set_lo_a_freq", "set_tune_freq", "set_lo_b_freq",
+            "set_lo", "set_mode", "set_agc", "set_agc_thresh",
+            "set_filter", "set_rf_gain", "set_volume", "set_squelch",
+            "set_nb", "set_nr", "set_nbrf", "set_nbif",
+            "set_afc", "set_anf", "set_notch", "set_mute",
+            "set_zoom", "user_button", "rf_usr_button",
+        }
+        if c in _STATE_MUTATING_CMDS:
+            with self.lock:
+                self._autosave_gui_state()
+
         return outgoing
 
     def make_user_text_messages(self):
