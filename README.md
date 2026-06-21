@@ -6,8 +6,8 @@
   </a>
 </div>
 
-This project is a Python/Tkinter **CAT GUI Interface** — a simulated SDR
-front-end whose every control is wired to a small simulated "radio" backend
+This project is a Python/Tkinter **CAT GUI Interface** — a SDR
+front-end whose every control is wired to a small radio backend
 over a plain TCP socket.
 
 It consists of two files:
