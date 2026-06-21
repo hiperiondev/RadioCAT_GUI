@@ -54,6 +54,38 @@ This is enough for the GUI to draw the RF/AF spectra + waterfalls, move the
 S-meter needle, light the squelch LED, and keep every control (frequency,
 mode, AGC, filter, sliders, zoom, start/stop) in sync.
 
+Configuration files
+--------------------
+Settings are split across two TOML files, each self-creating with sane
+defaults on first run and self-correcting (missing keys get added back at
+their default value) on every later run:
+
+  * cat_server.toml (--config PATH)         -- [server], [audio], [devices].
+    This is the transport configuration (TCP host/port the CAT socket
+    listens on, UDP/RTP audio port, whether audio is disabled) plus the
+    *list* of selectable device profiles shown in the GUI's Device dialog.
+    [devices] only holds label_N / config_N pairs here -- it does not hold
+    any buttons itself.
+
+  * cat_device.toml (--device-config PATH)  -- [user_buttons], [user_mods],
+    [rf_usr_btns]. This is one device profile's GUI configuration: its
+    user-defined buttons, user-defined modulation buttons, and RF user
+    buttons. No [devices] section here.
+
+    Each entry in cat_server.toml's [devices] section (config_N) names a
+    path to a *cat_device.toml-like file* for that profile -- i.e. a file
+    with this same [user_buttons]/[user_mods]/[rf_usr_btns] structure (no
+    nested [devices]). When the GUI sends
+    {"cmd": "select_device", "index": N}, that file is loaded (and, like
+    cat_device.toml, auto-created/self-corrected if needed) and its
+    buttons replace the running radio's buttons. The device *list* itself
+    doesn't change when you switch devices -- it's fixed for the session,
+    read once from cat_server.toml at startup.
+
+CLI flags always override whichever config file would otherwise supply that
+value; the config files only supply defaults for flags that weren't passed
+on the command line. (There are no CLI flags for [devices]; it's TOML-only.)
+
 User-defined buttons
 --------------------
 Up to 14 user-defined buttons (N = 1..14) can be configured via CLI flags and
@@ -153,8 +185,14 @@ except ImportError:
     except ImportError:
         _tomllib = None
 
-_SERVER_CONFIG_NAME = "cat_server.toml"
+_SERVER_CONFIG_NAME = "cat_server.toml"   # transport + device list: [server], [audio], [devices]
+_DEVICE_CONFIG_NAME = "cat_device.toml"   # GUI behaviour for one device profile
 
+# [server] + [audio] + [devices]. This file controls the TCP CAT socket, the
+# UDP/RTP audio channel, and the list of selectable device profiles shown in
+# the GUI's Device dialog. [devices] only *lists* device profiles here (label
+# + path to their cat_device.toml-like file); the buttons/mods that make up
+# each profile live in the referenced file, not in this one.
 _SERVER_CONFIG_DEFAULTS = {
     "server": {
         "host": "0.0.0.0",
@@ -164,6 +202,18 @@ _SERVER_CONFIG_DEFAULTS = {
         "audio_port": 5004,
         "no_audio":   False,
     },
+    "devices": {
+        **{f"label_{n}":  "" for n in range(1, 21)},
+        **{f"config_{n}": "" for n in range(1, 21)},
+    },
+}
+
+# [user_buttons] + [user_mods] + [rf_usr_btns] only. Anything that modifies
+# the buttons/mods of a single device profile lives here, in cat_device.toml
+# (or whatever file --device-config / a [devices].config_N entry points to).
+# No [devices] section here -- the device *list* lives only in
+# cat_server.toml; a device profile file just describes its own buttons.
+_DEVICE_CONFIG_DEFAULTS = {
     "user_buttons": {
         **{f"label_{n}": "" for n in range(1, 15)},
         **{f"type_{n}":  "normal" for n in range(1, 15)},
@@ -176,160 +226,15 @@ _SERVER_CONFIG_DEFAULTS = {
         **{f"label_{n}": "" for n in range(1, 12)},
         **{f"mode_{n}":  "normal" for n in range(1, 12)},
     },
-    "devices": {
-        **{f"label_{n}":  "" for n in range(1, 21)},
-        **{f"config_{n}": "" for n in range(1, 21)},
-    },
 }
 
-_SERVER_CONFIG_TEMPLATE = """\
-# CAT Server configuration
-# CLI flags override these values at runtime without modifying this file.
-# Use --config PATH to load a file from a non-default location.
 
-[server]
-host = "0.0.0.0"
-port = 50101
+def _parse_simple_toml(text):
+    """Minimal TOML parser for simple key=value with [sections].
 
-[audio]
-audio_port = 5004
-no_audio = false
-
-[user_buttons]
-# label: max 7 characters; type: "normal" (momentary) or "push" (toggle)
-label_1 = ""
-type_1 = "normal"
-label_2 = ""
-type_2 = "normal"
-label_3 = ""
-type_3 = "normal"
-label_4 = ""
-type_4 = "normal"
-label_5 = ""
-type_5 = "normal"
-label_6 = ""
-type_6 = "normal"
-label_7 = ""
-type_7 = "normal"
-label_8 = ""
-type_8 = "normal"
-label_9 = ""
-type_9 = "normal"
-label_10 = ""
-type_10 = "normal"
-label_11 = ""
-type_11 = "normal"
-label_12 = ""
-type_12 = "normal"
-label_13 = ""
-type_13 = "normal"
-label_14 = ""
-type_14 = "normal"
-
-[user_mods]
-# label: max 4 characters; user-defined modulation button labels shown in the
-# mode row of the GUI. Fill slots in order: 1, 2, ..., 10 (no skipping).
-# type: "normal" (acts like a regular mode button), "text" (splits the AF/
-#       audio box so a read-only text panel shows text sent by the server),
-#       or "text_input" (same split, but the text panel itself is split into
-#       an upper read-only area and a bottom 3-line editable input box that
-#       sends text to the server on Enter, like an RTTY chat).
-label_1 = ""
-type_1 = "normal"
-label_2 = ""
-type_2 = "normal"
-label_3 = ""
-type_3 = "normal"
-label_4 = ""
-type_4 = "normal"
-label_5 = ""
-type_5 = "normal"
-label_6 = ""
-type_6 = "normal"
-label_7 = ""
-type_7 = "normal"
-label_8 = ""
-type_8 = "normal"
-label_9 = ""
-type_9 = "normal"
-label_10 = ""
-type_10 = "normal"
-
-[rf_usr_btns]
-# RF user buttons: shown left of the band buttons in the GUI frequency area.
-# label: max 7 characters; mode: "normal" (momentary) or "push" (toggle).
-# Buttons with empty labels are hidden in the GUI.
-label_1 = ""
-mode_1 = "normal"
-label_2 = ""
-mode_2 = "normal"
-label_3 = ""
-mode_3 = "normal"
-label_4 = ""
-mode_4 = "normal"
-label_5 = ""
-mode_5 = "normal"
-label_6 = ""
-mode_6 = "normal"
-label_7 = ""
-mode_7 = "normal"
-label_8 = ""
-mode_8 = "normal"
-label_9 = ""
-mode_9 = "normal"
-label_10 = ""
-mode_10 = "normal"
-label_11 = ""
-mode_11 = "normal"
-
-[devices]
-# Up to 20 SDR device profiles. Each profile has a display label (shown in the
-# GUI Device list) and a TOML config file to reload when that device is
-# selected. Devices with empty labels are hidden. Fill slots in order: 1, 2, ...
-label_1 = ""
-config_1 = ""
-label_2 = ""
-config_2 = ""
-label_3 = ""
-config_3 = ""
-label_4 = ""
-config_4 = ""
-label_5 = ""
-config_5 = ""
-label_6 = ""
-config_6 = ""
-label_7 = ""
-config_7 = ""
-label_8 = ""
-config_8 = ""
-label_9 = ""
-config_9 = ""
-label_10 = ""
-config_10 = ""
-label_11 = ""
-config_11 = ""
-label_12 = ""
-config_12 = ""
-label_13 = ""
-config_13 = ""
-label_14 = ""
-config_14 = ""
-label_15 = ""
-config_15 = ""
-label_16 = ""
-config_16 = ""
-label_17 = ""
-config_17 = ""
-label_18 = ""
-config_18 = ""
-label_19 = ""
-config_19 = ""
-label_20 = ""
-config_20 = ""
-"""
-
-def _parse_simple_toml_srv(text):
-    """Minimal TOML parser for simple key=value with [sections]."""
+    Used as a fallback by `_load_toml` for both cat_server.toml-style and
+    cat_device.toml-style files when neither tomllib nor tomli is available.
+    """
     result = {}
     section = result
     for raw in text.splitlines():
@@ -349,11 +254,11 @@ def _parse_simple_toml_srv(text):
             sec_name = line[1:-1].strip()
             # NOTE: This minimal fallback parser does NOT support dotted
             # section headers (e.g. [server.tls]) or inline tables.
-            # The bundled config template never uses them.  If tomllib /
-            # tomli is available it is used instead (see _load_server_config).
+            # The bundled config templates never use them.  If tomllib /
+            # tomli is available it is used instead (see _load_toml).
             if '.' in sec_name:
                 raise ValueError(
-                    f"_parse_simple_toml_srv: nested section [{sec_name}] is "
+                    f"_parse_simple_toml: nested section [{sec_name}] is "
                     "not supported by the built-in fallback parser. "
                     "Install 'tomli' (pip install tomli) for full TOML support."
                 )
@@ -376,36 +281,90 @@ def _parse_simple_toml_srv(text):
                     except ValueError: section[k] = v
     return result
 
-def _load_server_config(path):
-    """Return the parsed TOML dict, or {} on any error."""
+def _load_toml(path):
+    """Return the parsed TOML dict for any config file, or {} on any error.
+
+    Used for cat_server.toml, cat_device.toml, and every per-device
+    cat_device.toml-like file referenced from a [devices] section.
+    """
     try:
         if _tomllib is not None:
             with open(path, "rb") as f:
                 return _tomllib.load(f)
         else:
             with open(path, "r", encoding="utf-8") as f:
-                return _parse_simple_toml_srv(f.read())
+                return _parse_simple_toml(f.read())
     except Exception as e:
         print(f"[config] WARNING: could not read {path}: {e}")
         return {}
 
+
+class _ConfigSpec:
+    """Describes one kind of TOML config file: its sections, the default
+    value for every key, the order keys/sections are rendered in, and the
+    comments to emit. The same load/merge/render/ensure machinery below
+    works for any file described this way -- used here for both
+    cat_server.toml (transport settings) and cat_device.toml (GUI/device
+    settings, also reused for every per-device config file)."""
+
+    def __init__(self, defaults, key_order, section_order, header, section_comments=None):
+        self.defaults = defaults
+        self.key_order = key_order
+        self.section_order = section_order
+        self.header = header
+        self.section_comments = section_comments or {}
+
+
 _SERVER_CONFIG_KEY_ORDER = {
     "server": ["host", "port"],
     "audio": ["audio_port", "no_audio"],
+    "devices": [k for n in range(1, 21) for k in (f"label_{n}", f"config_{n}")],
+}
+_SERVER_CONFIG_SECTION_ORDER = ["server", "audio", "devices"]
+_SERVER_CONFIG_HEADER = (
+    "# CAT Server configuration\n"
+    "# [server] + [audio] + [devices] belong in this file. [server]/[audio]\n"
+    "# are the TCP CAT socket and the UDP/RTP audio channel. [devices] is\n"
+    "# just the *list* of selectable device profiles (label + path to its\n"
+    "# cat_device.toml-like file) shown in the GUI's Device dialog -- the\n"
+    "# buttons/mods that make up each profile live in the referenced file,\n"
+    "# not here. Anything else that affects GUI behaviour (a single\n"
+    "# profile's user buttons, user-mod buttons, RF user buttons) lives in\n"
+    "# the device config instead -- see cat_device.toml.\n"
+    "# CLI flags override [server]/[audio] values at runtime without\n"
+    "# modifying this file (there are no CLI flags for [devices]).\n"
+    "# Use --config PATH to load a file from a non-default location."
+)
+_SERVER_CONFIG_SECTION_COMMENTS = {
+    "devices":
+        '# Up to 20 SDR device profiles. label_N = display name shown in the GUI\n'
+        '# Device list; config_N = path to a cat_device.toml-like file ([user_buttons]/\n'
+        '# [user_mods]/[rf_usr_btns] only -- no nested [devices]) loaded on selection.\n'
+        '# Devices with empty labels are hidden. Fill slots in order: 1, 2, 3…',
+}
+
+_DEVICE_CONFIG_KEY_ORDER = {
     "user_buttons": [k for n in range(1, 15) for k in (f"label_{n}", f"type_{n}")],
     "user_mods": [k for n in range(1, 11) for k in (f"label_{n}", f"type_{n}")],
     "rf_usr_btns": [k for n in range(1, 12) for k in (f"label_{n}", f"mode_{n}")],
-    "devices": [k for n in range(1, 21) for k in (f"label_{n}", f"config_{n}")],
 }
-_SERVER_CONFIG_SECTION_ORDER = ["server", "audio", "user_buttons", "user_mods", "rf_usr_btns", "devices"]
-
-_SERVER_CONFIG_HEADER = (
-    "# CAT Server configuration\n"
+_DEVICE_CONFIG_SECTION_ORDER = ["user_buttons", "user_mods", "rf_usr_btns"]
+_DEVICE_CONFIG_HEADER = (
+    "# CAT Device configuration\n"
+    "# Describes ONE device profile's GUI buttons: user-defined buttons,\n"
+    "# user-defined modulation buttons, and RF user buttons. No [devices]\n"
+    "# section here -- the list of selectable device profiles lives only in\n"
+    "# cat_server.toml's [devices] section.\n"
     "# CLI flags override these values at runtime without modifying this file.\n"
-    "# Use --config PATH to load a file from a non-default location."
+    "# Use --device-config PATH to load a file from a non-default location.\n"
+    "#\n"
+    "# This file's structure is reused for every device profile: each entry\n"
+    "# in cat_server.toml's [devices] section (config_N) should point to\n"
+    "# another file shaped exactly like this one -- a 'cat_device.toml-like\n"
+    "# file' -- loaded wholesale when that device is selected in the GUI."
 )
 
-_SERVER_CONFIG_SECTION_COMMENTS = {
+_DEVICE_CONFIG_SECTION_COMMENTS = {
     "user_buttons":
         '# label: max 7 characters; type: "normal" (momentary) or "push" (toggle)',
     "user_mods":
@@ -420,14 +379,26 @@ _SERVER_CONFIG_SECTION_COMMENTS = {
         '# RF user buttons: shown left of the band buttons in the GUI frequency area.\n'
         '# label: max 7 characters; mode: "normal" (momentary) or "push" (toggle).\n'
         '# Buttons with empty labels are hidden in the GUI.',
-    "devices":
-        '# Up to 20 SDR device profiles. label_N = display name shown in the GUI\n'
-        '# Device list; config_N = path to a TOML config file loaded on selection.\n'
-        '# Devices with empty labels are hidden. Fill slots in order: 1, 2, 3…',
 }
 
+SERVER_CONFIG_SPEC = _ConfigSpec(
+    defaults=_SERVER_CONFIG_DEFAULTS,
+    key_order=_SERVER_CONFIG_KEY_ORDER,
+    section_order=_SERVER_CONFIG_SECTION_ORDER,
+    header=_SERVER_CONFIG_HEADER,
+    section_comments=_SERVER_CONFIG_SECTION_COMMENTS,
+)
 
-def _fmt_toml_value_srv(v):
+DEVICE_CONFIG_SPEC = _ConfigSpec(
+    defaults=_DEVICE_CONFIG_DEFAULTS,
+    key_order=_DEVICE_CONFIG_KEY_ORDER,
+    section_order=_DEVICE_CONFIG_SECTION_ORDER,
+    header=_DEVICE_CONFIG_HEADER,
+    section_comments=_DEVICE_CONFIG_SECTION_COMMENTS,
+)
+
+
+def _fmt_toml_value(v):
     """Render a Python value back into TOML literal syntax."""
     if isinstance(v, bool):
         return "true" if v else "false"
@@ -436,8 +407,8 @@ def _fmt_toml_value_srv(v):
     return str(v)
 
 
-def _merge_server_config_with_defaults(cfg):
-    """Fill in any section/key missing from cfg using _SERVER_CONFIG_DEFAULTS.
+def _merge_config_with_defaults(cfg, spec):
+    """Fill in any section/key missing from cfg using spec.defaults.
 
     Returns (merged, added): merged is a complete config dict (every default
     section/key present, existing values always win) and added is an ordered
@@ -446,7 +417,7 @@ def _merge_server_config_with_defaults(cfg):
     """
     merged = {}
     added = []
-    for sec, sec_defaults in _SERVER_CONFIG_DEFAULTS.items():
+    for sec, sec_defaults in spec.defaults.items():
         _cfg_sec_raw = cfg.get(sec, {})
         cfg_sec = _cfg_sec_raw if isinstance(_cfg_sec_raw, dict) else {}
         merged_sec = {}
@@ -460,47 +431,63 @@ def _merge_server_config_with_defaults(cfg):
     return merged, added
 
 
-def _render_server_config(cfg):
-    """Render a complete, well-formed TOML document from a fully-merged config
-    dict, reproducing the same comments/layout as _SERVER_CONFIG_TEMPLATE."""
-    lines = [_SERVER_CONFIG_HEADER]
-    for sec in _SERVER_CONFIG_SECTION_ORDER:
+def _render_config(cfg, spec):
+    """Render a complete, well-formed TOML document from a fully-merged
+    config dict, per the section/key order and comments in `spec`."""
+    lines = [spec.header]
+    for sec in spec.section_order:
         lines.append("")
         lines.append(f"[{sec}]")
-        comment = _SERVER_CONFIG_SECTION_COMMENTS.get(sec)
+        comment = spec.section_comments.get(sec)
         if comment:
             lines.append(comment)
         sec_vals = cfg.get(sec, {})
-        for key in _SERVER_CONFIG_KEY_ORDER[sec]:
-            val = sec_vals.get(key, _SERVER_CONFIG_DEFAULTS[sec][key])
-            lines.append(f"{key} = {_fmt_toml_value_srv(val)}")
+        for key in spec.key_order[sec]:
+            val = sec_vals.get(key, spec.defaults[sec][key])
+            lines.append(f"{key} = {_fmt_toml_value(val)}")
     return "\n".join(lines) + "\n"
 
 
-def _ensure_server_config(path):
-    """Create the config file with defaults if it does not exist, then load it.
+def _ensure_config(path, spec, kind="config"):
+    """Create `path` with defaults (per `spec`) if it does not exist, then
+    load and return it. `kind` is only used for log messages, e.g. "server
+    config" or "device config".
 
     If the file already exists but is missing a parameter known to this
-    version of the server (i.e. one with a corresponding CLI flag/default),
-    the file is corrected in place: the missing parameter is added at its
-    default value and rewritten to disk, so the config keeps itself up to
-    date as new options are introduced in later versions.
+    version (i.e. one with a corresponding default in `spec`), the file is
+    corrected in place: the missing parameter is added at its default value
+    and rewritten to disk, so the config keeps itself up to date as new
+    options are introduced in later versions.
+
+    If the file exists and contains section(s) that aren't part of `spec`
+    at all, a note is printed -- this is the common symptom of an old,
+    pre-split single-file config that still has GUI-behaviour sections
+    mixed into the server config (or vice versa) and needs those sections
+    moved to the other file by hand.
     """
     if not os.path.exists(path):
         try:
             with open(path, "w", encoding="utf-8") as f:
-                f.write(_SERVER_CONFIG_TEMPLATE)
-            print(f"[config] Created default config: {path}")
+                f.write(_render_config(spec.defaults, spec))
+            print(f"[config] Created default {kind}: {path}")
         except Exception as e:
-            print(f"[config] WARNING: could not write default config: {e} — using built-in defaults")
-        return _load_server_config(path)
+            print(f"[config] WARNING: could not write default {kind}: {e} — using built-in defaults")
+        return _load_toml(path)
 
-    _cfg = _load_server_config(path)
-    merged, added = _merge_server_config_with_defaults(_cfg)
+    _cfg = _load_toml(path)
+    _extra = [sec for sec in _cfg.keys() if sec not in spec.section_order]
+    if _extra:
+        print(f"[config] NOTE: {path} has section(s) not used by this file "
+              f"({kind}): {', '.join(_extra)} — they are ignored here. "
+              f"[server]/[audio]/[devices] belong in cat_server.toml; "
+              f"[user_buttons]/[user_mods]/[rf_usr_btns] belong in "
+              f"cat_device.toml (or your --device-config / [devices].config_N "
+              f"file).")
+    merged, added = _merge_config_with_defaults(_cfg, spec)
     if added:
         try:
             with open(path, "w", encoding="utf-8") as f:
-                f.write(_render_server_config(merged))
+                f.write(_render_config(merged, spec))
             print(f"[config] Corrected {path}: added missing parameter(s) with "
                   f"default value(s) — {', '.join(added)}")
         except Exception as e:
@@ -1143,9 +1130,10 @@ class RadioState:
                 ]
                 outgoing = {"type": "device_list", "devices": dev_list}
             elif c == "select_device":
-                # GUI has chosen a device. Load the associated TOML config file,
-                # update user_buttons / user_mods / rf_usr_btns from it, then
-                # send reload_state so the GUI resyncs all its controls.
+                # GUI has chosen a device. Load the associated cat_device.toml-
+                # like config file, update user_buttons / user_mods /
+                # rf_usr_btns from it, then send reload_state so the GUI
+                # resyncs all its controls.
                 idx = int(cmd.get("index", 0)) - 1
                 if 0 <= idx < len(self.devices):
                     dev = self.devices[idx]
@@ -1153,9 +1141,12 @@ class RadioState:
                     print(f"[cat_server] device selected: {dev.get('label','?')} "
                           f"(index {idx + 1}, config {cfg_path!r})")
                     if cfg_path:
-                        # Load the device-specific TOML (safe: inside the lock;
-                        # file reads are fast on local filesystems).
-                        dcfg = _load_server_config(cfg_path)
+                        # Load the device-specific TOML using the same
+                        # DEVICE_CONFIG_SPEC as cat_device.toml itself, so it
+                        # gets created with defaults if missing and
+                        # self-corrected if it's missing newer keys (safe:
+                        # inside the lock; file I/O is fast on local disks).
+                        dcfg = _ensure_config(cfg_path, DEVICE_CONFIG_SPEC, kind="device config")
                         _ubtn  = dcfg.get("user_buttons", {})
                         _umods = dcfg.get("user_mods",    {})
                         _rufb  = dcfg.get("rf_usr_btns",  {})
@@ -1679,21 +1670,31 @@ class ClientHandler(threading.Thread):
 def _parse_args():
     import sys
 
-    # ── Phase 1: extract --config before full parsing ─────────────────────────
+    # ── Phase 1: extract --config / --device-config before full parsing ──────
     _pre = argparse.ArgumentParser(add_help=False)
     _pre.add_argument('--config', default=None)
+    _pre.add_argument('--device-config', default=None)
     _pre_args, _ = _pre.parse_known_args()
     _config_path = _pre_args.config or os.path.join(os.getcwd(), _SERVER_CONFIG_NAME)
+    _device_config_path = _pre_args.device_config or os.path.join(os.getcwd(), _DEVICE_CONFIG_NAME)
 
-    # ── Load / create TOML config ─────────────────────────────────────────────
-    _cfg  = _ensure_server_config(_config_path)
-    _srv  = _cfg.get("server",       {})
-    _aud  = _cfg.get("audio",        {})
-    _ubtn = _cfg.get("user_buttons", {})
-    _umods= _cfg.get("user_mods",    {})
-    _rufb = _cfg.get("rf_usr_btns",  {})
-    _devs = _cfg.get("devices",      {})
+    # ── Load / create the two TOML configs ────────────────────────────────────
+    # cat_server.toml: [server] + [audio] + [devices] (transport settings +
+    # the list of selectable device profiles).
+    _cfg  = _ensure_config(_config_path, SERVER_CONFIG_SPEC, kind="server config")
+    _srv  = _cfg.get("server",  {})
+    _aud  = _cfg.get("audio",   {})
+    _devs = _cfg.get("devices", {})
     _D    = _SERVER_CONFIG_DEFAULTS
+
+    # cat_device.toml: [user_buttons] + [user_mods] + [rf_usr_btns] -- the
+    # buttons/mods for the *default* device profile (everything that affects
+    # GUI behaviour for one profile).
+    _dcfg  = _ensure_config(_device_config_path, DEVICE_CONFIG_SPEC, kind="device config")
+    _ubtn  = _dcfg.get("user_buttons", {})
+    _umods = _dcfg.get("user_mods",    {})
+    _rufb  = _dcfg.get("rf_usr_btns",  {})
+    _DD    = _DEVICE_CONFIG_DEFAULTS
 
     _def_host       = _srv.get("host",       _D["server"]["host"])
     _def_port       = int(_srv.get("port",   _D["server"]["port"]))
@@ -1709,7 +1710,7 @@ def _parse_args():
     # IMPORTANT: host and port positionals must appear before any flags on the
     # command line to be detected reliably (e.g. `cat_server.py 0.0.0.0 50101
     # --no-audio`).  Passing them after flags risks ambiguous tokenisation.
-    _value_flags = {'--config', '--audio-port', '--iq_wav', '--audio_wav'}
+    _value_flags = {'--config', '--device-config', '--audio-port', '--iq_wav', '--audio_wav'}
     for _n in range(1, NUM_USER_BUTTONS + 1):
         _value_flags.add(f'--user-button-label-{_n}')
         _value_flags.add(f'--user-button-type-{_n}')
@@ -1738,7 +1739,12 @@ def _parse_args():
     # ── Full argument parse ───────────────────────────────────────────────────
     ap = argparse.ArgumentParser(description="cat_server")
     ap.add_argument('--config', metavar='PATH', default=None,
-                    help=f'Path to TOML config file (default: ./{_SERVER_CONFIG_NAME})')
+                    help=f'Path to TOML server config file -- [server] + [audio] '
+                         f'+ [devices] (default: ./{_SERVER_CONFIG_NAME})')
+    ap.add_argument('--device-config', metavar='PATH', default=None,
+                    help=f'Path to TOML device config file for the default device '
+                         f'profile -- [user_buttons] + [user_mods] + [rf_usr_btns] '
+                         f'(default: ./{_DEVICE_CONFIG_NAME})')
     ap.add_argument("host", nargs="?",
                     default=_def_host if not _cli_host_given else None,
                     help=f"Host/IP to listen on (default: {_def_host})")
@@ -1797,7 +1803,8 @@ def _parse_args():
     _raw = ap.parse_args()
 
     # ── Merge: CLI beats config, config beats built-in default ───────────────
-    _raw.config     = _config_path
+    _raw.config        = _config_path
+    _raw.device_config = _device_config_path
     _raw.audio_port = _raw.audio_port if hasattr(_raw, 'audio_port') else _def_audio_port
     _raw.no_audio   = _raw.no_audio   if hasattr(_raw, 'no_audio')   else _def_no_audio
 
@@ -1811,8 +1818,8 @@ def _parse_args():
     for n in range(1, NUM_USER_BUTTONS + 1):
         _lattr = f"user_button_label_{n}"
         _tattr = f"user_button_type_{n}"
-        _cfg_label = _ubtn.get(f"label_{n}", _D["user_buttons"][f"label_{n}"])
-        _cfg_type  = _ubtn.get(f"type_{n}",  _D["user_buttons"][f"type_{n}"])
+        _cfg_label = _ubtn.get(f"label_{n}", _DD["user_buttons"][f"label_{n}"])
+        _cfg_type  = _ubtn.get(f"type_{n}",  _DD["user_buttons"][f"type_{n}"])
         if not hasattr(_raw, _lattr):
             setattr(_raw, _lattr, _cfg_label)
         if not hasattr(_raw, _tattr):
@@ -1822,8 +1829,8 @@ def _parse_args():
     for n in range(1, NUM_USER_MODS + 1):
         _mattr = f"user_mod_{n}"
         _tattr2 = f"user_mod_type_{n}"
-        _cfg_mod_label = _umods.get(f"label_{n}", _D["user_mods"][f"label_{n}"])
-        _cfg_mod_type  = _umods.get(f"type_{n}",  _D["user_mods"][f"type_{n}"])
+        _cfg_mod_label = _umods.get(f"label_{n}", _DD["user_mods"][f"label_{n}"])
+        _cfg_mod_type  = _umods.get(f"type_{n}",  _DD["user_mods"][f"type_{n}"])
         if not hasattr(_raw, _mattr):
             setattr(_raw, _mattr, _cfg_mod_label)
         if not hasattr(_raw, _tattr2):
@@ -1833,14 +1840,14 @@ def _parse_args():
     for n in range(1, NUM_RF_USR_BTNS + 1):
         _rlattr = f"rf_usr_btn_{n}"
         _rmattr = f"rf_usr_btn_mode_{n}"
-        _cfg_rf_label = _rufb.get(f"label_{n}", _D["rf_usr_btns"][f"label_{n}"])
-        _cfg_rf_mode  = _rufb.get(f"mode_{n}",  _D["rf_usr_btns"][f"mode_{n}"])
+        _cfg_rf_label = _rufb.get(f"label_{n}", _DD["rf_usr_btns"][f"label_{n}"])
+        _cfg_rf_mode  = _rufb.get(f"mode_{n}",  _DD["rf_usr_btns"][f"mode_{n}"])
         if not hasattr(_raw, _rlattr):
             setattr(_raw, _rlattr, _cfg_rf_label)
         if not hasattr(_raw, _rmattr):
             setattr(_raw, _rmattr, _cfg_rf_mode)
 
-    # Devices: read from config (no CLI flags for devices — TOML-only)
+    # Devices: read from server config's [devices] (no CLI flags — TOML-only)
     for n in range(1, 21):
         _dlattr = f"device_label_{n}"
         _dcattr = f"device_config_{n}"
@@ -1952,6 +1959,9 @@ def main():
     args = _parse_args()
     host = args.host
     port = args.port
+
+    print(f"[cat_server] server config: {args.config}")
+    print(f"[cat_server] device config: {args.device_config}")
 
     # ── Optional: load a recorded IQ wav file to drive the RF spectrum ────────
     iq_source = None

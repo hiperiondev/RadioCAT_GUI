@@ -1,0 +1,94 @@
+# CAT Device configuration
+# Everything that affects GUI behaviour lives here: user-defined
+# buttons, user-defined modulation buttons, RF user buttons, and the
+# list of other devices selectable from the GUI's Device dialog.
+# CLI flags override the [user_buttons]/[user_mods]/[rf_usr_btns] values
+# at runtime without modifying this file.
+# Use --device-config PATH to load a file from a non-default location.
+
+[user_buttons]
+# label: max 7 characters; type: "normal" (momentary) or "push" (toggle)
+label_1 = "UsrBtn1"
+type_1 = "normal"
+label_2 = "UsrBtn2"
+type_2 = "normal"
+label_3 = "UsrBtn3"
+type_3 = "normal"
+label_4 = "UsrBtn4"
+type_4 = "normal"
+label_5 = "UsrBtn5"
+type_5 = "normal"
+label_6 = "UsrBtn6"
+type_6 = "normal"
+label_7 = "UsrBtn7"
+type_7 = "normal"
+label_8 = "UsrBtn8"
+type_8 = "normal"
+label_9 = "UsrBtn9"
+type_9 = "normal"
+label_10 = "UsrBtnA"
+type_10 = "normal"
+label_11 = "UsrBtnB"
+type_11 = "normal"
+label_12 = "UsrBtnC"
+type_12 = "normal"
+label_13 = "UsrBtnD"
+type_13 = "normal"
+label_14 = "UsrBtnE"
+type_14 = "normal"
+
+[user_mods]
+# label: max 4 characters; user-defined modulation button labels shown in the
+# mode row of the GUI. Fill slots in order: 1, 2, ..., 10 (no skipping).
+# type: "normal" (acts like a regular mode button), "text" (splits the AF/
+#       audio box so a read-only text panel shows text sent by the server),
+#       or "text_input" (same split, but the text panel itself is split into
+#       an upper read-only area and a bottom 3-line editable input box that
+#       sends text to the server on Enter, like an RTTY chat).
+label_1 = "AM"
+type_1 = "normal"
+label_2 = "FM"
+type_2 = "normal"
+label_3 = "LSB"
+type_3 = "normal"
+label_4 = "USB"
+type_4 = "normal"
+label_5 = "CW"
+type_5 = "normal"
+label_6 = "APRS"
+type_6 = "text"
+label_7 = "RTTY"
+type_7 = "text_input"
+label_8 = "FT8"
+type_8 = "normal"
+label_9 = "FT2"
+type_9 = "normal"
+label_10 = "FT4"
+type_10 = "normal"
+
+[rf_usr_btns]
+# RF user buttons: shown left of the band buttons in the GUI frequency area.
+# label: max 7 characters; mode: "normal" (momentary) or "push" (toggle).
+# Buttons with empty labels are hidden in the GUI.
+label_1 = "BtnUsr1"
+mode_1 = "normal"
+label_2 = "BtnUsr2"
+mode_2 = "normal"
+label_3 = "BtnUsr3"
+mode_3 = "normal"
+label_4 = "BtnUsr4"
+mode_4 = "normal"
+label_5 = "BtnUsr5"
+mode_5 = "normal"
+label_6 = "BtnUsr6"
+mode_6 = "normal"
+label_7 = "BtnUsr7"
+mode_7 = "normal"
+label_8 = "BtnUsr8"
+mode_8 = "normal"
+label_9 = "BtnUsr9"
+mode_9 = "normal"
+label_10 = "BtnUsra"
+mode_10 = "normal"
+label_11 = "BtnUsrb"
+mode_11 = "normal"
