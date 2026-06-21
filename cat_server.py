@@ -31,7 +31,9 @@ protocol:
         {"cmd": "ui_button","name": "Full Screen"}
         {"cmd": "transport","action": "\u25b6"}
         {"cmd": "user_text", "index": 1, "text": "CQ CQ DE TEST"}
-        {"cmd": "memory", "position": "LO A"}
+        {"cmd": "get_memories", "position": "LO A"}
+        {"cmd": "save_memory", "position": "LO A", "index": 0,
+         "label": "40M SSB", "freq": 7185000}
         {"cmd": "start"}
         {"cmd": "stop"}
         {"cmd": "hello"}
@@ -86,6 +88,25 @@ their default value) on every later run:
 CLI flags always override whichever config file would otherwise supply that
 value; the config files only supply defaults for flags that weren't passed
 on the command line. (There are no CLI flags for [devices]; it's TOML-only.)
+
+Frequency memories
+-------------------
+Each device profile has its own independent set of frequency memories: 20
+slots (M1..M20) for each of the three frequency rows "LO A", "LO B", and
+"Tune". They are stored as JSON, in a file next to that device's own config
+file (same name, ".memories.json" suffix) -- so switching devices via
+"select_device" also switches which memory bank is active, and memories
+never leak between devices. The file is rewritten immediately every time a
+slot is saved, not just on shutdown.
+
+    {"cmd": "get_memories", "position": "LO A"}
+        -> {"type": "memory_list", "position": "LO A",
+            "memories": [{"label": "40M SSB", "freq": 7185000.0}, ...] }  (20 entries)
+
+    {"cmd": "save_memory", "position": "LO A", "index": 0,
+     "label": "40M SSB", "freq": 7185000}
+        -> {"type": "memory_list", "position": "LO A", "memories": [...] }
+           (also written to that device's .memories.json file right away)
 
 User-defined buttons
 --------------------
@@ -505,6 +526,15 @@ NUM_USER_BUTTONS = 14   # number of user-defined buttons (N = 1..14)
 NUM_USER_MODS    = 10   # number of user-defined modulation buttons (N = 1..10)
 NUM_RF_USR_BTNS  = 11   # number of RF user buttons (N = 1..11, left of band buttons)
 IQ_FFT_SIZE = 4096      # FFT size used to turn --iq_wav samples into a spectrum
+
+# ── Frequency memories ────────────────────────────────────────────────────────
+# Each device keeps its own independent set of memories, one list of 20 slots
+# per frequency row ("LO A", "LO B", "Tune"). Persisted to a small JSON file
+# next to that device's config file so memories survive restarts and stay
+# tied to the device profile, not the session.
+MEMORY_POSITIONS    = ("LO A", "LO B", "Tune")
+NUM_MEMORY_SLOTS    = 20   # memory slots per position (M1..M20)
+MEMORY_LABEL_MAXLEN = 10   # max characters in a memory label
 
 # ── RTP / UDP audio ──────────────────────────────────────────────────────────
 AUDIO_SAMPLE_RATE  = 8000       # Hz
@@ -936,11 +966,101 @@ def _crop_and_resample(full_db, num_bins, zoom):
     return np.interp(x_dst, x_src, seg)
 
 
+def _memory_file_for_device(device_cfg_path):
+    """Return the path to the memory-storage file for a device.
+
+    Memories are kept independent per device: the file lives next to that
+    device's own config file (same directory, same base name, with a
+    '.memories.json' suffix instead of the original extension) so each
+    device profile's 3x20 memory slots never collide with another
+    profile's. When no device config path is known yet (e.g. before any
+    device has been explicitly selected), a fixed default file in the
+    current working directory is used instead.
+    """
+    if device_cfg_path:
+        base, _ext = os.path.splitext(device_cfg_path)
+        return base + ".memories.json"
+    return os.path.join(os.getcwd(), "cat_default.memories.json")
+
+
+def _empty_memory_slots():
+    return [{"label": "", "freq": 0.0} for _ in range(NUM_MEMORY_SLOTS)]
+
+
+def _load_memories(path):
+    """Load (and self-correct) the memory file for one device.
+
+    Returns a dict {"LO A": [ {label, freq} x20 ], "LO B": [...], "Tune": [...]}.
+    Missing file, missing positions, or short/long slot lists are all
+    silently corrected back to a well-formed structure (and that
+    correction is written straight back out), the same self-healing
+    philosophy as the other TOML config files in this server.
+    """
+    mems = {}
+    raw = {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except FileNotFoundError:
+        raw = {}
+    except Exception as e:
+        print(f"[memory] WARNING: could not read {path}: {e} — starting fresh")
+        raw = {}
+
+    changed = not raw
+    for pos in MEMORY_POSITIONS:
+        slots_in = raw.get(pos)
+        if not isinstance(slots_in, list):
+            slots_in = []
+            changed = True
+        slots = []
+        for i in range(NUM_MEMORY_SLOTS):
+            entry = slots_in[i] if i < len(slots_in) else None
+            if isinstance(entry, dict):
+                label = str(entry.get("label", ""))[:MEMORY_LABEL_MAXLEN]
+                try:
+                    freq = float(entry.get("freq", 0.0))
+                except (TypeError, ValueError):
+                    freq = 0.0
+                    changed = True
+                if label != entry.get("label", ""):
+                    changed = True
+            else:
+                label, freq = "", 0.0
+                changed = True
+            slots.append({"label": label, "freq": freq})
+        if len(slots_in) != NUM_MEMORY_SLOTS:
+            changed = True
+        mems[pos] = slots
+
+    if changed:
+        _save_memories(path, mems)
+    return mems
+
+
+def _save_memories(path, memories):
+    """Write the full memory structure to *path* immediately (atomic write:
+    write to a temp file then rename, so a crash mid-write can't corrupt
+    the existing file). Called right after every memory change so the file
+    on disk always reflects the latest save — never just on shutdown."""
+    try:
+        d = os.path.dirname(path)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(memories, f, indent=2)
+        os.replace(tmp, path)
+    except Exception as e:
+        print(f"[memory] WARNING: could not save {path}: {e}")
+
+
+
 class RadioState:
     """Holds the simulated 'radio' settings and produces spectrum data."""
 
     def __init__(self, user_buttons=None, user_mod_labels=None, user_mod_types=None,
-                 rf_usr_btns=None, iq_source=None, devices=None):
+                 rf_usr_btns=None, iq_source=None, devices=None, device_cfg_path=None):
         self.lock = threading.Lock()
         self.center_freq = 14_195_000.0
         self.sample_rate = 192_000.0
@@ -1017,6 +1137,16 @@ class RadioState:
         # Device profiles list: [{"label": str, "config": str}, ...]
         # Populated from the [devices] section of the server TOML config.
         self.devices = list(devices) if devices else []
+
+        # ── Frequency memories (independent per device) ────────────────────
+        # device_cfg_path identifies the *currently active* device profile:
+        # initially the --device-config file loaded at startup, later
+        # whichever cat_device.toml-like file "select_device" last loaded.
+        # Memories are looked up / persisted against this path, so each
+        # device keeps its own separate set of 3x20 slots.
+        self.device_cfg_path = device_cfg_path
+        self.memory_file = _memory_file_for_device(self.device_cfg_path)
+        self.memories = _load_memories(self.memory_file)
 
     # ------------------------------------------------------------ setup ----
     def _make_signals(self):
@@ -1175,6 +1305,13 @@ class RadioState:
                             for n in range(1, NUM_RF_USR_BTNS + 1)
                         ]
                         self.rf_usr_btn_state = [False] * NUM_RF_USR_BTNS
+                    # Memories are independent per device: switch to (and
+                    # load) this device's own memory file, even if it has
+                    # no separate button-config path of its own (falls back
+                    # to the shared default memory file in that case).
+                    self.device_cfg_path = cfg_path
+                    self.memory_file = _memory_file_for_device(cfg_path)
+                    self.memories = _load_memories(self.memory_file)
                 # Always send reload_state so the GUI resyncs even if the
                 # config path was empty or the file could not be read.
                 outgoing = {"type": "reload_state"}
@@ -1202,12 +1339,45 @@ class RadioState:
                 # Transport-bar button presses (record/play/pause/etc.) -
                 # nothing to simulate, but still logged below.
                 pass
+            elif c == "get_memories":
+                # GUI's "M" button was pressed for a frequency row:
+                # {"cmd":"get_memories","position":"LO A"|"LO B"|"Tune"}.
+                # Reply with that row's full 20-slot memory list for the
+                # currently active device, so the GUI can show its memory
+                # dialog. Memories are per-device (see device_cfg_path /
+                # self.memories, reloaded on every "select_device").
+                position = cmd.get("position")
+                if position in MEMORY_POSITIONS:
+                    outgoing = {"type": "memory_list", "position": position,
+                                "memories": self.memories[position]}
+                else:
+                    outgoing = {"type": "memory_list", "position": position,
+                                "memories": [], "error": "unknown position"}
+            elif c == "save_memory":
+                # GUI's memory-dialog Save button: store the radio's *current*
+                # actual frequency for this row into slot `index`, under the
+                # given (possibly just-edited) label, for the active device.
+                # {"cmd":"save_memory","position":"LO A","index":0,
+                #  "label":"40M SSB","freq":7185000}
+                # Persisted to that device's memory file immediately so the
+                # file on disk is never stale.
+                position = cmd.get("position")
+                idx = int(cmd.get("index", -1))
+                if position in MEMORY_POSITIONS and 0 <= idx < NUM_MEMORY_SLOTS:
+                    label = str(cmd.get("label", ""))[:MEMORY_LABEL_MAXLEN]
+                    try:
+                        freq = float(cmd.get("freq", 0.0))
+                    except (TypeError, ValueError):
+                        freq = 0.0
+                    self.memories[position][idx] = {"label": label, "freq": freq}
+                    _save_memories(self.memory_file, self.memories)
+                    outgoing = {"type": "memory_list", "position": position,
+                                "memories": self.memories[position]}
             elif c == "memory":
-                # Memory ("M") button press, sent from the GUI alongside the
-                # frequency row it belongs to: {"cmd":"memory","position":
-                # "LO A"|"LO B"|"Tune"}. Momentary signal only — nothing to
-                # simulate here, but still logged below so it's visible on
-                # the server console.
+                # Legacy momentary "M" button press (now superseded by
+                # get_memories, but kept accepted/harmless for older GUI
+                # builds that might still send it): {"cmd":"memory",
+                # "position":"LO A"|"LO B"|"Tune"}.
                 pass
             elif c == "user_button":
                 # User-defined button N (1..NUM_USER_BUTTONS).
@@ -1991,7 +2161,8 @@ def main():
                        user_mod_types=_build_user_mod_types(args),
                        rf_usr_btns=_build_rf_usr_btns(args),
                        iq_source=iq_source,
-                       devices=_build_devices(args))
+                       devices=_build_devices(args),
+                       device_cfg_path=args.device_config)
 
     # ── Optional: load a wav file to transmit as the downlink audio ──────────
     audio_source = None

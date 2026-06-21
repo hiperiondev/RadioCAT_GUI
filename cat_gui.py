@@ -3959,10 +3959,187 @@ class App:
 
     # ── Memory ("M") buttons — one per LO A / LO B / Tune row ──────────────
     def _mem_btn_press(self,position):
-        """Send a momentary 'memory' command to the server, tagged with the
-        frequency-row position ("LO A", "LO B", or "Tune") that was
-        pressed."""
-        self.net.send({"cmd":"memory","position":position})
+        """Open the memory dialog for this frequency row ("LO A", "LO B", or
+        "Tune") and ask the server for that row's 20 memory slots. Memories
+        are per-device on the server side, so this always reflects whatever
+        device is currently selected there."""
+        self._open_memory_dialog(position)
+        self.net.send({"cmd":"get_memories","position":position})
+
+    def _memory_disp_for(self,position):
+        """Return the FreqDisp widget that owns the actual on-air frequency
+        for a given memory row position, or None if it doesn't exist yet."""
+        return {"LO A":getattr(self,'lo_disp',None),
+                "LO B":getattr(self,'lo_b_disp',None),
+                "Tune":getattr(self,'tune_disp',None)}.get(position)
+
+    def _memory_state_key_for(self,position):
+        return {"LO A":"lo_freq","LO B":"lo_b_freq","Tune":"tune_freq"}.get(position)
+
+    def _open_memory_dialog(self,position):
+        """Build (or re-raise) the modal memory-list window for one
+        frequency row. Rows are populated once the server's "memory_list"
+        reply arrives (see _on_memory_list / _handle); until then the list
+        just shows a one-line "Loading..." placeholder."""
+        # Only one memory dialog at a time — reuse it if already open for
+        # the same position, otherwise tear down the old one first.
+        if getattr(self,'_mem_dialog',None) is not None:
+            try:
+                self._mem_dialog.destroy()
+            except Exception:
+                pass
+            self._mem_dialog=None
+
+        self._mem_dialog_position=position
+        self._mem_dialog_data=[{"label":"","freq":0.0} for _ in range(20)]
+        self._mem_dialog_selected=None
+
+        sc=self._sc
+        fs=max(7,int(round(8*sc)))
+        fs_h=max(8,int(round(9*sc)))
+        pad=max(4,int(round(6*sc)))
+
+        top=tk.Toplevel(self.root)
+        top.title(f"Memory — {position}")
+        top.configure(bg=C["panel_bg"])
+        top.transient(self.root)
+        top.grab_set()
+        top.resizable(False,False)
+        self._mem_dialog=top
+        def _on_close():
+            self._mem_dialog=None
+            self._mem_dialog_position=None
+            top.destroy()
+        top.protocol("WM_DELETE_WINDOW",_on_close)
+
+        tk.Label(top,text=f"{position} memories:",bg=C["panel_bg"],
+                 fg=C["btn_grn_fg"],font=_gui_font(fs_h,"bold")
+                 ).pack(padx=pad,pady=(pad,2),anchor="w")
+
+        list_fr=tk.Frame(top,bg=C["panel_bg"])
+        list_fr.pack(padx=pad,pady=(0,4),fill="both",expand=True)
+        scrollbar=tk.Scrollbar(list_fr,orient="vertical")
+        lb=tk.Listbox(list_fr,height=20,width=34,
+                      bg=C["btn_gray"],fg=C["text"],
+                      selectbackground=C["btn_sel"],selectforeground=C["btn_sel_fg"],
+                      font=("Courier",fs),relief="flat",bd=0,
+                      activestyle="none",exportselection=False,
+                      yscrollcommand=scrollbar.set)
+        scrollbar.config(command=lb.yview)
+        lb.pack(side="left",fill="both",expand=True)
+        scrollbar.pack(side="right",fill="y")
+        self._mem_dialog_listbox=lb
+        lb.insert("end","Loading...")
+
+        # ── Editable label + frequency (read-only) of the current selection ──
+        edit_fr=tk.Frame(top,bg=C["panel_bg"])
+        edit_fr.pack(padx=pad,pady=(2,4),fill="x")
+        tk.Label(edit_fr,text="Label:",bg=C["panel_bg"],fg=C["text"],
+                 font=_gui_font(fs)).pack(side="left")
+        label_var=tk.StringVar(value="")
+        self._mem_dialog_label_var=label_var
+        lbl_ent=tk.Entry(edit_fr,textvariable=label_var,width=12,
+                         bg=C["spec_bg"],fg=C["text"],
+                         insertbackground=C["text"],relief="flat")
+        lbl_ent.pack(side="left",padx=(4,0))
+        # Keep labels within the server's MEMORY_LABEL_MAXLEN (10 chars).
+        def _cap_label(*_a):
+            v=label_var.get()
+            if len(v)>10: label_var.set(v[:10])
+        label_var.trace_add("write",_cap_label)
+
+        def _select(evt=None):
+            sel=lb.curselection()
+            if not sel: return
+            idx=sel[0]
+            self._mem_dialog_selected=idx
+            entry=self._mem_dialog_data[idx] if idx<len(self._mem_dialog_data) else {"label":"","freq":0.0}
+            label_var.set(entry.get("label",""))
+        lb.bind("<<ListboxSelect>>",_select)
+
+        # ── Load / Save / Close buttons ──────────────────────────────────────
+        btn_fr=tk.Frame(top,bg=C["panel_bg"])
+        btn_fr.pack(padx=pad,pady=(0,pad),fill="x")
+
+        def _load():
+            idx=self._mem_dialog_selected
+            if idx is None:
+                messagebox.showinfo("Memory","Select a memory slot first.",parent=top)
+                return
+            entry=self._mem_dialog_data[idx] if idx<len(self._mem_dialog_data) else None
+            if not entry or (not entry.get("label") and not entry.get("freq")):
+                messagebox.showinfo("Memory","That memory slot is empty.",parent=top)
+                return
+            freq=entry.get("freq",0) or 0
+            disp=self._memory_disp_for(position)
+            if disp is not None:
+                disp.set_value(int(freq),notify=True)
+
+        def _save():
+            idx=self._mem_dialog_selected
+            if idx is None:
+                messagebox.showinfo("Memory","Select a memory slot first.",parent=top)
+                return
+            key=self._memory_state_key_for(position)
+            freq=self.state.get(key,0) or 0
+            label=label_var.get()[:10]
+            if idx<len(self._mem_dialog_data):
+                self._mem_dialog_data[idx]={"label":label,"freq":freq}
+            self._refresh_memory_listbox()
+            lb.selection_clear(0,"end"); lb.selection_set(idx); lb.see(idx)
+            self.net.send({"cmd":"save_memory","position":position,
+                           "index":idx,"label":label,"freq":freq})
+
+        bpad=max(6,int(round(8*sc)))
+        tk.Button(btn_fr,text="Load",command=_load,
+                  bg=C["btn_grn"],fg=C["btn_grn_fg"],
+                  font=_gui_font(fs,"bold"),relief="flat",bd=1,
+                  padx=bpad).pack(side="left",fill="x",expand=True,padx=(0,2))
+        tk.Button(btn_fr,text="Save",command=_save,
+                  bg=C["btn_sel"],fg=C["btn_sel_fg"],
+                  font=_gui_font(fs,"bold"),relief="flat",bd=1,
+                  padx=bpad).pack(side="left",fill="x",expand=True,padx=2)
+        tk.Button(btn_fr,text="Close",command=_on_close,
+                  bg=C["btn_gray"],fg=C["text"],
+                  font=_gui_font(fs),relief="flat",bd=1,
+                  padx=bpad).pack(side="left",fill="x",expand=True,padx=(2,0))
+
+        top.update_idletasks()
+        rw=self.root.winfo_x()+self.root.winfo_width()//2
+        rh=self.root.winfo_y()+self.root.winfo_height()//2
+        tw=top.winfo_reqwidth(); th=top.winfo_reqheight()
+        top.geometry(f"+{rw-tw//2}+{rh-th//2}")
+
+    def _refresh_memory_listbox(self):
+        lb=getattr(self,'_mem_dialog_listbox',None)
+        if lb is None: return
+        sel=self._mem_dialog_selected
+        lb.delete(0,"end")
+        for i,entry in enumerate(self._mem_dialog_data):
+            label=str(entry.get("label",""))[:10]
+            freq=entry.get("freq",0) or 0
+            lb.insert("end",f"{i+1:2d}  {label:<10}  {freq:>11,.0f} Hz")
+        if sel is not None and 0<=sel<lb.size():
+            lb.selection_set(sel)
+
+    def _on_memory_list(self,msg):
+        """Handle the server's reply to get_memories / save_memory: refresh
+        the open memory dialog's list, but only if it's still showing the
+        same position this reply is for (the user may have closed it or
+        opened a different row's dialog in the meantime)."""
+        position=msg.get("position")
+        if getattr(self,'_mem_dialog_position',None)!=position:
+            return
+        memories=msg.get("memories") or []
+        data=[]
+        for i in range(20):
+            if i<len(memories) and isinstance(memories[i],dict):
+                data.append({"label":memories[i].get("label",""),
+                             "freq":memories[i].get("freq",0)})
+            else:
+                data.append({"label":"","freq":0.0})
+        self._mem_dialog_data=data
+        self._refresh_memory_listbox()
 
     # ── SPLIT toggle (between LO A and LO B) ────────────────────────────────
     def _toggle_split(self):
@@ -4219,6 +4396,10 @@ class App:
             # Server replied to get_devices — open the selection popup on the
             # GUI thread (we are already on the GUI thread inside poll/_handle).
             self._open_device_dialog(msg.get("devices", []))
+        elif t == "memory_list":
+            # Server replied to get_memories / save_memory — refresh the
+            # memory dialog (if still open on the matching position).
+            self._on_memory_list(msg)
         elif t == "reload_state":
             # Server has reloaded its configuration from a device TOML file.
             # State was already merged via the preceding resp:ok; now resync
@@ -4242,6 +4423,11 @@ class App:
             finally:
                 self._sup = False
             self._refresh()
+            # If a memory dialog is open, the active device (and therefore
+            # its memory bank) may have just changed — refresh it.
+            if getattr(self, '_mem_dialog_position', None):
+                self.net.send({"cmd": "get_memories",
+                               "position": self._mem_dialog_position})
         elif "state" in msg:
             incoming = msg["state"]
             # PTT is owned by the GUI button — never let the server's reflected
