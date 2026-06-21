@@ -4033,20 +4033,27 @@ class App:
 
         # ── Editable label + frequency (read-only) of the current selection ──
         edit_fr=tk.Frame(top,bg=C["panel_bg"])
-        edit_fr.pack(padx=pad,pady=(2,4),fill="x")
-        tk.Label(edit_fr,text="Label:",bg=C["panel_bg"],fg=C["text"],
+        edit_fr.pack(padx=pad,pady=(2,0),fill="x")
+        tk.Label(edit_fr,text="Edit label:",bg=C["panel_bg"],fg=C["text"],
                  font=_gui_font(fs)).pack(side="left")
         label_var=tk.StringVar(value="")
         self._mem_dialog_label_var=label_var
-        lbl_ent=tk.Entry(edit_fr,textvariable=label_var,width=12,
+        lbl_ent=tk.Entry(edit_fr,textvariable=label_var,width=14,
                          bg=C["spec_bg"],fg=C["text"],
-                         insertbackground=C["text"],relief="flat")
-        lbl_ent.pack(side="left",padx=(4,0))
+                         insertbackground=C["text"],relief="flat",
+                         highlightthickness=1,highlightbackground=C["sep"],
+                         highlightcolor=C["btn_sel"])
+        lbl_ent.pack(side="left",padx=(4,0),fill="x",expand=True)
         # Keep labels within the server's MEMORY_LABEL_MAXLEN (10 chars).
         def _cap_label(*_a):
             v=label_var.get()
             if len(v)>10: label_var.set(v[:10])
         label_var.trace_add("write",_cap_label)
+        tk.Label(top,text="Select a slot, type a label, then Rename (label only) "
+                          "or Save (label + current frequency).",
+                 bg=C["panel_bg"],fg=C["text_dim"],
+                 font=_gui_font(max(6,fs-1)),wraplength=240,justify="left"
+                 ).pack(padx=pad,pady=(2,4),anchor="w")
 
         def _select(evt=None):
             sel=lb.curselection()
@@ -4055,9 +4062,14 @@ class App:
             self._mem_dialog_selected=idx
             entry=self._mem_dialog_data[idx] if idx<len(self._mem_dialog_data) else {"label":"","freq":0.0}
             label_var.set(entry.get("label",""))
+            lbl_ent.focus_set(); lbl_ent.select_range(0,"end")
         lb.bind("<<ListboxSelect>>",_select)
+        # Double-click a row: select it and jump straight into the label
+        # box ready to type, for people who expect double-click-to-rename.
+        lb.bind("<Double-Button-1>",lambda e:(_select(),lbl_ent.focus_set(),
+                                               lbl_ent.select_range(0,"end")))
 
-        # ── Load / Save / Close buttons ──────────────────────────────────────
+        # ── Load / Rename / Save / Close buttons ────────────────────────────
         btn_fr=tk.Frame(top,bg=C["panel_bg"])
         btn_fr.pack(padx=pad,pady=(0,pad),fill="x")
 
@@ -4075,14 +4087,7 @@ class App:
             if disp is not None:
                 disp.set_value(int(freq),notify=True)
 
-        def _save():
-            idx=self._mem_dialog_selected
-            if idx is None:
-                messagebox.showinfo("Memory","Select a memory slot first.",parent=top)
-                return
-            key=self._memory_state_key_for(position)
-            freq=self.state.get(key,0) or 0
-            label=label_var.get()[:10]
+        def _commit(idx,label,freq):
             if idx<len(self._mem_dialog_data):
                 self._mem_dialog_data[idx]={"label":label,"freq":freq}
             self._refresh_memory_listbox()
@@ -4090,11 +4095,42 @@ class App:
             self.net.send({"cmd":"save_memory","position":position,
                            "index":idx,"label":label,"freq":freq})
 
+        def _rename():
+            """Edit just the label of the selected slot — its stored
+            frequency is left exactly as it was (does NOT pull in the
+            current actual frequency)."""
+            idx=self._mem_dialog_selected
+            if idx is None:
+                messagebox.showinfo("Memory","Select a memory slot first.",parent=top)
+                return
+            entry=self._mem_dialog_data[idx] if idx<len(self._mem_dialog_data) else {"label":"","freq":0.0}
+            label=label_var.get()[:10]
+            freq=entry.get("freq",0) or 0
+            _commit(idx,label,freq)
+
+        def _save():
+            """Save the row's *current actual frequency*, plus whatever
+            label is in the box, into the selected slot."""
+            idx=self._mem_dialog_selected
+            if idx is None:
+                messagebox.showinfo("Memory","Select a memory slot first.",parent=top)
+                return
+            key=self._memory_state_key_for(position)
+            freq=self.state.get(key,0) or 0
+            label=label_var.get()[:10]
+            _commit(idx,label,freq)
+
+        lbl_ent.bind("<Return>",lambda e:_rename())
+
         bpad=max(6,int(round(8*sc)))
         tk.Button(btn_fr,text="Load",command=_load,
                   bg=C["btn_grn"],fg=C["btn_grn_fg"],
                   font=_gui_font(fs,"bold"),relief="flat",bd=1,
                   padx=bpad).pack(side="left",fill="x",expand=True,padx=(0,2))
+        tk.Button(btn_fr,text="Rename",command=_rename,
+                  bg=C["btn_gray"],fg=C["text"],
+                  font=_gui_font(fs,"bold"),relief="flat",bd=1,
+                  padx=bpad).pack(side="left",fill="x",expand=True,padx=2)
         tk.Button(btn_fr,text="Save",command=_save,
                   bg=C["btn_sel"],fg=C["btn_sel_fg"],
                   font=_gui_font(fs,"bold"),relief="flat",bd=1,
@@ -4139,7 +4175,15 @@ class App:
             else:
                 data.append({"label":"","freq":0.0})
         self._mem_dialog_data=data
+        first_load=(self._mem_dialog_selected is None)
         self._refresh_memory_listbox()
+        if first_load:
+            lb=getattr(self,'_mem_dialog_listbox',None)
+            lvar=getattr(self,'_mem_dialog_label_var',None)
+            if lb is not None and lvar is not None and lb.size()>0:
+                self._mem_dialog_selected=0
+                lb.selection_clear(0,"end"); lb.selection_set(0)
+                lvar.set(data[0].get("label",""))
 
     # ── SPLIT toggle (between LO A and LO B) ────────────────────────────────
     def _toggle_split(self):
