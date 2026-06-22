@@ -2200,8 +2200,6 @@ def _toolbar(parent,rbw="23.4 Hz",avg="2",bg=None,sc=1.0,app=None,box_id="rf",in
                  font=_gui_font(max(5,int(round(7*sc))))).pack(side="left")
 
     # ── Mutually exclusive Waterfall / Spectrum toggle buttons ──────────────
-    # BUG-12 fix: seed from caller-supplied initial_view (which comes from
-    # app.state) so the toggle survives reconnects and scale-change rebuilds.
     _state_key = f"toolbar_view_{box_id}"
     _wf_state = {"sel": initial_view if initial_view in ("Waterfall","Spectrum") else "Waterfall"}
 
@@ -2210,8 +2208,6 @@ def _toolbar(parent,rbw="23.4 Hz",avg="2",bg=None,sc=1.0,app=None,box_id="rf",in
             _wf_state["sel"] = name
             _update_toggle_colors()
             if app:
-                # BUG-12 fix: write selection back into app.state so it
-                # persists across rebuilds and is visible to _refresh().
                 app.state[_state_key] = name
                 # Distinct commands per box and per button
                 app.net.send({"cmd": "ui_display",
@@ -2242,8 +2238,6 @@ def _toolbar(parent,rbw="23.4 Hz",avg="2",bg=None,sc=1.0,app=None,box_id="rf",in
     # Apply initial colours from seeded state
     _update_toggle_colors()
 
-    # BUG-12 fix: expose an updater so _refresh() can push server-side state
-    # changes into the toggle without knowing about _wf_state internals.
     def _set_view(name):
         if name in ("Waterfall", "Spectrum"):
             _wf_state["sel"] = name
@@ -2522,8 +2516,6 @@ class App:
             rf_usr_btn_state=[False]*11,
             user_mod_labels=[""]*10,  # up to 10 user-defined modulation buttons
             user_mod_types=["normal"]*10,
-            # BUG-12 fix: persist toolbar toggle selection so it survives
-            # reconnects and scale-change rebuilds.
             toolbar_view_rf="Waterfall",
             toolbar_view_af="Waterfall",
             # Spectrum display controls (G90 SCALE and AVE).
@@ -2768,7 +2760,7 @@ class App:
         # the same static size no matter how many of the 10 slots currently
         # have a label. pack(fill="x", expand=True) was used previously, but
         # that resizes every visible button each time a sibling slot is
-        # shown or hidden — exactly the bug being fixed here.
+        # shown or hidden.
         fs_mode=max(6,int(round(8*sc)))
         self.mode_btns={}
         _px_mode=max(1,int(round(1*sc)))
@@ -3060,7 +3052,7 @@ class App:
                  highlightthickness=0,showvalue=0,length=sl_len,
                  command=lambda v:self.net.send({"cmd":"set_agc_thresh","value":float(v)})
                  ).grid(row=1,column=1,sticky="ew",padx=max(2,int(round(4*sc))))
-        # BUG-11 fix: allow the slider column to grow with the panel width
+
         sv.grid_columnconfigure(1, weight=1)
 
 
@@ -3830,8 +3822,6 @@ class App:
             else:
                 b.pack_forget()
         # Toolbar toggle buttons (Waterfall / Spectrum)
-        # BUG-12 fix: push the persisted view selection into both toolbars so
-        # they stay correct after reconnects and server-side view changes.
         for _tb_attr, _tb_key, _box in (
                 ("_toolbar1","toolbar_view_rf","rf"),
                 ("_toolbar2","toolbar_view_af","af")):

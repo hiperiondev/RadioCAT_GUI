@@ -1815,7 +1815,7 @@ class RadioState:
             )
             smoothed = self._smoothed_signal_db
             # Re-read squelch and mute under the same lock so squelch_open is
-            # consistent with the smoothed value we just wrote (BUG-10 fix).
+            # consistent with the smoothed value we just wrote.
             squelch = self.squelch
             mute = self.mute
         smeter_dbm = max(-135.0, min(10.0, smoothed))
@@ -2134,7 +2134,7 @@ class ClientHandler(threading.Thread):
         text_period = 3.0
         next_text_tick = time.monotonic() + text_period
         while self.alive:
-            # BUG-11 fix: check running with a single lock-protected read
+            # Check running with a single lock-protected read
             # before calling as_dict() (which acquires the lock and copies all
             # state) to avoid redundant work while the radio is stopped.
             with self.radio.lock:
