@@ -2797,13 +2797,14 @@ class App:
         # resize, scale change, etc.) so it never drifts off-centre.
         self._ptt_canvas.bind(
             "<Configure>",
-            lambda _e: _draw_ptt_btn(bool(self.state.get("ptt", False)))
+            lambda _e: _draw_ptt_btn(bool(self.state.get("ptt", False)),
+                                     self._ptt_band_ok())
         )
 
         def _ptt_click(_evt=None):
-            if not getattr(self, "_ptt_enabled", False):
-                # Audio channel hasn't bound a local UDP port yet — ignore the
-                # click rather than send a bogus {"udp_port": None} to the server.
+            # Block the click if the RTP socket isn't ready, or if --restrict-band
+            # is active and the current active LO frequency is outside all allowed bands.
+            if not self._ptt_band_ok():
                 return
             new_state = not self.state.get("ptt", False)
             self.state["ptt"] = new_state
@@ -3939,6 +3940,27 @@ class App:
         self.root.after(320, self._apply_top_heights)
 
     # ── control logic ──────────────────────────────────────────────────────────
+    def _ptt_band_ok(self):
+        """Return True if PTT should be enabled.
+
+        Combines the RTP-socket-bound guard (_ptt_enabled) with an optional
+        frequency/band check when --restrict-band is active: if the active LO
+        frequency is not inside any of the currently allowed amateur bands, PTT
+        is blocked.  This catches the case where the operator switches to an
+        antenna whose allowed_bands no longer covers the current frequency
+        (e.g. a mono-band antenna selected while the rig is on a different band).
+        """
+        if not getattr(self, '_ptt_enabled', False):
+            return False
+        if not getattr(_ARGS, 'restrict_band', False):
+            return True
+        active_lo = self.state.get('lo_active', 'A')
+        active_hz = int(self.state.get('lo_b_freq', 0) if active_lo == 'B'
+                        else self.state.get('lo_freq', 0))
+        allowed = set(self.state.get('allowed_bands') or BAND_RANGES.keys())
+        band = _band_for_freq(active_hz)
+        return band is not None and band in allowed
+
     def _refresh(self):
         # ── Modulation buttons ──────────────────────────────────────────────
         # Show/hide based on whether the server has provided a label for
@@ -4015,9 +4037,10 @@ class App:
                 _tb.set_zoom(self.state.get("zoom", 1))
             if _tb and hasattr(_tb, "set_speed"):
                 _tb.set_speed(self.state.get(f"wf_speed_{_box}", 10))
-        # PTT button
+        # PTT button — pass the combined RTP+band check so the button greys out
+        # whenever --restrict-band is active and the active LO is off-band.
         if hasattr(self, '_draw_ptt_btn'):
-            self._draw_ptt_btn(bool(self.state.get("ptt", False)), self._ptt_enabled)
+            self._draw_ptt_btn(bool(self.state.get("ptt", False)), self._ptt_band_ok())
         # SPLIT toggle / TX-RX labels
         self._refresh_split_ui()
         # Band buttons: repaint allowed/disallowed state whenever _refresh runs
@@ -4269,6 +4292,13 @@ class App:
                     self._refresh_band_highlight()
                 # Update the label next to the Antenna button immediately
                 self._refresh_antenna_label()
+                # With --restrict-band, the new antenna may have narrowed
+                # allowed_bands so the current active LO frequency is no longer
+                # in-band.  Redraw the PTT button immediately so it goes grey
+                # (disabled) without waiting for the next full _refresh() cycle.
+                if hasattr(self, '_draw_ptt_btn'):
+                    self._draw_ptt_btn(bool(self.state.get('ptt', False)),
+                                       self._ptt_band_ok())
                 self.net.send({"cmd": "select_antenna", "index": idx})
 
             for ant in antennas:
@@ -5087,7 +5117,11 @@ class App:
                 # socket is bound, so local_udp_port() will never return None.
                 self._ptt_enabled = True
                 if hasattr(self, '_draw_ptt_btn'):
-                    self._draw_ptt_btn(bool(self.state.get("ptt", False)), True)
+                    # Pass the full band check: even though the RTP socket just
+                    # bound, PTT stays grey if --restrict-band is active and the
+                    # current LO is outside all allowed bands.
+                    self._draw_ptt_btn(bool(self.state.get("ptt", False)),
+                                       self._ptt_band_ok())
                 if hasattr(self, '_ptt_canvas'):
                     self._ptt_canvas.config(cursor="hand2")
             else:
@@ -5212,7 +5246,9 @@ class App:
             if hasattr(self, 'af_wf'):   self.af_wf.set_tx(False)
             if hasattr(self, 'af_spec'): self.af_spec.set_tx(False)
             if hasattr(self, '_draw_ptt_btn'):
-                self._draw_ptt_btn(False, self._ptt_enabled)
+                # Use _ptt_band_ok() so --restrict-band is re-evaluated against
+                # the new device's allowed_bands (just merged into state above).
+                self._draw_ptt_btn(False, self._ptt_band_ok())
             self._sup = True
             try:
                 # Frequency displays

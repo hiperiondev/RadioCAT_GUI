@@ -1,5 +1,5 @@
 {
-  "center_freq": 218495000.0,
+  "center_freq": 18100000.0,
   "tune_freq": 18505000.0,
   "lo_b_freq": 90000000.0,
   "lo_active": "A",
@@ -54,5 +54,5 @@
   "spec_ref_af": 0.0,
   "spec_ave_af": 1,
   "sample_rate": 333333.0,
-  "antenna_index": 1
+  "antenna_index": 3
 }
