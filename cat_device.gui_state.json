@@ -4,7 +4,7 @@
   "lo_b_freq": 8495000.0,
   "lo_active": "A",
   "zoom": 1,
-  "mode": "AM",
+  "mode": "APRS",
   "filter_lo": 100,
   "filter_hi": 2800,
   "agc": "Med",

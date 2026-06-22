@@ -2785,7 +2785,7 @@ class App:
         freq_box.pack(fill="x",padx=max(2,int(round(4*sc))),pady=max(1,int(round(1*sc))))
 
         # Track which LO is active (A or B) and last band selected per LO
-        self._lo_active=tk.StringVar(value="A")
+        self._lo_active=tk.StringVar(value=self.state.get("lo_active","A"))
         self._lo_band={"A":None,"B":None}   # last selected band name per LO
 
         def _select_lo(which):
@@ -3052,6 +3052,22 @@ class App:
                  highlightthickness=0,showvalue=0,length=sl_len,
                  command=lambda v:self.net.send({"cmd":"set_agc_thresh","value":float(v)})
                  ).grid(row=1,column=1,sticky="ew",padx=max(2,int(round(4*sc))))
+        tk.Label(sv,text="RF Gain",bg=C["panel_bg"],fg=C["text_dim"],
+                 font=_gui_font(fs_sl)).grid(row=2,column=0,sticky="w")
+        self.rfg_var=tk.DoubleVar(value=self.state.get("rf_gain",20.0))
+        tk.Scale(sv,from_=0,to=60,orient="horizontal",variable=self.rfg_var,
+                 bg=C["panel_bg"],fg=C["text"],troughcolor=C["btn_gray"],
+                 highlightthickness=0,showvalue=0,length=sl_len,
+                 command=lambda v:self.net.send({"cmd":"set_rf_gain","value":float(v)})
+                 ).grid(row=2,column=1,sticky="ew",padx=max(2,int(round(4*sc))))
+        tk.Label(sv,text="Squelch",bg=C["panel_bg"],fg=C["text_dim"],
+                 font=_gui_font(fs_sl)).grid(row=3,column=0,sticky="w")
+        self.sql_var=tk.DoubleVar(value=self.state.get("squelch",-130.0))
+        tk.Scale(sv,from_=-140,to=0,orient="horizontal",variable=self.sql_var,
+                 bg=C["panel_bg"],fg=C["text"],troughcolor=C["btn_gray"],
+                 highlightthickness=0,showvalue=0,length=sl_len,
+                 command=lambda v:self.net.send({"cmd":"set_squelch","value":float(v)})
+                 ).grid(row=3,column=1,sticky="ew",padx=max(2,int(round(4*sc))))
 
         sv.grid_columnconfigure(1, weight=1)
 
@@ -4918,7 +4934,37 @@ class App:
             # state overwrite it.  Any other field is safe to merge normally.
             incoming.pop("ptt", None)
             _old_sr = self.state.get("sample_rate")
-            self.state.update(incoming); self._refresh()
+            self.state.update(incoming)
+            # Sync all widget values from the newly merged state, suppressing
+            # round-trip sends (same approach as reload_state).  This ensures
+            # that after a hello/resp:ok the frequency displays, sliders, and
+            # LO selector all reflect the server's persisted values immediately,
+            # without waiting for a subsequent reload_state message.
+            self._sup = True
+            try:
+                if hasattr(self, 'lo_disp'):
+                    self.lo_disp.set_value(
+                        int(self.state.get("lo_freq", 0)), notify=False)
+                if hasattr(self, 'lo_b_disp'):
+                    self.lo_b_disp.set_value(
+                        int(self.state.get("lo_b_freq", 0)), notify=False)
+                if hasattr(self, 'tune_disp'):
+                    self.tune_disp.set_value(
+                        int(self.state.get("tune_freq", 0)), notify=False)
+                if hasattr(self, 'vol_var'):
+                    self.vol_var.set(self.state.get("volume", 80.0))
+                if hasattr(self, 'agct_var'):
+                    self.agct_var.set(self.state.get("agc_thresh", -100.0))
+                if hasattr(self, 'rfg_var'):
+                    self.rfg_var.set(self.state.get("rf_gain", 20.0))
+                if hasattr(self, 'sql_var'):
+                    self.sql_var.set(self.state.get("squelch", -130.0))
+                if hasattr(self, '_lo_active'):
+                    self._lo_active.set(self.state.get("lo_active", "A"))
+                    self._refresh_lo_btns()
+            finally:
+                self._sup = False
+            self._refresh()
             # If the server reports a new sample_rate (e.g. after set_sample_rate
             # or a device switch whose reload_state hasn't arrived yet), immediately
             # re-centre the RF spectrum/waterfall so its frequency span reflects
