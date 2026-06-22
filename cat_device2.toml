@@ -108,33 +108,35 @@ mode_11 = "normal"
 # (e.g. "160m,80m,40m,20m,10m"). Omit or set to all 11 bands to allow
 # everything. Disallowed bands are greyed out in the GUI; in restrict-band
 # mode, frequencies within disallowed bands are also blocked.
-# antenna_label_N (N=1..10): human-readable label for antenna port N shown
-# in the GUI Antenna selector. Empty = slot unused/hidden. The GUI sends
-# the 1-based index of the chosen antenna back to the server.
-# antenna_allowed_bands_N (N=1..10): comma-separated bands allowed when
-# antenna N is selected (e.g. "160m,80m,40m,20m,10m"). Empty string means
-# inherit the device-level allowed_bands restriction. Valid names:
-# 160m 80m 60m 40m 30m 20m 17m 15m 12m 10m 6m.
 sample_rate = 192000
 sample_rates = "192000,250000,500000,1000000,2000000"
 allowed_bands = "80m,60m,40m,30m,20m,10m,6m"
-antenna_label_1 = "Dipole 40m"
-antenna_label_2 = "Yagi 20m,10m"
-antenna_label_3 = "Moxon 17m,15m"
-antenna_label_4 = "Magic all bands"
-antenna_label_5 = ""
-antenna_label_6 = ""
-antenna_label_7 = ""
-antenna_label_8 = ""
-antenna_label_9 = ""
-antenna_label_10 = ""
-antenna_allowed_bands_1 = "40m"
-antenna_allowed_bands_2 = "20m,10m"
-antenna_allowed_bands_3 = "17m,15m"
-antenna_allowed_bands_4 = ""
-antenna_allowed_bands_5 = ""
-antenna_allowed_bands_6 = ""
-antenna_allowed_bands_7 = ""
-antenna_allowed_bands_8 = ""
-antenna_allowed_bands_9 = ""
-antenna_allowed_bands_10 = ""
+
+[antenna]
+# label_N (N=1..10): human-readable label for antenna port N shown
+# in the GUI Antenna selector. Empty = slot unused/hidden. The GUI sends
+# the 1-based index of the chosen antenna back to the server.
+# allowed_bands_N (N=1..10): comma-separated bands allowed when
+# antenna N is selected (e.g. "160m,80m,40m,20m,10m"). Empty string means
+# inherit the device-level allowed_bands restriction. Valid names:
+# 160m 80m 60m 40m 30m 20m 17m 15m 12m 10m 6m.
+label_1 = "Dipole 40m"
+label_2 = "Yagi 20m,10m"
+label_3 = "Moxon 17m,15m"
+label_4 = "Magic all bands"
+label_5 = ""
+label_6 = ""
+label_7 = ""
+label_8 = ""
+label_9 = ""
+label_10 = ""
+allowed_bands_1 = "40m"
+allowed_bands_2 = "20m,10m"
+allowed_bands_3 = "17m,15m"
+allowed_bands_4 = ""
+allowed_bands_5 = ""
+allowed_bands_6 = ""
+allowed_bands_7 = ""
+allowed_bands_8 = ""
+allowed_bands_9 = ""
+allowed_bands_10 = ""

@@ -75,16 +75,22 @@ their default value) on every later run:
     any buttons itself.
 
   * cat_device.toml (--device-config PATH)  -- [user_buttons], [user_mods],
-    [rf_usr_btns], [sdr]. This is one device profile's GUI configuration:
+    [rf_usr_btns], [sdr], [antenna]. This is one device profile's GUI configuration:
     its user-defined buttons, user-defined modulation buttons, RF user
-    buttons, and selectable SDR sample rates. No [devices] section here.
+    buttons, selectable SDR sample rates, and antenna port definitions. No [devices] section here.
 
     [sdr] holds sample_rate (the rate applied when this profile is loaded)
     and sample_rates (a comma-separated list of the rates selectable from
-    the GUI's Sample Rate dialog). Pressing "Sample Rate" in the GUI sends
+    the GUI's Sample Rate dialog) and allowed_bands (the device-level band
+    restriction). Pressing "Sample Rate" in the GUI sends
     {"cmd": "get_sample_rates"}; the server replies with the list defined
     here. Choosing one sends {"cmd": "set_sample_rate", "value": N}, which
     is only accepted if N is one of the configured sample_rates.
+
+    [antenna] holds label_N and allowed_bands_N (N=1..10) for the antenna
+    port selector shown in the GUI. Each antenna can carry its own band
+    restriction; an empty allowed_bands_N inherits the device-level
+    [sdr].allowed_bands restriction.
 
     Each entry in cat_server.toml's [devices] section (config_N) names a
     path to a *cat_device.toml-like file* for that profile -- i.e. a file
@@ -271,15 +277,17 @@ _DEVICE_CONFIG_DEFAULTS = {
         # Valid names: 160m, 80m, 60m, 40m, 30m, 20m, 17m, 15m, 12m, 10m, 6m.
         # All bands are allowed by default (empty string = all).
         "allowed_bands": "160m,80m,60m,40m,30m,20m,17m,15m,12m,10m,6m",
+    },
+    "antenna": {
         # Antenna port labels (up to 10). Empty label = slot unused/hidden.
-        # antenna_label_N: human-readable name shown in the GUI antenna list.
+        # label_N: human-readable name shown in the GUI antenna list.
         # The GUI returns the 1-based index of the chosen slot to the server.
-        **{f"antenna_label_{n}": "" for n in range(1, 11)},
-        # antenna_allowed_bands_N: comma-separated list of amateur bands allowed
+        **{f"label_{n}": "" for n in range(1, 11)},
+        # allowed_bands_N: comma-separated list of amateur bands allowed
         # when antenna N is selected (e.g. "160m,80m,40m,20m,10m"). Empty string
         # means the antenna inherits the device-level allowed_bands restriction.
         # Valid names: 160m, 80m, 60m, 40m, 30m, 20m, 17m, 15m, 12m, 10m, 6m.
-        **{f"antenna_allowed_bands_{n}": "" for n in range(1, 11)},
+        **{f"allowed_bands_{n}": "" for n in range(1, 11)},
     },
 }
 
@@ -402,9 +410,10 @@ _DEVICE_CONFIG_KEY_ORDER = {
     "user_buttons": [k for n in range(1, 15) for k in (f"label_{n}", f"type_{n}")],
     "user_mods": [k for n in range(1, 11) for k in (f"label_{n}", f"type_{n}")],
     "rf_usr_btns": [k for n in range(1, 12) for k in (f"label_{n}", f"mode_{n}")],
-    "sdr": ["sample_rate", "sample_rates", "allowed_bands"] + [f"antenna_label_{n}" for n in range(1, 11)] + [f"antenna_allowed_bands_{n}" for n in range(1, 11)],
+    "sdr": ["sample_rate", "sample_rates", "allowed_bands"],
+    "antenna": [f"label_{n}" for n in range(1, 11)] + [f"allowed_bands_{n}" for n in range(1, 11)],
 }
-_DEVICE_CONFIG_SECTION_ORDER = ["user_buttons", "user_mods", "rf_usr_btns", "sdr"]
+_DEVICE_CONFIG_SECTION_ORDER = ["user_buttons", "user_mods", "rf_usr_btns", "sdr", "antenna"]
 _DEVICE_CONFIG_HEADER = (
     "# CAT Device configuration\n"
     "# Describes ONE device profile's GUI buttons: user-defined buttons,\n"
@@ -444,11 +453,12 @@ _DEVICE_CONFIG_SECTION_COMMENTS = {
         '# allowed_bands: comma-separated list of amateur bands this device permits\n'
         '# (e.g. "160m,80m,40m,20m,10m"). Omit or set to all 11 bands to allow\n'
         '# everything. Disallowed bands are greyed out in the GUI; in restrict-band\n'
-        '# mode, frequencies within disallowed bands are also blocked.\n'
-        '# antenna_label_N (N=1..10): human-readable label for antenna port N shown\n'
+        '# mode, frequencies within disallowed bands are also blocked.',
+    "antenna":
+        '# label_N (N=1..10): human-readable label for antenna port N shown\n'
         '# in the GUI Antenna selector. Empty = slot unused/hidden. The GUI sends\n'
         '# the 1-based index of the chosen antenna back to the server.\n'
-        '# antenna_allowed_bands_N (N=1..10): comma-separated bands allowed when\n'
+        '# allowed_bands_N (N=1..10): comma-separated bands allowed when\n'
         '# antenna N is selected (e.g. "160m,80m,40m,20m,10m"). Empty string means\n'
         '# inherit the device-level allowed_bands restriction. Valid names:\n'
         '# 160m 80m 60m 40m 30m 20m 17m 15m 12m 10m 6m.',
@@ -574,7 +584,7 @@ def _ensure_config(path, spec, kind="config"):
         print(f"[config] NOTE: {path} has section(s) not used by this file "
               f"({kind}): {', '.join(_extra)} — they are ignored here. "
               f"[server]/[audio]/[devices] belong in cat_server.toml; "
-              f"[user_buttons]/[user_mods]/[rf_usr_btns]/[sdr] belong in "
+              f"[user_buttons]/[user_mods]/[rf_usr_btns]/[sdr]/[antenna] belong in "
               f"cat_device.toml (or your --device-config / [devices].config_N "
               f"file).")
     merged, added = _merge_config_with_defaults(_cfg, spec)
@@ -1566,6 +1576,7 @@ class RadioState:
                         _umods = dcfg.get("user_mods",    {})
                         _rufb  = dcfg.get("rf_usr_btns",  {})
                         _sdr   = dcfg.get("sdr",          {})
+                        _ant   = dcfg.get("antenna",      {})
                         self.user_buttons = [
                             {
                                 "label": _ubtn.get(f"label_{n}", ""),
@@ -1630,16 +1641,16 @@ class RadioState:
                         # Empty / unrecognised → permit everything
                         self.allowed_bands = _ab_parsed if _ab_parsed else _all_bands
 
-                        # Antenna port labels (up to 10) from [sdr].antenna_label_N.
+                        # Antenna port labels (up to 10) from [antenna].label_N.
                         self.antenna_labels = [
-                            str(_sdr.get(f"antenna_label_{n}", ""))
+                            str(_ant.get(f"label_{n}", ""))
                             for n in range(1, 11)
                         ]
-                        # Per-antenna band restrictions from [sdr].antenna_allowed_bands_N.
+                        # Per-antenna band restrictions from [antenna].allowed_bands_N.
                         # Empty / unrecognised → frozenset() meaning "inherit device level".
                         self.antenna_allowed_bands = []
                         for _an in range(1, 11):
-                            _aab_raw = str(_sdr.get(f"antenna_allowed_bands_{_an}", "")).strip()
+                            _aab_raw = str(_ant.get(f"allowed_bands_{_an}", "")).strip()
                             _aab_set = frozenset(
                                 b.strip() for b in _aab_raw.split(",")
                                 if b.strip() in _all_bands
@@ -1675,7 +1686,7 @@ class RadioState:
                             "current": self.sample_rate}
             elif c == "get_antennas":
                 # GUI's "Antenna" button was pressed. Reply with the antenna
-                # list defined in this device's [sdr].antenna_label_N keys
+                # list defined in this device's [antenna].label_N keys
                 # plus the currently selected 1-based index (0 = none).
                 # Each entry also carries its per-antenna allowed_bands list
                 # (sorted; empty list = inherit device-level restriction).
@@ -2296,6 +2307,7 @@ def _parse_args():
     _umods = _dcfg.get("user_mods",    {})
     _rufb  = _dcfg.get("rf_usr_btns",  {})
     _sdr   = _dcfg.get("sdr",          {})
+    _ant   = _dcfg.get("antenna",      {})
     _DD    = _DEVICE_CONFIG_DEFAULTS
 
     _def_host       = _srv.get("host",       _D["server"]["host"])
@@ -2466,9 +2478,10 @@ def _parse_args():
     # TOML-only, from cat_device.toml's [sdr] section).
     _raw.sdr_sample_rate  = _sdr.get("sample_rate",  _DD["sdr"]["sample_rate"])
     _raw.sdr_sample_rates = _sdr.get("sample_rates", _DD["sdr"]["sample_rates"])
-    # Antenna port labels for the default device profile (TOML-only).
+    # Antenna port labels for the default device profile (TOML-only,
+    # from cat_device.toml's [antenna] section).
     _raw.antenna_labels = [
-        str(_sdr.get(f"antenna_label_{n}", _DD["sdr"][f"antenna_label_{n}"]))
+        str(_ant.get(f"label_{n}", _DD["antenna"][f"label_{n}"]))
         for n in range(1, 11)
     ]
 
