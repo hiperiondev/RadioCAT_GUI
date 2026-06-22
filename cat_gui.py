@@ -2823,6 +2823,21 @@ class App:
 
         self._ptt_canvas.bind("<Button-1>", _ptt_click)
 
+        # ── Antenna selector button (above modulation buttons) ──────────────────
+        ant_row = tk.Frame(lp, bg=C["panel_bg"])
+        ant_row.pack(fill="x", padx=max(2, int(round(4*sc))),
+                     pady=(0, max(1, int(round(1*sc)))))
+        fs_ant = max(6, int(round(8*sc)))
+        self._ant_btn = _fbtn(ant_row, "Antenna", sc=sc,
+                              bg=C["btn_gray"], fg=C["btn_sel_fg"],
+                              command=self._request_antenna_list)
+        self._ant_btn.pack(side="left", padx=(0, max(1, int(round(2*sc)))))
+        self._ant_lbl = tk.Label(ant_row, text="—", bg=C["panel_bg"],
+                                 fg=C["text_dim"], font=_gui_font(fs_ant),
+                                 anchor="w")
+        self._ant_lbl.pack(side="left", fill="x", expand=True,
+                           padx=(max(2, int(round(2*sc))), 0))
+
         # ── Mode buttons + FreqMgr ────────────────────────────────────────────
         mode_row=tk.Frame(lp,bg=C["panel_bg"])
         mode_row.pack(fill="x",padx=max(2,int(round(4*sc))),
@@ -2855,21 +2870,6 @@ class App:
             # Slot's column is reserved even while hidden, so the fixed size
             # never shifts — _refresh shows/hides it with grid()/grid_remove().
             self.mode_btns[_umidx]=_umb
-
-        # ── Antenna selector button (bottom of Signal/RST column, near mods) ──
-        ant_row = tk.Frame(lp, bg=C["panel_bg"])
-        ant_row.pack(fill="x", padx=max(2, int(round(4*sc))),
-                     pady=(0, max(1, int(round(1*sc)))))
-        fs_ant = max(6, int(round(8*sc)))
-        self._ant_btn = _fbtn(ant_row, "Antenna", sc=sc,
-                              bg=C["btn_gray"], fg=C["btn_sel_fg"],
-                              command=self._request_antenna_list)
-        self._ant_btn.pack(side="left", padx=(0, max(1, int(round(2*sc)))))
-        self._ant_lbl = tk.Label(ant_row, text="—", bg=C["panel_bg"],
-                                 fg=C["text_dim"], font=_gui_font(fs_ant),
-                                 anchor="w")
-        self._ant_lbl.pack(side="left", fill="x", expand=True,
-                           padx=(max(2, int(round(2*sc))), 0))
 
         # ── LO + Tune freq displays ───────────────────────────────────────────
         freq_box=tk.Frame(lp,bg=C["spec_bg"],bd=0)

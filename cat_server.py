@@ -1067,6 +1067,9 @@ _GUI_STATE_KEYS = (
     "spec_ref_af", "spec_ave_af",
     # Active SDR sample rate (Hz) — see comment above.
     "sample_rate",
+    # Antenna port selection — persisted per-device so the operator's
+    # chosen antenna is restored on reconnect or device switch.
+    "antenna_index",
 )
 
 
@@ -1809,6 +1812,7 @@ class RadioState:
             "set_afc", "set_anf", "set_notch", "set_mute",
             "set_zoom", "user_button", "rf_usr_button",
             "set_spec_ref", "set_spec_ave", "set_sample_rate",
+            "select_antenna",
         }
         if c in _STATE_MUTATING_CMDS:
             with self.lock:
