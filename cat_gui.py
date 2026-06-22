@@ -4108,6 +4108,7 @@ class App:
 
             def _select(idx):
                 top.destroy()
+                self._expecting_persist_log = True
                 self.net.send({"cmd": "select_device", "index": idx})
 
             for dev in devices:
@@ -4553,6 +4554,7 @@ class App:
         # the server is the source of truth; we read from it, not the reverse.
         # PTT and SPLIT resets are sent explicitly because they are transient
         # and the server must clear any stale TX state from a previous session.
+        self._expecting_persist_log = True
         def _send_hello_burst():
             self.net.send({"cmd": "hello"})
             self.net.send({"cmd": "set_ptt",   "enabled": False})
@@ -5354,7 +5356,11 @@ class App:
             incoming = msg["state"]
             # Print the persistent values as retrieved from the server,
             # before any local mutation (e.g. the ptt pop below) touches them.
-            if _ARGS and _ARGS.debug:
+            # Only log on startup or device change (when _expecting_persist_log
+            # is set); skip for every other resp:ok that carries state so the
+            # debug output is not flooded by normal GUI interactions.
+            if _ARGS and _ARGS.debug and getattr(self, '_expecting_persist_log', False):
+                self._expecting_persist_log = False
                 print("[state] Retrieved persistent values from server:")
                 for _k in sorted(incoming.keys()):
                     print(f"[state]   {_k} = {incoming[_k]!r}")

@@ -2234,7 +2234,17 @@ class ClientHandler(threading.Thread):
                         if udp_port and self.audio_channel:
                             gui_ip = self.addr[0]
                             self.audio_channel.set_client_addr((gui_ip, int(udp_port)))
-                    self.send_json({"resp": "ok", "state": self.radio.as_dict()})
+                    # Full state is only needed on startup (hello) and device
+                    # change (select_device) — those are the two moments the
+                    # GUI must resync every widget from persisted values.
+                    # Every other resp:ok carries no state payload: the GUI
+                    # already owns those values (it just sent them), and the
+                    # streaming "data" frames keep everything else current.
+                    _STATE_CMDS = {"hello", "select_device"}
+                    if cmd.get("cmd") in _STATE_CMDS:
+                        self.send_json({"resp": "ok", "state": self.radio.as_dict()})
+                    else:
+                        self.send_json({"resp": "ok"})
                     if outgoing:
                         self.send_json(outgoing)
         except OSError:
