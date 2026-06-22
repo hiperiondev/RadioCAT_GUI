@@ -301,6 +301,10 @@ def _parse_args():
                     help='Start in full-screen mode')
     ap.add_argument('--resolution', metavar='WxH', default=argparse.SUPPRESS,
                     help='Initial window size in pixels, e.g. 1280x720')
+    ap.add_argument('--aspect-ratio', metavar='W:H', default=argparse.SUPPRESS,
+                    help='Lock the window to a given aspect ratio, e.g. 16:9, 4:3, 1:1. '
+                         'The window width is kept and the height is recalculated. '
+                         'Ignored when --full-screen is also set.')
     ap.add_argument('--disable-scale', action='store_true', default=argparse.SUPPRESS,
                     help='Hide the HiDPI scale +/- controls and scale level number '
                          '(requires --scale to also be specified on the command line)')
@@ -355,6 +359,20 @@ def _parse_args():
             ap.error(f'--resolution must be WIDTHxHEIGHT in pixels, e.g. 1280x720 (got: {_res!r})')
     else:
         args.resolution = None
+
+    # --aspect-ratio W:H
+    if hasattr(_raw, 'aspect_ratio'):
+        _ar = _raw.aspect_ratio
+        try:
+            _aw, _ah = _ar.split(':')
+            _aw, _ah = float(_aw), float(_ah)
+            if _aw <= 0 or _ah <= 0:
+                raise ValueError
+            args.aspect_ratio = (_aw, _ah)
+        except (ValueError, AttributeError):
+            ap.error(f'--aspect-ratio must be W:H (e.g. 16:9, 4:3, 1:1) (got: {_ar!r})')
+    else:
+        args.aspect_ratio = None
     args.disable_soundcard_select = _raw.disable_soundcard_select \
                                     if hasattr(_raw, 'disable_soundcard_select') else _def_dsc
     args.audio_list    = _raw.audio_list     # one-shot flag; intentionally not stored in config
@@ -5108,6 +5126,17 @@ def main():
     if _ARGS.resolution and not _ARGS.full_screen:
         _rw, _rh = _ARGS.resolution
         root.geometry(f"{_rw}x{_rh}")
+
+    # Apply --aspect-ratio W:H flag (ignored when --full-screen is also set)
+    if _ARGS.aspect_ratio and not _ARGS.full_screen:
+        _ar_w, _ar_h = _ARGS.aspect_ratio
+        # Let the window settle so winfo_width() reflects any --resolution already applied
+        root.update_idletasks()
+        _cur_w = root.winfo_width()
+        if _cur_w <= 1:          # window not yet mapped; fall back to a sensible default
+            _cur_w = _ARGS.resolution[0] if _ARGS.resolution else 800
+        _new_h = max(1, int(round(_cur_w * _ar_h / _ar_w)))
+        root.geometry(f"{_cur_w}x{_new_h}")
 
     # Triple-Esc toggles fullscreen (3 presses within 1 second)
     _esc_times = []
