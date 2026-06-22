@@ -2056,15 +2056,15 @@ class SMeter(tk.Canvas):
         dbm_box_h = max(14, int(round(18*sc)))
         dbm_box_h2= max(12, int(round(16*sc)))
 
-        # box_x1 mirrors the Signal readout width computed below; shift arc centre
-        # right by half that amount so the semicircle clears the label box.
-        tag_w_pre   = max(38, int(round(52*sc)))
+        # Pre-compute box right edge (same values used again below for drawing).
+        # The arc must live entirely in the horizontal band [box_x1_pre .. w].
+        tag_w_pre     = max(38, int(round(52*sc)))
         dbm_box_w_pre = max(60, int(round(90*sc)))
-        box_x1_pre  = 2 + tag_w_pre + dbm_box_w_pre + 4   # +4 margin
-        cx_offset   = box_x1_pre / 2
-        cx = w/2 + cx_offset/2
+        box_x1_pre    = 2 + tag_w_pre + dbm_box_w_pre + 4   # +4 margin
+        avail_w       = w - box_x1_pre                       # space to the right
+        cx = box_x1_pre + avail_w / 2                        # centre of that space
         cy = h-max(10,int(round(14*sc)))
-        R  = min((w - box_x1_pre)*0.46, cy) - 3
+        R  = min(avail_w * 0.46, cy) - 3
         if R<8: return
         tick_outer=R-2
         tick_major_inner=R-max(6,int(round(10*sc)))
@@ -2129,6 +2129,39 @@ class SMeter(tk.Canvas):
                          (box_y0 + box_y1) // 2,
                          text=dbm_label,
                          fill=C["smeter_grn"],
+                         font=_gui_font(dbm_fs, "bold"),
+                         anchor="w")
+        # RST box — directly below the Signal box
+        import re as _re
+        gap     = max(2, int(round(2*sc)))
+        rst_y0  = box_y1 + gap
+        rst_y1  = rst_y0 + dbm_box_h
+        self.create_rectangle(box_x0, rst_y0, box_x1, rst_y1,
+                               fill="#0a1820", outline=C["sep"])
+        self.create_line(box_x0 + tag_w, rst_y0,
+                         box_x0 + tag_w, rst_y1,
+                         fill=C["sep"], width=1)
+        self.create_text(box_x0 + tag_w // 2,
+                         (rst_y0 + rst_y1) // 2,
+                         text="RST:",
+                         fill=C["text"],
+                         font=_gui_font(tag_fs, "bold"),
+                         anchor="center")
+        _m = _re.match(r"S(\d+)", self.txt)
+        if self._tx_mode:
+            rst_val = "TX"
+            rst_col = C["smeter_red"]
+        elif _m:
+            s_num   = min(9, int(_m.group(1)))
+            rst_val = f"59 / S{s_num}"
+            rst_col = C["smeter_red"] if s_num >= 9 else C["smeter_grn"]
+        else:
+            rst_val = "---"
+            rst_col = C["text"]
+        self.create_text(box_x0 + tag_w + max(3, int(round(4*sc))),
+                         (rst_y0 + rst_y1) // 2,
+                         text=rst_val,
+                         fill=rst_col,
                          font=_gui_font(dbm_fs, "bold"),
                          anchor="w")
         # needle
