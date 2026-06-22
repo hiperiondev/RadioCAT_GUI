@@ -3833,11 +3833,18 @@ class App:
         # chosen dimensions with the scale-derived ideal size.
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
-        if _ARGS.resolution:
+        if _ARGS.resolution or _ARGS.aspect_ratio:
             cur_w = self.root.winfo_width()
             cur_h = self.root.winfo_height()
             new_w = max(min_w, cur_w)
-            new_h = max(min_h, cur_h)
+            if _ARGS.aspect_ratio:
+                # Recalculate height from current width to maintain the ratio,
+                # but never go below the minimum (bottom panel must stay visible).
+                _ar_w, _ar_h = _ARGS.aspect_ratio
+                _ratio_h = max(1, int(round(new_w * _ar_h / _ar_w)))
+                new_h = max(min_h, _ratio_h)
+            else:
+                new_h = max(min_h, cur_h)
         else:
             new_w = max(min_w, min(scaled('win_w', sc), screen_w))
             new_h = max(min_h, min(scaled('win_h', sc), screen_h))
@@ -5127,16 +5134,30 @@ def main():
         _rw, _rh = _ARGS.resolution
         root.geometry(f"{_rw}x{_rh}")
 
-    # Apply --aspect-ratio W:H flag (ignored when --full-screen is also set)
+    # Apply --aspect-ratio W:H flag (ignored when --full-screen is also set).
+    # Applied via after() so the layout (including _sync_bot_height and
+    # _apply_top_heights) has fully settled before the height is recalculated.
+    # This prevents the bottom panel (date/time row) from being clipped.
     if _ARGS.aspect_ratio and not _ARGS.full_screen:
         _ar_w, _ar_h = _ARGS.aspect_ratio
-        # Let the window settle so winfo_width() reflects any --resolution already applied
-        root.update_idletasks()
-        _cur_w = root.winfo_width()
-        if _cur_w <= 1:          # window not yet mapped; fall back to a sensible default
-            _cur_w = _ARGS.resolution[0] if _ARGS.resolution else 800
-        _new_h = max(1, int(round(_cur_w * _ar_h / _ar_w)))
-        root.geometry(f"{_cur_w}x{_new_h}")
+        def _apply_aspect_ratio():
+            root.update_idletasks()
+            _cur_w = root.winfo_width()
+            if _cur_w <= 1:
+                _cur_w = _ARGS.resolution[0] if _ARGS.resolution else 800
+            _new_h = max(1, int(round(_cur_w * _ar_h / _ar_w)))
+            # Clamp to the window's minimum height so the bottom panel is
+            # never pushed off-screen (the min already accounts for the
+            # toolbar + full bottom control area including date/time row).
+            try:
+                _min_h = root.winfo_minheight()
+            except Exception:
+                _min_h = 0
+            _new_h = max(_new_h, _min_h)
+            root.geometry(f"{_cur_w}x{_new_h}")
+        # Fire after the deferred layout passes in App.__init__ / _sync_bot_height
+        # (which schedule themselves at 100–320 ms) have completed.
+        root.after(400, _apply_aspect_ratio)
 
     # Triple-Esc toggles fullscreen (3 presses within 1 second)
     _esc_times = []
