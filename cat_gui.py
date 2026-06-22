@@ -334,6 +334,9 @@ def _parse_args():
                     help='Prevent setting LO A or LO B to a frequency outside the '
                          'currently selected amateur band (frequencies outside all '
                          'standard amateur bands are always blocked).')
+    ap.add_argument('--debug', action='store_true', default=False,
+                    help='Enable debug output (e.g. print persistent state values '
+                         'recovered from the server).')
     _raw = ap.parse_args()
 
     # ── Merge: CLI overrides config; config overrides built-in default ────────
@@ -377,6 +380,7 @@ def _parse_args():
                                     if hasattr(_raw, 'disable_soundcard_select') else _def_dsc
     args.audio_list    = _raw.audio_list     # one-shot flag; intentionally not stored in config
     args.restrict_band = _raw.restrict_band  # --restrict-band: block out-of-band LO changes
+    args.debug         = _raw.debug          # --debug: enable verbose debug output
 
     _cli_host = hasattr(_raw, 'host')
     _cli_port = hasattr(_raw, 'port')
@@ -1451,6 +1455,9 @@ class Net:
         d=(json.dumps(obj)+"\n").encode()
         try:
             sock.sendall(d)           # use captured reference, not self.sock
+            if _ARGS and _ARGS.debug:
+                if obj.get("cmd") != "audio_hello":
+                    print(f"[net tx] {json.dumps(obj)}")
             return True
         except (OSError, socket.timeout):
             self.connected=False
@@ -1480,7 +1487,13 @@ class Net:
                 line,buf=buf.split(b"\n",1)
                 line=line.strip()
                 if not line: continue
-                try: self.app.q.put(json.loads(line.decode()))
+                try:
+                    msg = json.loads(line.decode())
+                    if _ARGS and _ARGS.debug:
+                        _msg_type = msg.get("type")
+                        if _msg_type not in ("data", "af_local"):
+                            print(f"[net rx] {line.decode()}")
+                    self.app.q.put(msg)
                 except (json.JSONDecodeError, UnicodeDecodeError): pass
         # Snapshot the flag *before* clearing it: if disconnect() already set it
         # to False, the user initiated the close intentionally and the GUI should
@@ -5341,9 +5354,10 @@ class App:
             incoming = msg["state"]
             # Print the persistent values as retrieved from the server,
             # before any local mutation (e.g. the ptt pop below) touches them.
-            print("[state] Retrieved persistent values from server:")
-            for _k in sorted(incoming.keys()):
-                print(f"[state]   {_k} = {incoming[_k]!r}")
+            if _ARGS and _ARGS.debug:
+                print("[state] Retrieved persistent values from server:")
+                for _k in sorted(incoming.keys()):
+                    print(f"[state]   {_k} = {incoming[_k]!r}")
             # PTT is owned by the GUI button — never let the server's reflected
             # state overwrite it.  Any other field is safe to merge normally.
             incoming.pop("ptt", None)
