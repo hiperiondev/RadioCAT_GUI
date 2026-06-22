@@ -2892,14 +2892,26 @@ class App:
                     btn.config(bg=C["btn_gray"],fg=C["text_dim"])
 
         def _refresh_band_highlight():
-            """Light up the band button that was last used for the current LO."""
+            """Light up the band button that was last used for the current LO.
+            Bands not in state['allowed_bands'] are shown disabled/greyed-out.
+            """
             active=self._lo_active.get()
             cur=self._lo_band[active]
+            allowed=set(self.state.get("allowed_bands") or BAND_RANGES.keys())
             for bname,_bw in self._band_btns.items():
-                if bname==cur:
-                    self._band_btns[bname].config(bg=C["btn_sel"],fg=C["btn_sel_fg"])
+                if bname not in allowed:
+                    # Disallowed by device config — greyed-out and non-clickable
+                    self._band_btns[bname].config(
+                        state="disabled",
+                        bg=C["panel_mid"],fg=C["text_dim"])
+                elif bname==cur:
+                    self._band_btns[bname].config(
+                        state="normal",
+                        bg=C["btn_sel"],fg=C["btn_sel_fg"])
                 else:
-                    self._band_btns[bname].config(bg=C["btn_gray"],fg=C["btn_sel_fg"])
+                    self._band_btns[bname].config(
+                        state="normal",
+                        bg=C["btn_gray"],fg=C["btn_sel_fg"])
 
         # Expose refresh helpers so _change_scale can call them after a rebuild
         # without having to re-enter _build_left's scope.
@@ -3002,26 +3014,34 @@ class App:
                 self.set_frequency(bfreq)
 
         def _freq_allowed(hz, lo_which):
-            """Return True if hz is allowed for lo_which under --restrict-band.
+            """Return True if hz is allowed for lo_which under --restrict-band
+            and the device's allowed_bands list.
 
-            Without --restrict-band: always True.
+            Without --restrict-band: always True (allowed_bands only disables
+            buttons; it does not block frequency entry in non-restrict mode).
             With --restrict-band:
-              • if the LO has a band selected and hz is within that band: True.
-              • if the LO has no band selected and hz is within *any* standard
-                amateur band: True (user is free-tuning within a valid band).
-              • if hz is outside all amateur bands: False.
-              • if a band is selected and hz is outside that band: False.
+              • hz must fall inside a band that is in state['allowed_bands'].
+              • if the LO has a band selected, hz must also be within that band.
+              • if the LO has no band selected, any allowed-band frequency is ok.
+              • hz outside all allowed bands: False.
             """
             if not getattr(_ARGS, 'restrict_band', False):
                 return True
+            allowed = set(self.state.get("allowed_bands") or BAND_RANGES.keys())
             detected = _band_for_freq(hz)
+            # Block immediately if the frequency is not inside any allowed band
+            if detected not in allowed:
+                return False
             selected = self._lo_band.get(lo_which)
             if selected is not None:
+                if selected not in allowed:
+                    # Currently selected band is itself disallowed — reject
+                    return False
                 # A band is locked: only allow frequencies inside that band
                 lo_edge, hi_edge = BAND_RANGES[selected]
                 return lo_edge <= hz <= hi_edge
             else:
-                # No band locked: allow any standard amateur band frequency
+                # No band locked: any allowed standard amateur band frequency is ok
                 return detected is not None
 
         # Expose to App methods that need it (on_freq_changed / on_lo_b_changed)
@@ -3984,6 +4004,10 @@ class App:
             self._draw_ptt_btn(bool(self.state.get("ptt", False)), self._ptt_enabled)
         # SPLIT toggle / TX-RX labels
         self._refresh_split_ui()
+        # Band buttons: repaint allowed/disallowed state whenever _refresh runs
+        # (covers device-switch state merges as well as initial build).
+        if hasattr(self, '_refresh_band_highlight'):
+            self._refresh_band_highlight()
 
 
     # ── Device selection dialog (populated from server) ───────────────────────

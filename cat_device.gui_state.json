@@ -1,5 +1,5 @@
 {
-  "center_freq": 7100000.0,
+  "center_freq": 14195000.0,
   "tune_freq": 28504000.0,
   "lo_b_freq": 21025000.0,
   "lo_active": "A",

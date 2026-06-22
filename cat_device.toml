@@ -104,5 +104,10 @@ mode_11 = "normal"
 # An active --iq_wav recording always overrides this with its own rate.
 # sample_rates: comma-separated list of sample rates (Hz) the operator can
 # choose from the GUI's "Sample Rate" dialog for this device.
+# allowed_bands: comma-separated list of amateur bands this device permits
+# (e.g. "160m,80m,40m,20m,10m"). Omit or set to all 11 bands to allow
+# everything. Disallowed bands are greyed out in the GUI; in restrict-band
+# mode, frequencies within disallowed bands are also blocked.
 sample_rate = 192000
 sample_rates = "192000,250000,500000,1000000,2000000"
+allowed_bands = "160m,80m,60m,40m,30m,20m,17m,15m,12m,10m"

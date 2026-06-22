@@ -267,6 +267,10 @@ _DEVICE_CONFIG_DEFAULTS = {
         # Comma-separated list of sample rates (Hz) selectable from the
         # GUI's Sample Rate dialog for this device.
         "sample_rates": "192000,250000,500000,1000000,2000000",
+        # Comma-separated list of amateur bands permitted for this device.
+        # Valid names: 160m, 80m, 60m, 40m, 30m, 20m, 17m, 15m, 12m, 10m, 6m.
+        # All bands are allowed by default (empty string = all).
+        "allowed_bands": "160m,80m,60m,40m,30m,20m,17m,15m,12m,10m,6m",
     },
 }
 
@@ -389,7 +393,7 @@ _DEVICE_CONFIG_KEY_ORDER = {
     "user_buttons": [k for n in range(1, 15) for k in (f"label_{n}", f"type_{n}")],
     "user_mods": [k for n in range(1, 11) for k in (f"label_{n}", f"type_{n}")],
     "rf_usr_btns": [k for n in range(1, 12) for k in (f"label_{n}", f"mode_{n}")],
-    "sdr": ["sample_rate", "sample_rates"],
+    "sdr": ["sample_rate", "sample_rates", "allowed_bands"],
 }
 _DEVICE_CONFIG_SECTION_ORDER = ["user_buttons", "user_mods", "rf_usr_btns", "sdr"]
 _DEVICE_CONFIG_HEADER = (
@@ -427,7 +431,11 @@ _DEVICE_CONFIG_SECTION_COMMENTS = {
         '# profile is loaded -- must be one of the values listed in sample_rates.\n'
         '# An active --iq_wav recording always overrides this with its own rate.\n'
         '# sample_rates: comma-separated list of sample rates (Hz) the operator can\n'
-        '# choose from the GUI\'s "Sample Rate" dialog for this device.',
+        '# choose from the GUI\'s "Sample Rate" dialog for this device.\n'
+        '# allowed_bands: comma-separated list of amateur bands this device permits\n'
+        '# (e.g. "160m,80m,40m,20m,10m"). Omit or set to all 11 bands to allow\n'
+        '# everything. Disallowed bands are greyed out in the GUI; in restrict-band\n'
+        '# mode, frequencies within disallowed bands are also blocked.',
 }
 
 
@@ -1266,6 +1274,10 @@ class RadioState:
         # --iq_wav recording always wins over both the default and any
         # restored value, since its real sample rate is the radio's rate.
         self.sample_rates = list(sample_rates) if sample_rates else [192000]
+        # All bands allowed by default until a device config says otherwise.
+        self.allowed_bands = {
+            "160m","80m","60m","40m","30m","20m","17m","15m","12m","10m","6m"
+        }
         if self.iq_source is None and default_sample_rate is not None:
             try:
                 _dsr = int(float(default_sample_rate))
@@ -1402,6 +1414,9 @@ class RadioState:
                 "spec_ave_rf": self.spec_ave_rf,
                 "spec_ref_af": self.spec_ref_af,
                 "spec_ave_af": self.spec_ave_af,
+                # Allowed bands for this device (set of band name strings).
+                # Sent as a sorted list so JSON serialisation is deterministic.
+                "allowed_bands": sorted(self.allowed_bands),
             }
 
     # ----------------------------------------------------------- commands ----
@@ -1566,6 +1581,22 @@ class RadioState:
                                 _dsr = None
                             self.sample_rate = float(_dsr) if _dsr in self.sample_rates \
                                 else float(self.sample_rates[0])
+
+                        # Allowed bands: which amateur bands this device permits.
+                        # Parse the comma-separated string into a set of band names.
+                        _all_bands = {b for b, _ in [
+                            ("160m",None),("80m",None),("60m",None),("40m",None),
+                            ("30m",None),("20m",None),("17m",None),("15m",None),
+                            ("12m",None),("10m",None),("6m",None)]}
+                        _ab_raw = _sdr.get(
+                            "allowed_bands",
+                            _DEVICE_CONFIG_DEFAULTS["sdr"]["allowed_bands"])
+                        _ab_parsed = {
+                            b.strip() for b in str(_ab_raw).split(",")
+                            if b.strip() in _all_bands
+                        }
+                        # Empty / unrecognised → permit everything
+                        self.allowed_bands = _ab_parsed if _ab_parsed else _all_bands
 
                     # Switch device identity: memories + GUI-state file.
                     self.device_cfg_path = cfg_path
