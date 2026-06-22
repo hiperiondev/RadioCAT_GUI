@@ -2056,7 +2056,15 @@ class SMeter(tk.Canvas):
         dbm_box_h = max(14, int(round(18*sc)))
         dbm_box_h2= max(12, int(round(16*sc)))
 
-        cx=w/2; cy=h-max(10,int(round(14*sc))); R=min(w*0.46,cy)-3
+        # box_x1 mirrors the Signal readout width computed below; shift arc centre
+        # right by half that amount so the semicircle clears the label box.
+        tag_w_pre   = max(38, int(round(52*sc)))
+        dbm_box_w_pre = max(60, int(round(90*sc)))
+        box_x1_pre  = 2 + tag_w_pre + dbm_box_w_pre + 4   # +4 margin
+        cx_offset   = box_x1_pre / 2
+        cx = w/2 + cx_offset/2
+        cy = h-max(10,int(round(14*sc)))
+        R  = min((w - box_x1_pre)*0.46, cy) - 3
         if R<8: return
         tick_outer=R-2
         tick_major_inner=R-max(6,int(round(10*sc)))
@@ -2094,14 +2102,35 @@ class SMeter(tk.Canvas):
             x1,y1=self._pt(cx,cy,tick_outer,f)
             x2,y2=self._pt(cx,cy,tick_minor_inner,f)
             self.create_line(x1,y1,x2,y2,fill=col,width=1)
-        # digital readout
-        self.create_rectangle(2,h-dbm_box_h,dbm_box_w,h-2,
-                               fill="#0a1820",outline=C["sep"])
+        # digital readout — positioned at top-left of the canvas
+        tag_fs   = max(5, int(round(6*sc)))
+        tag_w    = max(38, int(round(52*sc)))   # width of "Signal:" label
+        box_x0   = 2
+        box_y0   = 2
+        box_x1   = box_x0 + tag_w + dbm_box_w
+        box_y1   = box_y0 + dbm_box_h
+        # outer container
+        self.create_rectangle(box_x0, box_y0, box_x1, box_y1,
+                               fill="#0a1820", outline=C["sep"])
+        # divider between label and value
+        self.create_line(box_x0 + tag_w, box_y0,
+                         box_x0 + tag_w, box_y1,
+                         fill=C["sep"], width=1)
+        # "Signal:" tag on the left
+        self.create_text(box_x0 + tag_w // 2,
+                         (box_y0 + box_y1) // 2,
+                         text="Signal:",
+                         fill=C["text"],
+                         font=_gui_font(tag_fs, "bold"),
+                         anchor="center")
+        # dBm value on the right
         dbm_label = "0.0 dBm" if self._tx_mode else f"{self.dbm:.1f} dBm"
-        self.create_text(max(3,int(round(5*sc))),h-max(2,int(round(4*sc))),
+        self.create_text(box_x0 + tag_w + max(3, int(round(4*sc))),
+                         (box_y0 + box_y1) // 2,
                          text=dbm_label,
                          fill=C["smeter_grn"],
-                         font=_gui_font(dbm_fs,"bold"),anchor="sw")
+                         font=_gui_font(dbm_fs, "bold"),
+                         anchor="w")
         # needle
         f=self._frac(self.dbm)
         nx,ny=self._pt(cx,cy,needle_inner,f)
@@ -2659,26 +2688,6 @@ class App:
         sm_row.pack(fill="x",padx=max(1,int(round(2*sc))),pady=(max(1,int(round(3*sc))),0))
         self._sm_row=sm_row
 
-        pk_col=tk.Frame(sm_row,bg=C["panel_bg"])
-        pk_col.pack(side="left")
-        fs_pk=max(6,int(round(8*sc)))
-        fs_pk_sm=max(5,int(round(7*sc)))
-
-        def _mk_sm_btn(parent, text, fg, cmd_name, font):
-            def _cmd():
-                self.net.send({"cmd": cmd_name, "name": text})
-            return tk.Button(parent, text=text, bg=C["btn_gray"], fg=fg,
-                             activebackground=C["btn_sel"],
-                             activeforeground=C["btn_sel_fg"],
-                             font=font, relief="flat", bd=1,
-                             command=_cmd)
-
-        _mk_sm_btn(pk_col,"Peak",C["btn_grn_fg"],"ui_smeter_btn",
-                   _gui_font(fs_pk)).pack(anchor="nw",padx=max(1,int(round(2*sc))),pady=0,fill="x")
-        _mk_sm_btn(pk_col,"S-units",C["text_dim"],"ui_smeter_btn",
-                   _gui_font(fs_pk_sm)).pack(anchor="w",padx=max(1,int(round(2*sc))),pady=0,fill="x")
-        _mk_sm_btn(pk_col,"Squelch",C["text_dim"],"ui_smeter_btn",
-                   _gui_font(fs_pk_sm)).pack(anchor="w",padx=max(1,int(round(2*sc))),pady=0,fill="x")
 
         # ── PTT circular button ───────────────────────────────────────────────
         # Pack PTT *before* the smeter (side="right") so it is always anchored
