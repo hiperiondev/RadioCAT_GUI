@@ -1,7 +1,7 @@
 {
-  "center_freq": 18495000.0,
-  "tune_freq": 28505000.0,
-  "lo_b_freq": 8495000.0,
+  "center_freq": 7100000.0,
+  "tune_freq": 28504000.0,
+  "lo_b_freq": 21025000.0,
   "lo_active": "A",
   "zoom": 1,
   "mode": "APRS",

@@ -326,6 +326,10 @@ def _parse_args():
                     default=argparse.SUPPRESS,
                     help='Hide the Soundcard button in the GUI, preventing audio device '
                          'selection from being changed at runtime.')
+    ap.add_argument('--restrict-band', action='store_true', default=False,
+                    help='Prevent setting LO A or LO B to a frequency outside the '
+                         'currently selected amateur band (frequencies outside all '
+                         'standard amateur bands are always blocked).')
     _raw = ap.parse_args()
 
     # ── Merge: CLI overrides config; config overrides built-in default ────────
@@ -353,7 +357,8 @@ def _parse_args():
         args.resolution = None
     args.disable_soundcard_select = _raw.disable_soundcard_select \
                                     if hasattr(_raw, 'disable_soundcard_select') else _def_dsc
-    args.audio_list = _raw.audio_list   # one-shot flag; intentionally not stored in config
+    args.audio_list    = _raw.audio_list     # one-shot flag; intentionally not stored in config
+    args.restrict_band = _raw.restrict_band  # --restrict-band: block out-of-band LO changes
 
     _cli_host = hasattr(_raw, 'host')
     _cli_port = hasattr(_raw, 'port')
@@ -701,6 +706,30 @@ BANDS = [
     ("17m",18_100_000),("15m",21_200_000),("12m",24_900_000),
     ("10m",28_500_000),("6m",50_100_000),
 ]
+
+# ── Standard amateur band frequency ranges (Hz) ───────────────────────────────
+# Used for auto-highlighting the band button when LO A/B is selected, and for
+# the --restrict-band enforcement.  Ranges follow ITU Region 2 allocations.
+BAND_RANGES = {
+    "160m": (1_800_000,   2_000_000),
+    "80m":  (3_500_000,   4_000_000),
+    "60m":  (5_258_500,   5_406_400),
+    "40m":  (7_000_000,   7_300_000),
+    "30m":  (10_100_000, 10_150_000),
+    "20m":  (14_000_000, 14_350_000),
+    "17m":  (18_068_000, 18_168_000),
+    "15m":  (21_000_000, 21_450_000),
+    "12m":  (24_890_000, 24_990_000),
+    "10m":  (28_000_000, 29_700_000),
+    "6m":   (50_000_000, 54_000_000),
+}
+
+def _band_for_freq(hz):
+    """Return the band name if hz falls inside a standard amateur band, else None."""
+    for bname, (lo, hi) in BAND_RANGES.items():
+        if lo <= hz <= hi:
+            return bname
+    return None
 
 # ── Base geometry constants (at scale=1.0) ────────────────────────────────────
 BASE = dict(
@@ -2777,15 +2806,18 @@ class App:
         def _select_lo(which):
             self._lo_active.set(which)
             _refresh_lo_btns()
-            # Restore the band highlight for this LO
-            _refresh_band_highlight()
-            # Immediately re-centre on the selected LO frequency, reading
-            # directly from the display widget so any pending digit edits
-            # are included without waiting for a server round-trip.
+            # Determine the current frequency for the selected LO and
+            # auto-highlight whichever band button it falls inside (if any).
             if which=="A":
                 hz=self.lo_disp.value if hasattr(self,'lo_disp') else self.state["lo_freq"]
             else:
                 hz=self.lo_b_disp.value if hasattr(self,'lo_b_disp') else self.state["lo_b_freq"]
+            detected=_band_for_freq(hz)
+            self._lo_band[which]=detected   # None if not in any standard band
+            _refresh_band_highlight()
+            # Immediately re-centre on the selected LO frequency, reading
+            # directly from the display widget so any pending digit edits
+            # are included without waiting for a server round-trip.
             self._update_rf_view(hz)
             self.root.update_idletasks()
             self.net.send({"cmd":"set_lo","lo":which})
@@ -2813,6 +2845,20 @@ class App:
         # without having to re-enter _build_left's scope.
         self._refresh_lo_btns        = _refresh_lo_btns
         self._refresh_band_highlight = _refresh_band_highlight
+
+        def _update_band_for_lo(lo_which, hz):
+            """Auto-detect the band for hz and update the band highlight for lo_which.
+
+            Called from on_freq_changed / on_lo_b_changed whenever the operator
+            tunes the dial so the band button always tracks the live frequency.
+            Also clears the selection when the frequency leaves all standard bands.
+            """
+            detected = _band_for_freq(hz)
+            self._lo_band[lo_which] = detected   # None when outside all bands
+            if self._lo_active.get() == lo_which:
+                _refresh_band_highlight()
+
+        self._update_band_for_lo = _update_band_for_lo
 
         # ── freq_box: outer container ─────────────────────────────────────────
         # We use a grid: column 0 = LO/Tune rows (stacked, flexible width),
@@ -2894,6 +2940,32 @@ class App:
                 self.lo_b_disp.set_value(bfreq,notify=True)
             else:
                 self.set_frequency(bfreq)
+
+        def _freq_allowed(hz, lo_which):
+            """Return True if hz is allowed for lo_which under --restrict-band.
+
+            Without --restrict-band: always True.
+            With --restrict-band:
+              • if the LO has a band selected and hz is within that band: True.
+              • if the LO has no band selected and hz is within *any* standard
+                amateur band: True (user is free-tuning within a valid band).
+              • if hz is outside all amateur bands: False.
+              • if a band is selected and hz is outside that band: False.
+            """
+            if not getattr(_ARGS, 'restrict_band', False):
+                return True
+            detected = _band_for_freq(hz)
+            selected = self._lo_band.get(lo_which)
+            if selected is not None:
+                # A band is locked: only allow frequencies inside that band
+                lo_edge, hi_edge = BAND_RANGES[selected]
+                return lo_edge <= hz <= hi_edge
+            else:
+                # No band locked: allow any standard amateur band frequency
+                return detected is not None
+
+        # Expose to App methods that need it (on_freq_changed / on_lo_b_changed)
+        self._freq_allowed = _freq_allowed
 
         # ── RF user buttons sub-column (left of band buttons) ──────────────────
         # No fixed width: button auto-sizes to its label + _bpx padding so any
@@ -4640,7 +4712,21 @@ class App:
         self.rf_wf.set_freq_range(f0,f1)
 
     def on_freq_changed(self,hz):
+        # ── --restrict-band enforcement ───────────────────────────────────────
+        if getattr(_ARGS, 'restrict_band', False) and hasattr(self, '_freq_allowed'):
+            if not self._freq_allowed(hz, "A"):
+                # Revert the display to the last accepted LO A frequency
+                _prev = int(self.state.get("lo_freq", hz))
+                self._sup = True
+                try:
+                    self.lo_disp.set_value(_prev, notify=False)
+                finally:
+                    self._sup = False
+                return
         self.state["lo_freq"]=hz
+        # Auto-detect and highlight the matching amateur band button
+        if hasattr(self, '_update_band_for_lo'):
+            self._update_band_for_lo("A", hz)
         # Re-centre upper spectrum/waterfall only if LO A is the active LO
         if self._lo_active.get()=="A":
             self._update_rf_view(hz)
@@ -4671,7 +4757,21 @@ class App:
         self.net.send({"cmd":"set_lo_b_freq","hz":a_hz})
 
     def on_lo_b_changed(self,hz):
+        # ── --restrict-band enforcement ───────────────────────────────────────
+        if getattr(_ARGS, 'restrict_band', False) and hasattr(self, '_freq_allowed'):
+            if not self._freq_allowed(hz, "B"):
+                # Revert the display to the last accepted LO B frequency
+                _prev = int(self.state.get("lo_b_freq", hz))
+                self._sup = True
+                try:
+                    self.lo_b_disp.set_value(_prev, notify=False)
+                finally:
+                    self._sup = False
+                return
         self.state["lo_b_freq"]=hz
+        # Auto-detect and highlight the matching amateur band button
+        if hasattr(self, '_update_band_for_lo'):
+            self._update_band_for_lo("B", hz)
         # Re-centre upper spectrum/waterfall only if LO B is the active LO
         if self._lo_active.get()=="B":
             self._update_rf_view(hz)
@@ -4885,6 +4985,14 @@ class App:
                 if hasattr(self, '_lo_active'):
                     self._lo_active.set(self.state.get("lo_active", "A"))
                     self._refresh_lo_btns()
+                    # Auto-detect band for each LO based on restored frequencies
+                    if hasattr(self, '_lo_band'):
+                        self._lo_band["A"] = _band_for_freq(
+                            int(self.state.get("lo_freq", 0)))
+                        self._lo_band["B"] = _band_for_freq(
+                            int(self.state.get("lo_b_freq", 0)))
+                    if hasattr(self, '_refresh_band_highlight'):
+                        self._refresh_band_highlight()
                 # Re-centre the upper spectrum/waterfall span for the
                 # (possibly new) device's sample rate. _update_rf_view is
                 # normally only triggered by on_freq_changed/on_lo_b_changed
@@ -4948,6 +5056,14 @@ class App:
                 if hasattr(self, '_lo_active'):
                     self._lo_active.set(self.state.get("lo_active", "A"))
                     self._refresh_lo_btns()
+                    # Auto-detect band for each LO based on restored frequencies
+                    if hasattr(self, '_lo_band'):
+                        self._lo_band["A"] = _band_for_freq(
+                            int(self.state.get("lo_freq", 0)))
+                        self._lo_band["B"] = _band_for_freq(
+                            int(self.state.get("lo_b_freq", 0)))
+                    if hasattr(self, '_refresh_band_highlight'):
+                        self._refresh_band_highlight()
             finally:
                 self._sup = False
             self._refresh()
