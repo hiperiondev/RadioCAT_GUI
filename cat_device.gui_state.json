@@ -49,6 +49,22 @@
     false,
     false
   ],
+  "user_btn_list_sel": [
+    0,
+    -1,
+    -1,
+    -1,
+    -1,
+    -1,
+    -1,
+    -1,
+    -1,
+    -1,
+    -1,
+    -1,
+    -1,
+    -1
+  ],
   "spec_ref_rf": -5.0,
   "spec_ave_rf": 4,
   "spec_ref_af": 0.0,

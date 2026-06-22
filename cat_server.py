@@ -257,6 +257,7 @@ _DEVICE_CONFIG_DEFAULTS = {
     "user_buttons": {
         **{f"label_{n}": "" for n in range(1, 15)},
         **{f"type_{n}":  "normal" for n in range(1, 15)},
+        **{f"list_{n}":  "" for n in range(1, 15)},
     },
     "user_mods": {
         **{f"label_{n}": "" for n in range(1, 11)},
@@ -407,7 +408,7 @@ _SERVER_CONFIG_SECTION_COMMENTS = {
 }
 
 _DEVICE_CONFIG_KEY_ORDER = {
-    "user_buttons": [k for n in range(1, 15) for k in (f"label_{n}", f"type_{n}")],
+    "user_buttons": [k for n in range(1, 15) for k in (f"label_{n}", f"type_{n}", f"list_{n}")],
     "user_mods": [k for n in range(1, 11) for k in (f"label_{n}", f"type_{n}")],
     "rf_usr_btns": [k for n in range(1, 12) for k in (f"label_{n}", f"mode_{n}")],
     "sdr": ["sample_rate", "sample_rates", "allowed_bands"],
@@ -431,7 +432,11 @@ _DEVICE_CONFIG_HEADER = (
 
 _DEVICE_CONFIG_SECTION_COMMENTS = {
     "user_buttons":
-        '# label: max 7 characters; type: "normal" (momentary) or "push" (toggle)',
+        '# label: max 7 characters\n'
+        '# type: "normal" (momentary press), "push" (push-push toggle), or\n'
+        '#       "list" (opens a selection list; choice persists on the button)\n'
+        '# list_N: comma-separated items shown in the list dialog when type is "list"\n'
+        '#         (max 20 characters per item; unused when type != "list")',
     "user_mods":
         '# label: max 4 characters; user-defined modulation button labels shown in the\n'
         '# mode row of the GUI. Fill slots in order: 1, 2, ..., 10 (no skipping).\n'
@@ -1080,7 +1085,7 @@ _GUI_STATE_KEYS = (
     "agc", "agc_thresh",
     "rf_gain", "volume", "squelch",
     "nb", "nr", "nbrf", "nbif", "afc", "anf", "notch", "mute",
-    "user_btn_state", "rf_usr_btn_state",
+    "user_btn_state", "rf_usr_btn_state", "user_btn_list_sel",
     # Spectrum display controls (G90 SCALE and AVE)
     "spec_ref_rf", "spec_ave_rf",
     "spec_ref_af", "spec_ave_af",
@@ -1250,6 +1255,8 @@ class RadioState:
             {"label": "", "type": "normal"} for _ in range(NUM_USER_BUTTONS)
         ]
         self.user_btn_state = [False] * NUM_USER_BUTTONS
+        # Per-button selected list index (-1 = nothing chosen yet) for "list" type.
+        self.user_btn_list_sel = [-1] * NUM_USER_BUTTONS
 
         # RF user buttons: list of {\"label\": str, \"type\": \"normal\"|\"push\"}
         # for N = 1..NUM_RF_USR_BTNS, shown left of the band buttons in the GUI.
@@ -1441,6 +1448,7 @@ class RadioState:
                 "lo_b_freq": self.lo_b_freq,
                 "user_buttons": [dict(b) for b in self.user_buttons],
                 "user_btn_state": self.user_btn_state,
+                "user_btn_list_sel": list(self.user_btn_list_sel),
                 "rf_usr_btns": [dict(b) for b in self.rf_usr_btns],
                 "rf_usr_btn_state": self.rf_usr_btn_state,
                 "user_mod_labels": list(self.user_mod_labels),
@@ -1579,12 +1587,18 @@ class RadioState:
                         _ant   = dcfg.get("antenna",      {})
                         self.user_buttons = [
                             {
-                                "label": _ubtn.get(f"label_{n}", ""),
-                                "type":  _ubtn.get(f"type_{n}",  "normal"),
+                                "label":      _ubtn.get(f"label_{n}", ""),
+                                "type":       _ubtn.get(f"type_{n}",  "normal"),
+                                "list_items": [
+                                    s.strip()[:20]
+                                    for s in _ubtn.get(f"list_{n}", "").split(",")
+                                    if s.strip()
+                                ],
                             }
                             for n in range(1, NUM_USER_BUTTONS + 1)
                         ]
-                        self.user_btn_state = [False] * NUM_USER_BUTTONS
+                        self.user_btn_state    = [False] * NUM_USER_BUTTONS
+                        self.user_btn_list_sel = [-1]   * NUM_USER_BUTTONS
                         self.user_mod_labels = [
                             _umods.get(f"label_{n}", "")
                             for n in range(1, NUM_USER_MODS + 1)
@@ -1805,6 +1819,11 @@ class RadioState:
                             self.user_btn_state[idx] = bool(cmd["enabled"])
                         else:
                             self.user_btn_state[idx] = not self.user_btn_state[idx]
+                    elif btype == "list":
+                        # GUI sends {"cmd":"user_button","index":N,"choice":K}
+                        # where K is the 0-based index of the chosen list item.
+                        if "choice" in cmd:
+                            self.user_btn_list_sel[idx] = int(cmd["choice"])
                     # "normal" buttons are momentary - nothing to store
             elif c == "rf_usr_button":
                 # RF user button N (1..NUM_RF_USR_BTNS), left of band buttons.
@@ -2446,14 +2465,18 @@ def _parse_args():
 
     # User buttons: CLI beats config, config beats built-in default
     for n in range(1, NUM_USER_BUTTONS + 1):
-        _lattr = f"user_button_label_{n}"
-        _tattr = f"user_button_type_{n}"
+        _lattr  = f"user_button_label_{n}"
+        _tattr  = f"user_button_type_{n}"
+        _liattr = f"user_button_list_{n}"
         _cfg_label = _ubtn.get(f"label_{n}", _DD["user_buttons"][f"label_{n}"])
         _cfg_type  = _ubtn.get(f"type_{n}",  _DD["user_buttons"][f"type_{n}"])
+        _cfg_list  = _ubtn.get(f"list_{n}",  _DD["user_buttons"][f"list_{n}"])
         if not hasattr(_raw, _lattr):
             setattr(_raw, _lattr, _cfg_label)
         if not hasattr(_raw, _tattr):
             setattr(_raw, _tattr, _cfg_type)
+        if not hasattr(_raw, _liattr):
+            setattr(_raw, _liattr, _cfg_list)
 
     # User mods: CLI beats config, config beats built-in default
     for n in range(1, NUM_USER_MODS + 1):
@@ -2553,9 +2576,12 @@ def _parse_args():
 def _build_user_buttons(args):
     buttons = []
     for n in range(1, NUM_USER_BUTTONS + 1):
+        raw_list = getattr(args, f"user_button_list_{n}", "")
+        list_items = [s.strip()[:20] for s in raw_list.split(",") if s.strip()]
         buttons.append({
-            "label": getattr(args, f"user_button_label_{n}"),
-            "type": getattr(args, f"user_button_type_{n}"),
+            "label":      getattr(args, f"user_button_label_{n}"),
+            "type":       getattr(args, f"user_button_type_{n}"),
+            "list_items": list_items,
         })
     return buttons
 

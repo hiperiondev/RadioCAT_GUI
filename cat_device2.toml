@@ -12,35 +12,53 @@
 # file' -- loaded wholesale when that device is selected in the GUI.
 
 [user_buttons]
-# label: max 7 characters; type: "normal" (momentary) or "push" (toggle)
+# label: max 7 characters
+# type: "normal" (momentary press), "push" (push-push toggle), or
+#       "list" (opens a selection list; choice persists on the button)
+# list_N: comma-separated items shown in the list dialog when type is "list"
+#         (max 20 characters per item; unused when type != "list")
 label_1 = "UsrBtn1"
 type_1 = "normal"
+list_1 = ""
 label_2 = "UsrBtn2"
 type_2 = "normal"
+list_2 = ""
 label_3 = "UsrBtn3"
 type_3 = "normal"
+list_3 = ""
 label_4 = "UsrBtn4"
 type_4 = "normal"
+list_4 = ""
 label_5 = "UsrBtn5"
 type_5 = "normal"
+list_5 = ""
 label_6 = "UsrBtn6"
 type_6 = "normal"
+list_6 = ""
 label_7 = "UsrBtn7"
 type_7 = "normal"
+list_7 = ""
 label_8 = "UsrBtn8"
 type_8 = "normal"
+list_8 = ""
 label_9 = "UsrBtn9"
 type_9 = "normal"
+list_9 = ""
 label_10 = "UsrBtnA"
 type_10 = "normal"
+list_10 = ""
 label_11 = "UsrBtnB"
 type_11 = "normal"
+list_11 = ""
 label_12 = "UsrBtnC"
 type_12 = "normal"
+list_12 = ""
 label_13 = "UsrBtnD"
 type_13 = "normal"
+list_13 = ""
 label_14 = "UsrBtnE"
 type_14 = "normal"
+list_14 = ""
 
 [user_mods]
 # label: max 4 characters; user-defined modulation button labels shown in the

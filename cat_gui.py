@@ -2618,8 +2618,9 @@ class App:
             agc_thresh=-100.0,
             zoom=1, sample_rate=192_000.0, running=False,
             ptt=False,
-            user_buttons=[{"label":"","type":"normal"} for _ in range(14)],
+            user_buttons=[{"label":"","type":"normal","list_items":[]} for _ in range(14)],
             user_btn_state=[False]*14,
+            user_btn_list_sel=[-1]*14,
             rf_usr_btns=[{"label":"","type":"normal"} for _ in range(11)],
             rf_usr_btn_state=[False]*11,
             user_mod_labels=[""]*10,  # up to 10 user-defined modulation buttons
@@ -4001,16 +4002,24 @@ class App:
         # the server (empty string) is shown disabled/greyed-out and cannot
         # be pressed.
         for idx,b in self.user_btns.items():
+            cfg=self._user_btn_cfg(idx)
+            base_label=cfg.get("label","").strip()
             label=self._user_btn_label(idx)
             b.config(text=label)
-            if not label:
+            if not base_label:
                 b.config(state="disabled",bg=C["panel_mid"],fg=C["text_dim"])
                 continue
-            cfg=self._user_btn_cfg(idx)
-            if cfg.get("type")=="push":
+            btype=cfg.get("type","normal")
+            if btype=="push":
                 on=self._user_btn_state(idx)
                 b.config(state="normal",
                          bg=C["btn_sel"] if on else C["btn_gray"],
+                         fg=C["btn_sel_fg"])
+            elif btype=="list":
+                # Highlight if a selection has been made
+                sel=self._user_btn_list_sel(idx)
+                b.config(state="normal",
+                         bg=C["btn_sel"] if sel>=0 else C["btn_gray"],
                          fg=C["btn_sel_fg"])
             else:
                 b.config(state="normal",bg=C["btn_gray"],fg=C["btn_sel_fg"])
@@ -4624,16 +4633,21 @@ class App:
         return None,None
 
     def _user_btn_cfg(self,idx):
-        """Return {"label":..., "type":...} for user button idx (1..14),
-        falling back to a default if the server hasn't provided one yet."""
+        """Return {"label":..., "type":..., "list_items":[...]} for user button
+        idx (1..14), falling back to a default if the server hasn't provided one yet."""
         ub=self.state.get("user_buttons") or []
         if 1<=idx<=len(ub) and ub[idx-1]:
             cfg=ub[idx-1]
-            return {"label":cfg.get("label",""),"type":cfg.get("type","normal")}
-        return {"label":"","type":"normal"}
+            return {
+                "label":      cfg.get("label",""),
+                "type":       cfg.get("type","normal"),
+                "list_items": cfg.get("list_items",[]),
+            }
+        return {"label":"","type":"normal","list_items":[]}
 
     def _user_btn_label(self,idx):
-        label=self._user_btn_cfg(idx).get("label","").strip()
+        cfg=self._user_btn_cfg(idx)
+        label=cfg.get("label","").strip()
         # Show empty string when server has not provided a label
         return label[:7]
 
@@ -4642,6 +4656,13 @@ class App:
         if 1<=idx<=len(st):
             return bool(st[idx-1])
         return False
+
+    def _user_btn_list_sel(self,idx):
+        """Return 0-based selected list index for a 'list' type user button, or -1."""
+        st=self.state.get("user_btn_list_sel") or []
+        if 1<=idx<=len(st):
+            return int(st[idx-1])
+        return -1
 
     def _user_btn_press(self,idx):
         cfg=self._user_btn_cfg(idx)
@@ -4655,9 +4676,94 @@ class App:
             st[idx-1]=new_on
             self.state["user_btn_state"]=st
             self.net.send({"cmd":"user_button","index":idx,"enabled":new_on})
+            self._refresh()
+        elif cfg.get("type")=="list":
+            self._open_user_btn_list_dialog(idx,cfg)
         else:
             self.net.send({"cmd":"user_button","index":idx})
-        self._refresh()
+            self._refresh()
+
+    def _open_user_btn_list_dialog(self,idx,cfg):
+        """Open a modal list dialog for a 'list'-type user button.
+        The selected item persists on the button and is sent to the server."""
+        items=cfg.get("list_items",[])
+        label=cfg.get("label","").strip()[:7]
+        sc =self._sc
+        fs =max(7,int(round(8*sc)))
+        fs_h=max(8,int(round(9*sc)))
+        pad=max(4,int(round(6*sc)))
+
+        top=tk.Toplevel(self.root)
+        top.title(label or f"Button {idx}")
+        top.configure(bg=C["panel_bg"])
+        top.transient(self.root)
+        top.grab_set()
+        top.resizable(False,False)
+
+        tk.Label(top,text=f"Select — {label}:" if label else "Select:",
+                 bg=C["panel_bg"],fg=C["btn_grn_fg"],
+                 font=_gui_font(fs_h,"bold")).pack(padx=pad,pady=(pad,2),anchor="w")
+
+        cur_sel=self._user_btn_list_sel(idx)
+
+        if not items:
+            tk.Label(top,text="No list items configured for this button.",
+                     bg=C["panel_bg"],fg=C["text_dim"],
+                     font=_gui_font(fs)).pack(padx=pad,pady=(2,pad))
+            tk.Button(top,text="Close",command=top.destroy,
+                      bg=C["btn_gray"],fg=C["btn_sel_fg"],
+                      font=_gui_font(fs),relief="flat",bd=1,
+                      padx=max(6,int(round(8*sc)))).pack(pady=(0,pad))
+        else:
+            lst_fr=tk.Frame(top,bg=C["panel_bg"])
+            lst_fr.pack(fill="both",expand=True,padx=pad,pady=(2,pad))
+
+            def _select(choice,item_text):
+                # Update local state so the button label refreshes immediately
+                st=self.state.get("user_btn_list_sel")
+                if not st:
+                    st=[-1]*14
+                elif len(st)<14:
+                    st=list(st)+[-1]*(14-len(st))
+                else:
+                    st=list(st)
+                st[idx-1]=choice
+                self.state["user_btn_list_sel"]=st
+                top.destroy()
+                self.net.send({"cmd":"user_button","index":idx,"choice":choice})
+                self._refresh()
+
+            for i,item in enumerate(items):
+                is_cur=(i==cur_sel)
+                disp=item[:20]
+                if is_cur:
+                    disp+=u"  \u2713"
+                btn=tk.Button(
+                    lst_fr,text=disp,anchor="w",
+                    bg=C["btn_sel"] if is_cur else C["btn_gray"],
+                    fg=C["btn_sel_fg"],
+                    activebackground=C["btn_sel"],activeforeground=C["btn_sel_fg"],
+                    font=_gui_font(fs),relief="flat",bd=1,
+                    padx=max(6,int(round(8*sc))),
+                    pady=max(1,int(round(2*sc))),
+                    command=lambda c=i,t=item:_select(c,t))
+                btn.pack(fill="x",pady=(0,max(1,int(round(1*sc)))))
+
+            sep=tk.Frame(lst_fr,bg=C["sep"],height=max(1,int(round(1*sc))))
+            sep.pack(fill="x",pady=(max(2,int(round(3*sc))),0))
+            tk.Button(lst_fr,text="Cancel",command=top.destroy,
+                      bg=C["btn_gray"],fg=C["btn_red_fg"],
+                      font=_gui_font(fs),relief="flat",bd=1,
+                      padx=max(6,int(round(8*sc))),
+                      pady=max(1,int(round(2*sc)))).pack(
+                          fill="x",pady=(max(2,int(round(3*sc))),0))
+
+        top.update_idletasks()
+        rw=self.root.winfo_x()+self.root.winfo_width()//2
+        rh=self.root.winfo_y()+self.root.winfo_height()//2
+        tw=top.winfo_reqwidth()
+        th=top.winfo_reqheight()
+        top.geometry(f"+{rw-tw//2}+{rh-th//2}")
 
     # ── Memory ("M") buttons — one per LO A / LO B / Tune row ──────────────
     def _mem_btn_press(self,position):
