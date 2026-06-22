@@ -2224,17 +2224,6 @@ def _toolbar(parent,rbw="23.4 Hz",avg="2",bg=None,sc=1.0,app=None,box_id="rf",in
                 btn.config(bg=bg, fg=C["toolbar_wf"] if bname=="Waterfall" else C["toolbar_sp"])
 
     _toggle_btns = {}
-    for t in ["◀◀","◀"]: lbl(t,C["text_dim"])
-    sep()
-    for name, fg in [("Waterfall", C["toolbar_wf"]), ("Spectrum", C["toolbar_sp"])]:
-        b = tk.Button(bar, text=name, bg=bg, fg=fg,
-                      activebackground=C["btn_sel"], activeforeground=C["btn_sel_fg"],
-                      font=_gui_font(fs), relief="flat", bd=1,
-                      padx=max(1,int(round(2*sc))), pady=0,
-                      command=_make_toggle(name, name))
-        b.pack(side="left", padx=max(1,int(round(2*sc))))
-        _toggle_btns[name] = b
-        sep()
     # Apply initial colours from seeded state
     _update_toggle_colors()
 
@@ -2243,9 +2232,6 @@ def _toolbar(parent,rbw="23.4 Hz",avg="2",bg=None,sc=1.0,app=None,box_id="rf",in
             _wf_state["sel"] = name
             _update_toggle_colors()
     bar.set_view = _set_view
-
-    for t in ["◀","◀◀"]: lbl(t,C["text_dim"])
-    sep()
 
     # ── SCALE control: adjusts spectrum reference level (top of display) ─────
     # Step 5 dB, range −50..+10. Sends set_spec_ref to server and updates the
