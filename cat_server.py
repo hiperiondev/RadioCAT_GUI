@@ -275,6 +275,11 @@ _DEVICE_CONFIG_DEFAULTS = {
         # antenna_label_N: human-readable name shown in the GUI antenna list.
         # The GUI returns the 1-based index of the chosen slot to the server.
         **{f"antenna_label_{n}": "" for n in range(1, 11)},
+        # antenna_allowed_bands_N: comma-separated list of amateur bands allowed
+        # when antenna N is selected (e.g. "160m,80m,40m,20m,10m"). Empty string
+        # means the antenna inherits the device-level allowed_bands restriction.
+        # Valid names: 160m, 80m, 60m, 40m, 30m, 20m, 17m, 15m, 12m, 10m, 6m.
+        **{f"antenna_allowed_bands_{n}": "" for n in range(1, 11)},
     },
 }
 
@@ -397,7 +402,7 @@ _DEVICE_CONFIG_KEY_ORDER = {
     "user_buttons": [k for n in range(1, 15) for k in (f"label_{n}", f"type_{n}")],
     "user_mods": [k for n in range(1, 11) for k in (f"label_{n}", f"type_{n}")],
     "rf_usr_btns": [k for n in range(1, 12) for k in (f"label_{n}", f"mode_{n}")],
-    "sdr": ["sample_rate", "sample_rates", "allowed_bands"] + [f"antenna_label_{n}" for n in range(1, 11)],
+    "sdr": ["sample_rate", "sample_rates", "allowed_bands"] + [f"antenna_label_{n}" for n in range(1, 11)] + [f"antenna_allowed_bands_{n}" for n in range(1, 11)],
 }
 _DEVICE_CONFIG_SECTION_ORDER = ["user_buttons", "user_mods", "rf_usr_btns", "sdr"]
 _DEVICE_CONFIG_HEADER = (
@@ -442,7 +447,11 @@ _DEVICE_CONFIG_SECTION_COMMENTS = {
         '# mode, frequencies within disallowed bands are also blocked.\n'
         '# antenna_label_N (N=1..10): human-readable label for antenna port N shown\n'
         '# in the GUI Antenna selector. Empty = slot unused/hidden. The GUI sends\n'
-        '# the 1-based index of the chosen antenna back to the server.',
+        '# the 1-based index of the chosen antenna back to the server.\n'
+        '# antenna_allowed_bands_N (N=1..10): comma-separated bands allowed when\n'
+        '# antenna N is selected (e.g. "160m,80m,40m,20m,10m"). Empty string means\n'
+        '# inherit the device-level allowed_bands restriction. Valid names:\n'
+        '# 160m 80m 60m 40m 30m 20m 17m 15m 12m 10m 6m.',
 }
 
 
@@ -1292,6 +1301,9 @@ class RadioState:
         # antenna_index: 1-based index of the currently selected antenna (0 = none).
         self.antenna_labels = list(antenna_labels) if antenna_labels else [""] * 10
         self.antenna_index  = 0
+        # Per-antenna band restrictions: list of 10 frozensets (one per slot).
+        # Empty frozenset means "inherit device-level allowed_bands".
+        self.antenna_allowed_bands = [frozenset()] * 10
         if self.iq_source is None and default_sample_rate is not None:
             try:
                 _dsr = int(float(default_sample_rate))
@@ -1434,6 +1446,9 @@ class RadioState:
                 # Antenna ports for this device and currently selected index.
                 "antenna_labels": list(self.antenna_labels),
                 "antenna_index":  self.antenna_index,
+                # Per-antenna band restrictions (list of 10 sorted lists).
+                # Empty list at index N means inherit device-level allowed_bands.
+                "antenna_allowed_bands": [sorted(s) for s in self.antenna_allowed_bands],
             }
 
     # ----------------------------------------------------------- commands ----
@@ -1620,6 +1635,16 @@ class RadioState:
                             str(_sdr.get(f"antenna_label_{n}", ""))
                             for n in range(1, 11)
                         ]
+                        # Per-antenna band restrictions from [sdr].antenna_allowed_bands_N.
+                        # Empty / unrecognised → frozenset() meaning "inherit device level".
+                        self.antenna_allowed_bands = []
+                        for _an in range(1, 11):
+                            _aab_raw = str(_sdr.get(f"antenna_allowed_bands_{_an}", "")).strip()
+                            _aab_set = frozenset(
+                                b.strip() for b in _aab_raw.split(",")
+                                if b.strip() in _all_bands
+                            )
+                            self.antenna_allowed_bands.append(_aab_set)
                         # Reset selection to 0 (none) when switching devices.
                         self.antenna_index = 0
 
@@ -1652,14 +1677,18 @@ class RadioState:
                 # GUI's "Antenna" button was pressed. Reply with the antenna
                 # list defined in this device's [sdr].antenna_label_N keys
                 # plus the currently selected 1-based index (0 = none).
+                # Each entry also carries its per-antenna allowed_bands list
+                # (sorted; empty list = inherit device-level restriction).
                 ant_list = [
-                    {"index": i + 1, "label": lbl}
+                    {"index": i + 1, "label": lbl,
+                     "allowed_bands": sorted(self.antenna_allowed_bands[i])}
                     for i, lbl in enumerate(self.antenna_labels)
                     if lbl.strip()
                 ]
                 outgoing = {"type": "antenna_list",
                             "antennas": ant_list,
-                            "current": self.antenna_index}
+                            "current": self.antenna_index,
+                            "device_allowed_bands": sorted(self.allowed_bands)}
             elif c == "select_antenna":
                 # {\"cmd\": \"select_antenna\", \"index\": N} — 1-based index of the
                 # chosen antenna port (0 = deselect). Only accepted when the
