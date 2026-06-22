@@ -2622,6 +2622,8 @@ class App:
             # WFCanvas.set_speed(). Default 10 = full rate (legacy behaviour).
             wf_speed_rf=10, wf_speed_af=10,
             split=False,
+            antenna_labels=[],
+            antenna_index=0,
         )
         self._sup=False
         # True only when the operator explicitly pressed Stop — used by
@@ -2854,6 +2856,20 @@ class App:
             # never shifts — _refresh shows/hides it with grid()/grid_remove().
             self.mode_btns[_umidx]=_umb
 
+        # ── Antenna selector button (bottom of Signal/RST column, near mods) ──
+        ant_row = tk.Frame(lp, bg=C["panel_bg"])
+        ant_row.pack(fill="x", padx=max(2, int(round(4*sc))),
+                     pady=(0, max(1, int(round(1*sc)))))
+        fs_ant = max(6, int(round(8*sc)))
+        self._ant_btn = _fbtn(ant_row, "Antenna", sc=sc,
+                              bg=C["btn_gray"], fg=C["btn_sel_fg"],
+                              command=self._request_antenna_list)
+        self._ant_btn.pack(side="left", padx=(0, max(1, int(round(2*sc)))))
+        self._ant_lbl = tk.Label(ant_row, text="—", bg=C["panel_bg"],
+                                 fg=C["text_dim"], font=_gui_font(fs_ant),
+                                 anchor="w")
+        self._ant_lbl.pack(side="left", fill="x", expand=True,
+                           padx=(max(2, int(round(2*sc))), 0))
 
         # ── LO + Tune freq displays ───────────────────────────────────────────
         freq_box=tk.Frame(lp,bg=C["spec_bg"],bd=0)
@@ -4008,6 +4024,8 @@ class App:
         # (covers device-switch state merges as well as initial build).
         if hasattr(self, '_refresh_band_highlight'):
             self._refresh_band_highlight()
+        # Antenna button label: show currently selected antenna name.
+        self._refresh_antenna_label()
 
 
     # ── Device selection dialog (populated from server) ───────────────────────
@@ -4178,6 +4196,111 @@ class App:
         tw = top.winfo_reqwidth()
         th = top.winfo_reqheight()
         top.geometry(f"+{rw - tw // 2}+{rh - th // 2}")
+
+    # ── Antenna selection dialog ───────────────────────────────────────────────
+    def _request_antenna_list(self):
+        """Send get_antennas to the server; reply opens the Antenna dialog.
+        The antenna list comes from the active device's per-device TOML file
+        ([sdr].antenna_label_N) -- nothing is hard-coded in the GUI."""
+        if not self.net.connected:
+            messagebox.showinfo("Antenna", "Not connected to server.",
+                                parent=self.root)
+            return
+        self.net.send({"cmd": "get_antennas"})
+
+    def _open_antenna_dialog(self, antennas, current=0):
+        """Open a modal window listing the antenna ports configured for the
+        active device (server-provided, from [sdr].antenna_label_N in the
+        device TOML). Clicking a row sends select_antenna with its 1-based
+        index; the server stores the selection and echoes it back in state."""
+        sc  = self._sc
+        fs  = max(7, int(round(8 * sc)))
+        fs_h = max(8, int(round(9 * sc)))
+        pad = max(4, int(round(6 * sc)))
+
+        top = tk.Toplevel(self.root)
+        top.title("Select Antenna")
+        top.configure(bg=C["panel_bg"])
+        top.transient(self.root)
+        top.grab_set()
+        top.resizable(False, False)
+
+        tk.Label(top, text="Select antenna port:", bg=C["panel_bg"],
+                 fg=C["btn_grn_fg"],
+                 font=_gui_font(fs_h, "bold")).pack(padx=pad, pady=(pad, 2),
+                                                    anchor="w")
+
+        if not antennas:
+            tk.Label(top,
+                     text="No antennas configured for this device.\n"
+                          "Add antenna_label_N entries to the device TOML.",
+                     bg=C["panel_bg"], fg=C["text_dim"],
+                     font=_gui_font(fs), justify="left"
+                     ).pack(padx=pad, pady=(2, pad))
+            tk.Button(top, text="Close", command=top.destroy,
+                      bg=C["btn_gray"], fg=C["btn_sel_fg"],
+                      font=_gui_font(fs), relief="flat", bd=1,
+                      padx=max(6, int(round(8*sc)))
+                      ).pack(pady=(0, pad))
+        else:
+            lst_fr = tk.Frame(top, bg=C["panel_bg"])
+            lst_fr.pack(fill="both", expand=True, padx=pad, pady=(2, pad))
+
+            def _select(idx, lbl):
+                top.destroy()
+                self.state["antenna_index"] = idx
+                # Update the label next to the Antenna button immediately
+                self._refresh_antenna_label()
+                self.net.send({"cmd": "select_antenna", "index": idx})
+
+            for ant in antennas:
+                aidx  = ant.get("index", 0)
+                albl  = ant.get("label", f"Antenna {aidx}")
+                is_cur = (aidx == current)
+                disp_lbl = f"{aidx}.  {albl}"
+                if is_cur:
+                    disp_lbl += "  \u2713"   # checkmark on the active antenna
+                btn = tk.Button(
+                    lst_fr, text=disp_lbl, anchor="w",
+                    bg=C["btn_sel"] if is_cur else C["btn_gray"],
+                    fg=C["btn_sel_fg"],
+                    activebackground=C["btn_sel"],
+                    activeforeground=C["btn_sel_fg"],
+                    font=_gui_font(fs), relief="flat", bd=1,
+                    padx=max(6, int(round(8*sc))),
+                    pady=max(1, int(round(2*sc))),
+                    command=lambda i=aidx, l=albl: _select(i, l))
+                btn.pack(fill="x", pady=(0, max(1, int(round(1*sc)))))
+
+            sep_line = tk.Frame(lst_fr, bg=C["sep"],
+                                height=max(1, int(round(1*sc))))
+            sep_line.pack(fill="x", pady=(max(2, int(round(3*sc))), 0))
+            tk.Button(lst_fr, text="Cancel", command=top.destroy,
+                      bg=C["btn_gray"], fg=C["btn_red_fg"],
+                      font=_gui_font(fs), relief="flat", bd=1,
+                      padx=max(6, int(round(8*sc))),
+                      pady=max(1, int(round(2*sc)))
+                      ).pack(fill="x", pady=(max(2, int(round(3*sc))), 0))
+
+        top.update_idletasks()
+        rw = self.root.winfo_x() + self.root.winfo_width()  // 2
+        rh = self.root.winfo_y() + self.root.winfo_height() // 2
+        tw = top.winfo_reqwidth()
+        th = top.winfo_reqheight()
+        top.geometry(f"+{rw - tw // 2}+{rh - th // 2}")
+
+    def _refresh_antenna_label(self):
+        """Update the short label next to the Antenna button to show the
+        currently selected antenna name (or '—' when none selected)."""
+        if not hasattr(self, "_ant_lbl"):
+            return
+        idx    = self.state.get("antenna_index", 0)
+        labels = self.state.get("antenna_labels", [])
+        if idx and 1 <= idx <= len(labels) and labels[idx - 1].strip():
+            text = f"{idx}. {labels[idx - 1].strip()}"
+            self._ant_lbl.config(text=text, fg=C["text"])
+        else:
+            self._ant_lbl.config(text="—", fg=C["text_dim"])
 
     # ── Soundcard device selection dialog ─────────────────────────────────────
     def _open_soundcard_dialog(self):
@@ -5025,6 +5148,12 @@ class App:
             # (older server versions).
             _cur_sr = msg.get("current") or self.state.get("sample_rate")
             self._open_sample_rate_dialog(msg.get("rates", []), _cur_sr)
+        elif t == "antenna_list":
+            # Server replied to get_antennas — open the antenna selection popup
+            # with the ports configured in this device's [sdr].antenna_label_N
+            # entries. current is the 1-based index of the active port (0=none).
+            _cur_ant = msg.get("current", self.state.get("antenna_index", 0))
+            self._open_antenna_dialog(msg.get("antennas", []), _cur_ant)
         elif t == "memory_list":
             # Server replied to get_memories / save_memory — refresh the
             # memory dialog (if still open on the matching position).

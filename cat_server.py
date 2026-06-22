@@ -271,6 +271,10 @@ _DEVICE_CONFIG_DEFAULTS = {
         # Valid names: 160m, 80m, 60m, 40m, 30m, 20m, 17m, 15m, 12m, 10m, 6m.
         # All bands are allowed by default (empty string = all).
         "allowed_bands": "160m,80m,60m,40m,30m,20m,17m,15m,12m,10m,6m",
+        # Antenna port labels (up to 10). Empty label = slot unused/hidden.
+        # antenna_label_N: human-readable name shown in the GUI antenna list.
+        # The GUI returns the 1-based index of the chosen slot to the server.
+        **{f"antenna_label_{n}": "" for n in range(1, 11)},
     },
 }
 
@@ -393,7 +397,7 @@ _DEVICE_CONFIG_KEY_ORDER = {
     "user_buttons": [k for n in range(1, 15) for k in (f"label_{n}", f"type_{n}")],
     "user_mods": [k for n in range(1, 11) for k in (f"label_{n}", f"type_{n}")],
     "rf_usr_btns": [k for n in range(1, 12) for k in (f"label_{n}", f"mode_{n}")],
-    "sdr": ["sample_rate", "sample_rates", "allowed_bands"],
+    "sdr": ["sample_rate", "sample_rates", "allowed_bands"] + [f"antenna_label_{n}" for n in range(1, 11)],
 }
 _DEVICE_CONFIG_SECTION_ORDER = ["user_buttons", "user_mods", "rf_usr_btns", "sdr"]
 _DEVICE_CONFIG_HEADER = (
@@ -435,7 +439,10 @@ _DEVICE_CONFIG_SECTION_COMMENTS = {
         '# allowed_bands: comma-separated list of amateur bands this device permits\n'
         '# (e.g. "160m,80m,40m,20m,10m"). Omit or set to all 11 bands to allow\n'
         '# everything. Disallowed bands are greyed out in the GUI; in restrict-band\n'
-        '# mode, frequencies within disallowed bands are also blocked.',
+        '# mode, frequencies within disallowed bands are also blocked.\n'
+        '# antenna_label_N (N=1..10): human-readable label for antenna port N shown\n'
+        '# in the GUI Antenna selector. Empty = slot unused/hidden. The GUI sends\n'
+        '# the 1-based index of the chosen antenna back to the server.',
 }
 
 
@@ -1178,7 +1185,7 @@ class RadioState:
 
     def __init__(self, user_buttons=None, user_mod_labels=None, user_mod_types=None,
                  rf_usr_btns=None, iq_source=None, devices=None, device_cfg_path=None,
-                 sample_rates=None, default_sample_rate=None):
+                 sample_rates=None, default_sample_rate=None, antenna_labels=None):
         self.lock = threading.Lock()
         self.center_freq = 14_195_000.0
         self.sample_rate = 192_000.0
@@ -1278,6 +1285,10 @@ class RadioState:
         self.allowed_bands = {
             "160m","80m","60m","40m","30m","20m","17m","15m","12m","10m","6m"
         }
+        # Antenna port labels for this device (up to 10). Empty string = unused.
+        # antenna_index: 1-based index of the currently selected antenna (0 = none).
+        self.antenna_labels = list(antenna_labels) if antenna_labels else [""] * 10
+        self.antenna_index  = 0
         if self.iq_source is None and default_sample_rate is not None:
             try:
                 _dsr = int(float(default_sample_rate))
@@ -1417,6 +1428,9 @@ class RadioState:
                 # Allowed bands for this device (set of band name strings).
                 # Sent as a sorted list so JSON serialisation is deterministic.
                 "allowed_bands": sorted(self.allowed_bands),
+                # Antenna ports for this device and currently selected index.
+                "antenna_labels": list(self.antenna_labels),
+                "antenna_index":  self.antenna_index,
             }
 
     # ----------------------------------------------------------- commands ----
@@ -1598,6 +1612,14 @@ class RadioState:
                         # Empty / unrecognised → permit everything
                         self.allowed_bands = _ab_parsed if _ab_parsed else _all_bands
 
+                        # Antenna port labels (up to 10) from [sdr].antenna_label_N.
+                        self.antenna_labels = [
+                            str(_sdr.get(f"antenna_label_{n}", ""))
+                            for n in range(1, 11)
+                        ]
+                        # Reset selection to 0 (none) when switching devices.
+                        self.antenna_index = 0
+
                     # Switch device identity: memories + GUI-state file.
                     self.device_cfg_path = cfg_path
                     self.memory_file = _memory_file_for_device(cfg_path)
@@ -1623,6 +1645,33 @@ class RadioState:
                 outgoing = {"type": "sample_rate_list",
                             "rates": list(self.sample_rates),
                             "current": self.sample_rate}
+            elif c == "get_antennas":
+                # GUI's "Antenna" button was pressed. Reply with the antenna
+                # list defined in this device's [sdr].antenna_label_N keys
+                # plus the currently selected 1-based index (0 = none).
+                ant_list = [
+                    {"index": i + 1, "label": lbl}
+                    for i, lbl in enumerate(self.antenna_labels)
+                    if lbl.strip()
+                ]
+                outgoing = {"type": "antenna_list",
+                            "antennas": ant_list,
+                            "current": self.antenna_index}
+            elif c == "select_antenna":
+                # {\"cmd\": \"select_antenna\", \"index\": N} — 1-based index of the
+                # chosen antenna port (0 = deselect). Only accepted when the
+                # label for that slot is non-empty.
+                _req_ant = int(cmd.get("index", 0))
+                if _req_ant == 0:
+                    self.antenna_index = 0
+                    print("[cat_server] antenna deselected")
+                elif 1 <= _req_ant <= 10 and self.antenna_labels[_req_ant - 1].strip():
+                    self.antenna_index = _req_ant
+                    print(f"[cat_server] antenna selected: "
+                          f"{_req_ant} ({self.antenna_labels[_req_ant - 1]})")
+                else:
+                    print(f"[cat_server] WARNING: rejected select_antenna "
+                          f"{_req_ant!r} — invalid or unconfigured slot")
             elif c == "set_sample_rate":
                 # {"cmd": "set_sample_rate", "value": <Hz>} — only accepted
                 # if value is one of this device's configured sample_rates
@@ -2384,6 +2433,11 @@ def _parse_args():
     # TOML-only, from cat_device.toml's [sdr] section).
     _raw.sdr_sample_rate  = _sdr.get("sample_rate",  _DD["sdr"]["sample_rate"])
     _raw.sdr_sample_rates = _sdr.get("sample_rates", _DD["sdr"]["sample_rates"])
+    # Antenna port labels for the default device profile (TOML-only).
+    _raw.antenna_labels = [
+        str(_sdr.get(f"antenna_label_{n}", _DD["sdr"][f"antenna_label_{n}"]))
+        for n in range(1, 11)
+    ]
 
     # ── Validations ───────────────────────────────────────────────────────────
     # Length checks
@@ -2517,7 +2571,8 @@ def main():
                        devices=_build_devices(args),
                        device_cfg_path=args.device_config,
                        sample_rates=_parse_sample_rates(args.sdr_sample_rates),
-                       default_sample_rate=args.sdr_sample_rate)
+                       default_sample_rate=args.sdr_sample_rate,
+                       antenna_labels=args.antenna_labels)
 
     # BUG FIX: device identity mismatch on startup.
     # ----------------------------------------------------------------------

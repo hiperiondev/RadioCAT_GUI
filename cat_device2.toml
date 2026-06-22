@@ -108,6 +108,19 @@ mode_11 = "normal"
 # (e.g. "160m,80m,40m,20m,10m"). Omit or set to all 11 bands to allow
 # everything. Disallowed bands are greyed out in the GUI; in restrict-band
 # mode, frequencies within disallowed bands are also blocked.
+# antenna_label_N (N=1..10): human-readable label for antenna port N shown
+# in the GUI Antenna selector. Empty = slot unused/hidden. The GUI sends
+# the 1-based index of the chosen antenna back to the server.
 sample_rate = 192000
 sample_rates = "192000,250000,500000,1000000,2000000"
 allowed_bands = "80m,60m,40m,30m,20m,10m,6m"
+antenna_label_1 = "Dipole 40m"
+antenna_label_2 = "Yagi 20m,10m"
+antenna_label_3 = "Moxon 17m"
+antenna_label_4 = ""
+antenna_label_5 = ""
+antenna_label_6 = ""
+antenna_label_7 = ""
+antenna_label_8 = ""
+antenna_label_9 = ""
+antenna_label_10 = ""
