@@ -52,8 +52,8 @@ Radio control. Key points:
   - Up to 11 **RF user buttons**, shown left of the band-select column,
     with the same momentary/push-push behaviour as the user-defined
     buttons above; configured on the server side.
-  - An S-Meter showing signal strength in S-units (S1–S9, S9+20 dB,
-    S9+40 dB) and a digital dBm readout, derived from the power inside the
+  - An S-Meter showing signal strength in S-units (S1–S9, S9 +20dB,
+    S9 +40dB) and a digital dBm readout, derived from the power inside the
     current filter passband.
   - **Volume** and **AGC Thresh.** sliders in the control panel.
   - Zoom control (mouse-wheel on the spectrum, or toolbar labels) for the
@@ -71,9 +71,9 @@ Radio control. Key points:
     selection dialog and does **not** send a command to the server.
   - **Device selector.** The server can hold multiple device profiles
     (each with its own user buttons, RF user buttons, user-mod buttons,
-    and sample-rate list). `get_devices`/`select_device` let the GUI list
-    and switch between them; switching reloads that device's buttons and
-    sample rates and restores its last-saved GUI state.
+    sample-rate list, and antenna port definitions). `get_devices`/`select_device` let the GUI list
+    and switch between them; switching reloads that device's buttons,
+    sample rates, antenna ports, and restores its last-saved GUI state.
   - **Sample-rate selector.** `get_sample_rates`/`set_sample_rate` let the
     GUI query and change the active device's SDR sample rate from its
     configured list of choices.
@@ -102,14 +102,18 @@ Radio control. Key points:
   the GUI runs without it but audio is silently disabled).
 - **TOML configuration files.** `cat_gui.py` auto-creates a single
   `cat_gui.toml` in the current directory on first run and uses it as a
-  persistent source of defaults. `cat_server.py` uses **two** TOML files:
+  persistent source of defaults. The auto-generated file includes an `[audio]`
+  section with `mic`, `speaker`, and `disable_soundcard_select` keys — the
+  last of which hides the Soundcard button and is equivalent to the
+  `--disable-soundcard-select` CLI flag. `cat_server.py` uses **two** TOML files:
   `cat_server.toml` (transport settings plus the `[devices]` list of
   selectable device profiles) and one `cat_device.toml`-style file per
   device profile (that device's user buttons, RF user buttons, user-mod
-  buttons, and SDR sample rates). Both `cat_server.toml` and the default
-  device's `cat_device.toml` are auto-created on first run if missing.
-  Each device also gets its own auto-created memory file and GUI-state
-  file. CLI flags always override config file values.
+  buttons, SDR sample rates, and antenna port definitions). Both
+  `cat_server.toml` and the default device's `cat_device.toml` are
+  auto-created on first run if missing. Each device also gets its own
+  auto-created memory file and GUI-state file. CLI flags always override
+  config file values.
 - **Custom TCP control protocol.** The CAT GUI Interface defines its own
   simple newline-delimited JSON protocol between `cat_gui.py` and
   `cat_server.py` (described below).
@@ -121,7 +125,7 @@ Radio control. Key points:
 | Backend | `cat_server.py` — owns all radio state, generates a simulated RF spectrum |
 | VFO digit displays (LO A, LO B, Tune) | `FreqDisp` — scroll/click each digit, double-click to type a frequency; clicking the LO A or LO B label switches the active LO and immediately recentres the waterfall |
 | RF spectrum + filter overlay | `SpecCanvas` — draggable passband edges, click-to-tune, scroll-to-zoom |
-| RF waterfall | `WFCanvas` (900-bin internal render resolution; server streams 600 points) |
+| RF waterfall | `WFCanvas` (900-bin internal render resolution; server streams 600 points — the GUI linearly interpolates the 600 server points to fill the 900 render bins) |
 | AF spectrum + waterfall | second `SpecCanvas` / `WFCanvas` pair, baseband 0..3000 Hz; computed locally by `RTPAudioClient._af_worker` from decoded RTP audio (512-point FFT, 50% overlap Hamming window) — not streamed from the server |
 | Mode selection | No fixed mode-button row; done via the user-defined modulation buttons (see below). The GUI holds no per-mode default passband |
 | DSP toggles (NR / NB RF / NB IF / AFC / Mute / AGC Med / Notch / ANotch) | No fixed DSP toggle row — removed from the GUI. These functions, if exposed, are implemented via the generic user-defined buttons below. There is no standalone NB button; the server's `nb` state flag has no GUI control |
@@ -129,7 +133,7 @@ Radio control. Key points:
 | RF user buttons (×11) | Shown left of the band-select column; labels and types come from the server; momentary or push-push, same as user-defined buttons |
 | User-defined modulation buttons (×10) | Configurable via `--user_mod_1`…`--user_mod_10` / `--user_mod_type_1`…`--user_mod_type_10` (labels max 4 characters); labels and types in `user_mod_labels` / `user_mod_types` state fields |
 | IQ wav / audio wav playback | `IQWavSource` (`--iq_wav`) feeds a real IQ wav file to the RF spectrum/waterfall; `AudioWavSource` (`--audio_wav`) replaces the demo sine tone with a real audio file |
-| S-Meter | `SMeter` canvas, S1–S9 + S9+20 dB / S9+40 dB overload scale, digital dBm readout |
+| S-Meter | `SMeter` canvas, S1–S9 + S9 +20dB / S9 +40dB overload scale, digital dBm readout |
 | Volume / AGC Thresh. | Sliders in the left control panel |
 | Zoom / span | Mouse-wheel on the RF spectrum canvas |
 | Band quick-select | Column of band buttons (160m–6m) beside the frequency displays |
@@ -141,9 +145,10 @@ Radio control. Key points:
 | HiDPI scaling | Persistent −/+ overlay; scale levels −5..+5 (×1.25 per step) |
 | Fullscreen | `--full-screen` flag; triple-Esc (3 presses within 1 s) toggles fullscreen on/off |
 | Theme | `--bg dark` (default) or `--bg light` (#FFECD6 backgrounds) |
-| TOML config | `cat_server.toml` / `cat_gui.toml` auto-created on first run; `--config PATH` overrides location |
-| Device profiles | `cat_server.toml`'s `[devices]` section lists up to 20 device profiles, each pointing to its own `cat_device.toml`-like config file; `get_devices` lists them, `select_device` switches the active one (reloads its user buttons, RF user buttons, user-mod buttons, sample-rate list, memories, and last-saved GUI state) |
-| Device config | `cat_device.toml` (per device; auto-created on first run) — holds `[user_buttons]`, `[user_mods]`, `[rf_usr_btns]`, and `[sdr]`; `--device-config PATH` overrides the default device's config location |
+| TOML config | `cat_server.toml` / `cat_gui.toml` auto-created on first run; `--config PATH` overrides server/GUI config location; `--device-config PATH` overrides the default device config location |
+| Antenna selector | Per-device antenna port list defined in `[antenna]` section of `cat_device.toml`; `get_antennas` returns the list, `select_antenna` picks one (1-based index); per-antenna band restrictions narrow the allowed-band set independently of the device-level restriction |
+| Device profiles | `cat_server.toml`'s `[devices]` section lists up to 20 device profiles, each pointing to its own `cat_device.toml`-like config file; `get_devices` lists them, `select_device` switches the active one (reloads its user buttons, RF user buttons, user-mod buttons, sample-rate list, antenna ports, memories, and last-saved GUI state) |
+| Device config | `cat_device.toml` (per device; auto-created on first run) — holds `[user_buttons]`, `[user_mods]`, `[rf_usr_btns]`, `[sdr]`, and `[antenna]`; `--device-config PATH` overrides the default device's config location |
 | Sample-rate selection | `get_sample_rates` / `set_sample_rate` — query/change the active device's SDR sample rate from its configured `[sdr]` choice list |
 | Frequency memories | 20 storable slots (label + frequency) per row (LO A, LO B, Tune), saved per device; `get_memories` / `save_memory` |
 | Spectrum ref level / averaging | `set_spec_ref` (−50..10 dBm, 5 dBm steps) and `set_spec_ave` (1–10 averages), independently for the RF and AF boxes |
@@ -166,7 +171,7 @@ Each message is one JSON object terminated by `\n`.
 {"cmd": "set_lo",         "lo": "A"}               # "A" or "B" — active LO
 {"cmd": "set_mode",       "mode": "USB"}            # AM|FM|LSB|USB|CW
 {"cmd": "set_filter",     "lo": 100, "hi": 2800}   # Hz offsets from carrier
-{"cmd": "set_agc",        "mode": "Med"}            # Off|Med
+{"cmd": "set_agc",        "mode": "Med"}            # Med|Off
 {"cmd": "set_agc_thresh", "value": -100.0}          # dBm
 {"cmd": "set_rf_gain",    "value": 20}              # 0..40 dB
 {"cmd": "set_volume",     "value": 80}              # 0..100
@@ -190,10 +195,12 @@ Each message is one JSON object terminated by `\n`.
 {"cmd": "select_device",  "index": 1}               # switch active device profile (1-based)
 {"cmd": "get_memories",   "position": "LO A"}       # position: "LO A"|"LO B"|"Tune"
 {"cmd": "save_memory",    "position": "LO A", "index": 0, "label": "40M SSB", "freq": 7185000}
+{"cmd": "get_antennas"}                             # request the antenna port list for the active device
+{"cmd": "select_antenna", "index": 1}               # select antenna port by 1-based index (0 = deselect)
 {"cmd": "start"}
 {"cmd": "stop"}
 {"cmd": "transport",      "action": "rec"}         # rec|play|pause|stop|ff|rw|infinite
-{"cmd": "ui_button",      "name": "Bandwidth"}     # only "Bandwidth" is still sent via ui_button; Device and Sample Rate use their own dedicated commands (get_devices, get_sample_rates); Options/FreqMgr no longer exist (Soundcard excluded — opens local dialog only)
+{"cmd": "ui_button",      "name": "Bandwidth"}     # valid names: "Bandwidth" only (see note below)
 {"cmd": "ui_toolbar"}                              # Waterfall/Spectrum toolbar button clicks (logged only)
 {"cmd": "ui_display",     "box": "rf", "view": "waterfall"}  # box: rf|af  view: waterfall|spectrum
 {"cmd": "ui_smeter_btn",  "name": "Peak"}          # Peak|S-units|Squelch
@@ -214,6 +221,14 @@ Each message is one JSON object terminated by `\n`.
 
 > **Note:** The **Soundcard** button opens a local audio device dialog and does
 > **not** send a `ui_button` command to the server.
+
+> **Note:** The only valid `ui_button` name currently sent by the GUI is
+> `"Bandwidth"`. The **Device** and **Sample Rate** buttons use their own
+> dedicated commands (`get_devices`/`select_device` and
+> `get_sample_rates`/`set_sample_rate` respectively). The **Options** and
+> **FreqMgr** buttons have been removed from the GUI and no longer exist.
+> Third-party clients should treat any `ui_button` name other than
+> `"Bandwidth"` as unsupported.
 
 > **Note:** `set_nb` is handled by the server and tracked in the state dict,
 > but the GUI currently has no button that sends it. Use it from external
@@ -236,10 +251,56 @@ enabled:
 > port — the port the server should send audio *back to*. These are two
 > different sides of the bidirectional channel.
 
-Reply to every command:
+Reply to `hello` and `select_device` (full state included):
 ```json
 {"resp": "ok", "state": {...current radio state...}}
 ```
+
+Reply to all other commands (no state payload):
+```json
+{"resp": "ok"}
+```
+
+> **Note:** Only `hello` and `select_device` receive the full `state` dict in
+> their reply. Every other command (e.g. `set_freq`, `set_mode`, `user_button`)
+> gets a bare `{"resp": "ok"}`. The streaming `data` frames (below) keep all
+> controls in sync during normal operation.
+
+Sent in addition to `resp:ok` for `hello` and `select_device`, telling the GUI
+to resync all widgets from the state dict in the preceding response:
+```json
+{"type": "reload_state"}
+```
+
+Reply to `get_devices`:
+```json
+{"type": "device_list", "devices": [{"index": 1, "label": "SDRplay RSP1A"}, ...]}
+```
+
+Reply to `get_sample_rates`:
+```json
+{"type": "sample_rate_list", "rates": [192000, 250000, 500000], "current": 192000}
+```
+
+Reply to `get_memories` and `save_memory`:
+```json
+{"type": "memory_list", "position": "LO A", "memories": [{"label": "40M SSB", "freq": 7185000.0}, ...]}
+```
+> `memories` always contains exactly 20 slots; unused slots have `label: ""` and `freq: 0.0`.
+
+Reply to `get_antennas`:
+```json
+{
+  "type": "antenna_list",
+  "antennas": [{"index": 1, "label": "HF Port", "allowed_bands": ["160m", "40m", "20m"]}, ...],
+  "current": 1,
+  "device_allowed_bands": ["160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m"]
+}
+```
+> Only antenna slots with non-empty labels are included. `current` is the
+> 1-based index of the selected antenna (0 = none selected).
+> `allowed_bands` per entry is the per-antenna band restriction (empty list =
+> inherits the device-level `device_allowed_bands`).
 
 Asynchronous server-initiated push (sent whenever a `user_text` slot is updated):
 ```json
@@ -252,8 +313,6 @@ Streamed (only while "running"), about 10×/second:
   "type": "data",
   "f_start": <Hz>, "f_stop": <Hz>,
   "spectrum": [dBm, dBm, ...],       # RF spectrum, 600 points
-  "af_range": 3000.0,                # Hz width of the AF display (always 3000)
-  "af_spectrum": [dBm, dBm, ...],    # AF spectrum, 256 points (sent but not used by the GUI — see note below)
   "smeter_dbm": -73.4,
   "smeter_text": "S9",
   "squelch_open": true,
@@ -261,24 +320,35 @@ Streamed (only while "running"), about 10×/second:
 }
 ```
 
-> **Note:** The `af_spectrum` / `af_range` fields that may be present in
-> server data frames are **not used by the GUI**. The AF spectrum and
-> waterfall are computed entirely on the client side by
+> **Legacy / unused fields (third-party clients may ignore these):**
+> ```json
+> "af_range": 3000.0,             # Hz width of the AF display (always 3000) — not used by the GUI
+> "af_spectrum": [dBm, dBm, ...], # AF spectrum, 256 points — not used by the GUI
+> ```
+> The AF spectrum and waterfall are computed entirely on the client side by
 > `RTPAudioClient._af_worker`, which runs a 512-point Hamming-windowed FFT
 > on decoded RTP audio and posts the result as an `"af_local"` message to the
 > GUI queue. This means the AF display always reflects the actual audio being
-> received, independent of server-side processing.
+> received, independent of server-side processing. Third-party clients do not
+> need to implement `af_spectrum` parsing.
 
-The `state` dict included in every response and data push contains the full radio
-state: `lo_freq` (the client's local field name for LO A's frequency;
-`center_freq` does not appear in the GUI's state mirror), `lo_b_freq`,
+The `state` dict included in `hello`/`select_device` responses and in every
+streaming `data` push contains the full radio state: `lo_freq` and
+`center_freq` (both present and always equal — both carry LO A's frequency;
+`lo_freq` is the key the GUI uses internally), `lo_b_freq`,
 `lo_active` (`"A"` or `"B"`), `tune_freq`,
 `sample_rate`, `zoom`, `mode`, `filter_lo`, `filter_hi`, `agc` (`"Med"` or
 `"Off"`), `agc_thresh`, `rf_gain`, `volume`, `squelch`, `nb`, `nr`, `nbrf`,
 `nbif`, `afc`, `anf`, `notch`, `mute`, `ptt`, `split`, `running`,
 `user_buttons`, `user_btn_state`, `rf_usr_btns`, `rf_usr_btn_state`,
 `user_mod_labels`, `user_mod_types`, `spec_ref_rf`, `spec_ave_rf`,
-`spec_ref_af`, and `spec_ave_af`.
+`spec_ref_af`, `spec_ave_af`, `squelch_open` (boolean; `true` when the received signal exceeds the squelch threshold), `allowed_bands` (sorted list of band name
+strings permitted by the active device), `antenna_labels` (list of 10
+antenna port label strings; empty string = unused slot), `antenna_index`
+(1-based index of the selected antenna port; 0 = none), and
+`antenna_allowed_bands` (list of 10 sorted band-name lists, one per antenna
+slot; empty list at index N means that antenna inherits the device-level
+`allowed_bands` restriction).
 
 > **Note:** `smeter_text` is a string in the format `"S1"` through `"S9"`,
 > or `"S9 +NdB"` (e.g. `"S9 +20dB"`) for levels above S9. The `set_zoom` command
@@ -352,20 +422,23 @@ python3 cat_gui.py
 
 | Flag | Description |
 | --- | --- |
-| `--host HOST --port PORT` | Pre-fill and lock the server address (both required together); hides the host/port entry fields in the GUI |
+| `--host HOST --port PORT` | Pre-fill and lock the server address (both required together); hides the host/port entry fields in the GUI. Equivalent to setting `host` and `port` in the `[connection]` section of `cat_gui.toml`. |
 | `--config PATH` | Load TOML config from PATH (default: `./cat_gui.toml`, auto-created on first run) |
 | `--bg dark\|light` | Colour theme (`dark` is default; `light` sets panel backgrounds to #FFECD6) |
 | `--scale INT` | Initial HiDPI scale level, −5..+5 (default 0; factor is 1.25^level) |
-| `--disable-scale` | Hide the +/− scale overlay (requires `--scale` to also be set) |
+| `--disable-scale` | Hide the +/− scale overlay. Requires `--scale` to also be passed **on the command line**; setting `scale` only via `cat_gui.toml` does not satisfy this requirement. |
 | `--full-screen` | Start in full-screen mode |
 | `--resolution WxH` | Set the initial window size in pixels (e.g. `1280x720`); ignored if `--full-screen` is also given |
-| `--autoconnect` | Connect to the server automatically on startup; hides the entire host/port/connect row from the GUI |
+| `--autoconnect` | Connect to the server automatically on startup; hides the entire host/port/connect row from the GUI. Can also be set via `[connection] autoconnect = true` in `cat_gui.toml`. |
 | `--freq-font PATH` | TTF/OTF file for the LO/Tune frequency digit displays |
 | `--gui-font PATH` | TTF/OTF file for all other GUI text |
 | `--audio-list` | List all audio input/output devices with their index numbers, then exit |
 | `--audio-mic INDEX` | Select the microphone device by index (must be paired with `--audio-speaker`) |
 | `--audio-speaker INDEX` | Select the speaker/headphone device by index (must be paired with `--audio-mic`) |
 | `--disable-soundcard-select` | Hide the Soundcard button in the GUI |
+| `--aspect-ratio W:H` | Lock the window to a fixed aspect ratio (e.g. `16:9`). The window width is kept and the height is recalculated. Ignored when `--full-screen` is also set. |
+| `--restrict-band` | Prevent setting LO A or LO B to a frequency outside the currently selected amateur band. Frequencies that fall outside all standard amateur bands are always blocked. |
+| `--debug` | Enable verbose debug output, including printing persistent state values recovered from the server on startup or device change. |
 
 In the GUI, click **Connect** (default host `127.0.0.1`, port `50101`),
 then **Start** to begin streaming. From there:
@@ -409,17 +482,22 @@ This is a simulation for demonstration/educational purposes:
   included in the state dict, but no GUI button sends `set_nb`. Toggle it
   from an external client or add a dedicated "NB" button.
 - The `rf_gain` state is tracked by the server and included in the state dict
-  (default 20.0 dB), but the GUI has no slider or control that sends
-  `set_rf_gain`. It can only be set from external clients or extended with a
-  dedicated control.
+  (default 20.0 dB). The GUI has a partial implementation (`rfg_var`) that
+  reads and displays the current value from the state on every update, but no
+  control that sends `set_rf_gain`. RF gain can only be changed from external
+  clients; the GUI would need a dedicated slider wired to `set_rf_gain` to
+  expose full control.
 - The `squelch` threshold is tracked by the server (default −130.0 dBm) and
-  drives the `squelch_open` flag in every data frame, but the GUI has no slider
-  for `set_squelch`. The "Squelch" button in the S-meter column sends a
-  `ui_smeter_btn` notification only; it does not change the squelch level.
-- The RF spectrum is always computed from LO A's frequency (`lo_freq`)
-  regardless of which LO is active. Switching to LO B recentres the display
-  on the client side, but subsequent data frames from the server will reflect
-  LO A's position, not LO B's.
+  drives the `squelch_open` flag in every data frame. The GUI has a partial
+  implementation (`sql_var`) that reads and displays the current squelch value
+  from the state on every update, but no control that sends `set_squelch`. The
+  "Squelch" button in the S-meter column sends a `ui_smeter_btn` notification
+  only; it does not change the squelch level. A dedicated slider wired to
+  `set_squelch` would be needed for full control.
+- The RF spectrum is computed from whichever LO is currently active: LO A's
+  frequency (`center_freq`) when `lo_active` is `"A"`, or LO B's frequency
+  (`lo_b_freq`) when `lo_active` is `"B"`. Both the GUI recentring and the
+  server's subsequent data frames track the active LO correctly.
 - Menu system, band-mapping database, recording, DRM decoding, and
   OmniRig/CAT integration are not reproduced — this focuses on the
   core tuning/spectrum/waterfall/meter workflow described above.
