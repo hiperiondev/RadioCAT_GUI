@@ -2035,6 +2035,7 @@ class SMeter(tk.Canvas):
         self.dbm=self.LO; self.txt="S0"
         self._tx_mode=False   # when True: needle at floor, label forced to 0.0 dBm
         self._sc=1.0   # current scale factor, updated by App
+        self._swr=None        # float when TX, None when RX
         self.bind("<Configure>",lambda e:self._draw())
 
     def set_value(self,dbm,txt):
@@ -2043,12 +2044,19 @@ class SMeter(tk.Canvas):
             return
         self.dbm=dbm; self.txt=txt; self._draw()
 
+    def set_swr(self, swr):
+        """Update the SWR readout (float when TX, None when RX) and redraw."""
+        self._swr = swr
+        self._draw()
+
     def set_tx(self, active):
         """Switch meter into TX freeze (needle=floor, label=0.0 dBm) or back to RX."""
         self._tx_mode = bool(active)
         if active:
             self.dbm = self.LO   # pins needle to leftmost zero position
             self.txt = "TX"
+        else:
+            self._swr = None     # clear SWR when returning to RX
         self._draw()
 
     def _frac(self,db): return (max(self.LO,min(self.HI,db))-self.LO)/(self.HI-self.LO)
@@ -2175,6 +2183,43 @@ class SMeter(tk.Canvas):
                          (rst_y0 + rst_y1) // 2,
                          text=rst_val,
                          fill=rst_col,
+                         font=_gui_font(dbm_fs, "bold"),
+                         anchor="w")
+        # SWR box — directly below the RST box, shown only while transmitting
+        swr_y0 = rst_y1 + gap
+        swr_y1 = swr_y0 + dbm_box_h
+        swr_val = self._swr
+        if self._tx_mode and swr_val is not None:
+            # Background colour by SWR range
+            if swr_val <= 1.5:
+                swr_bg = "#1a7a1a"   # good — green
+            elif swr_val <= 2.0:
+                swr_bg = "#8a7a00"   # acceptable — yellow (dark to keep text readable)
+            elif swr_val <= 3.0:
+                swr_bg = "#b05000"   # poor — orange
+            else:
+                swr_bg = "#9a1010"   # dangerous — red
+            swr_text = f"{swr_val:.1f}:1"
+            swr_fg   = "#ffffff"
+        else:
+            swr_bg   = "#0a1820"
+            swr_text = "---"
+            swr_fg   = C["text"]
+        self.create_rectangle(box_x0, swr_y0, box_x1, swr_y1,
+                               fill=swr_bg, outline=C["sep"])
+        self.create_line(box_x0 + tag_w, swr_y0,
+                         box_x0 + tag_w, swr_y1,
+                         fill=C["sep"], width=1)
+        self.create_text(box_x0 + tag_w // 2,
+                         (swr_y0 + swr_y1) // 2,
+                         text="SWR:",
+                         fill=C["text"],
+                         font=_gui_font(tag_fs, "bold"),
+                         anchor="center")
+        self.create_text(box_x0 + tag_w + max(3, int(round(4*sc))),
+                         (swr_y0 + swr_y1) // 2,
+                         text=swr_text,
+                         fill=swr_fg,
                          font=_gui_font(dbm_fs, "bold"),
                          anchor="w")
         # needle
@@ -5416,6 +5461,7 @@ class App:
                             self.smeter.set_value(
                                 msg.get("smeter_dbm", -127.0),
                                 msg.get("smeter_text", ""))
+                            self.smeter.set_swr(msg.get("swr"))
                         except Exception:
                             traceback.print_exc()
                         continue      # discard stale spectrum frame; grab next
@@ -5499,6 +5545,7 @@ class App:
             # RTPAudioClient), not from this server-reported message, so it
             # always reflects the actual received signal.
             self.smeter.set_value(msg.get("smeter_dbm",-127.0),msg.get("smeter_text",""))
+            self.smeter.set_swr(msg.get("swr"))
         elif t=="af_local":
             # Suppress AF waterfall/spectrum while transmitting.
             if not self.state.get("ptt", False):

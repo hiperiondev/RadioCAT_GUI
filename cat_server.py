@@ -1329,6 +1329,8 @@ class RadioState:
         # AGC smoothing state for the S-meter / AF level
         self._smoothed_signal_db = NOISE_FLOOR_DBM
         self._t0 = time.time()
+        # SWR simulation state (smoothed, updated each TX data frame)
+        self._smoothed_swr = 1.2
 
         # A handful of fixed "stations" relative to 0 Hz (absolute freq).
         # They become visible whenever they fall inside the current span.
@@ -2048,6 +2050,7 @@ class RadioState:
             mode = self.mode
             t0 = self._t0
             iq_source = self.iq_source
+            ptt = self.ptt
 
         span = sample_rate / zoom
         f_start = center - span / 2.0
@@ -2088,6 +2091,23 @@ class RadioState:
             smeter_dbm, lo_f, hi_f, rf_gain, mute, squelch_open
         )
 
+        # SWR simulation: only meaningful while PTT is on.
+        # We generate a slowly-drifting value and smooth it so it looks
+        # like a real SWR bridge reading rather than pure white noise.
+        if ptt:
+            raw_swr = 1.1 + random.uniform(0.0, 0.6) + abs(random.gauss(0, 0.15))
+            raw_swr = max(1.0, raw_swr)
+            with self.lock:
+                alpha_swr = 0.25
+                self._smoothed_swr = (
+                    (1 - alpha_swr) * self._smoothed_swr + alpha_swr * raw_swr
+                )
+                swr_value = round(self._smoothed_swr, 2)
+        else:
+            with self.lock:
+                self._smoothed_swr = 1.2   # reset for next TX
+            swr_value = None
+
         msg = {
             "type": "data",
             "f_start": f_start,
@@ -2098,6 +2118,7 @@ class RadioState:
             "smeter_dbm": smeter_dbm,
             "smeter_text": smeter_text,
             "squelch_open": squelch_open,
+            "swr": swr_value,
         }
         return msg
 
