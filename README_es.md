@@ -1,3 +1,9 @@
+<div align="center">
+  <a href="https://github.com/hiperiondev/RadioCAT_GUI">
+    <img src="images/full_gui.png" alt="screenshot">
+  </a>
+</div>
+
 # CAT GUI — Interfaz de Control SDR para Radioaficionados
 
 Sistema cliente-servidor en Python para controlar un transceptor de Radio Definida por Software (SDR). `cat_gui.py` es una interfaz de escritorio Tkinter completa; `cat_server.py` es un backend compatible con el protocolo que incluye un simulador de señales integrado, lo que permite que la GUI funcione de inmediato sin configuración adicional — y puede ser reemplazado (o extendido) con un driver real de hardware SDR.
