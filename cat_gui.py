@@ -3393,11 +3393,15 @@ class App:
 
         # ── Date / time — own row at very bottom of box ───────────────────────
         self.clock_var=tk.StringVar(value="")
+        self.device_var=tk.StringVar(value="")
         clk_row=tk.Frame(bot_l,bg=C["panel_bg"])
         clk_row.pack(fill="x",anchor="w",pady=(max(1,int(round(2*sc))),0))
         tk.Label(clk_row,textvariable=self.clock_var,bg=C["panel_bg"],
                  fg=C["text_grn"],font=_gui_font(fs_clk,"bold")
                  ).pack(side="left",padx=max(2,int(round(4*sc))))
+        self._device_lbl=tk.Label(clk_row,textvariable=self.device_var,
+                 bg=C["panel_bg"],fg=C["text_dim"],font=_gui_font(fs_clk))
+        self._device_lbl.pack(side="right", padx=max(2,int(round(4*sc))))
 
         # small yellow battery/progress bar at very bottom
         prog=tk.Frame(lp,bg=C["panel_bg"],height=max(4,int(round(6*sc))))
@@ -4130,11 +4134,33 @@ class App:
     def _open_device_dialog(self, devices):
         """Open a modal window listing up to 20 server-provided device profiles.
         Clicking a device sends select_device to the server, which reloads its
-        configuration from the associated TOML file and tells the GUI to resync."""
+        configuration from the associated TOML file and tells the GUI to resync.
+
+        When called silently from reload_state (self._pending_device_label_restore
+        is set), the dialog is not shown; instead the device label is restored
+        from the supplied list and the flag is cleared.
+        """
+        # ── Silent label-restore path (called from reload_state on startup) ──
+        _restore_idx = getattr(self, '_pending_device_label_restore', 0)
+        if _restore_idx:
+            self._pending_device_label_restore = 0
+            for _d in (devices or []):
+                if _d.get("index", 0) == _restore_idx:
+                    _lbl = _d.get("label", f"Device {_restore_idx}")
+                    self._active_device_label = _lbl
+                    if hasattr(self, 'device_var'):
+                        self.device_var.set(f"Device: {_lbl}")
+                    break
+            return
+
+        # ── Normal interactive path ───────────────────────────────────────────
         sc  = self._sc
         fs  = max(7, int(round(8 * sc)))
         fs_h= max(8, int(round(9 * sc)))
         pad = max(4, int(round(6 * sc)))
+
+        # 1-based index of the currently active device (for checkmark).
+        _active_idx = self.state.get("active_device_index", 0)
 
         top = tk.Toplevel(self.root)
         top.title("Select Device")
@@ -4161,22 +4187,29 @@ class App:
             lst_fr.pack(fill="both", expand=True,
                         padx=pad, pady=(2, pad))
 
-            def _select(idx):
+            def _select(idx, lbl):
                 top.destroy()
                 self._expecting_persist_log = True
+                self._active_device_label = lbl
+                if hasattr(self, 'device_var'):
+                    self.device_var.set(f"Device: {lbl}")
                 self.net.send({"cmd": "select_device", "index": idx})
 
             for dev in devices:
                 didx  = dev.get("index", 0)
                 label = dev.get("label", f"Device {didx}")
+                # Show a checkmark next to the currently active device.
+                is_active = (didx == _active_idx)
+                display_label = f"\u2713  {label}" if is_active else f"    {label}"
                 btn = tk.Button(
-                    lst_fr, text=label, anchor="w",
-                    bg=C["btn_gray"], fg=C["btn_sel_fg"],
+                    lst_fr, text=display_label, anchor="w",
+                    bg=C["btn_sel"] if is_active else C["btn_gray"],
+                    fg=C["btn_grn_fg"] if is_active else C["btn_sel_fg"],
                     activebackground=C["btn_sel"], activeforeground=C["btn_sel_fg"],
                     font=_gui_font(fs), relief="flat", bd=1,
                     padx=max(6, int(round(8*sc))),
                     pady=max(1, int(round(2*sc))),
-                    command=lambda i=didx: _select(i))
+                    command=lambda i=didx, l=label: _select(i, l))
                 btn.pack(fill="x", pady=(0, max(1, int(round(1*sc)))))
 
             sep_line = tk.Frame(lst_fr, bg=C["sep"],
@@ -5556,6 +5589,18 @@ class App:
             # preceding resp:ok message.  Now resync every widget from
             # self.state, suppressing round-trip sends so we don't echo the
             # server's own values back to it.
+            #
+            # Restore the device label from the server's active_device_index
+            # so the display is correct on startup and after reconnect, not
+            # only after the operator manually picks a device in the dialog.
+            _adi = self.state.get("active_device_index", 0)
+            if _adi and hasattr(self, 'device_var'):
+                # Request the device list so we can match index → label.
+                # The reply (_open_device_dialog) will also update the label
+                # when it sees _pending_device_label_restore is set.
+                self._pending_device_label_restore = _adi
+                if getattr(self.net, 'connected', False):
+                    self.net.send({"cmd": "get_devices"})
             #
             # PTT is always forced OFF on connect and device change — it is a
             # session-only transient and must never be inherited from a

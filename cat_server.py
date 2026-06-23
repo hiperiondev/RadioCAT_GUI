@@ -1391,6 +1391,13 @@ class RadioState:
         # Memories are looked up / persisted against this path, so each
         # device keeps its own separate set of 3x20 slots.
         self.device_cfg_path = device_cfg_path
+        # 1-based index of the active device in self.devices (0 = none/unknown).
+        # Derived from device_cfg_path on startup; updated by select_device.
+        self.active_device_index = next(
+            (i + 1 for i, d in enumerate(self.devices)
+             if d.get("config", "").strip() == (device_cfg_path or "")),
+            0
+        )
         self.memory_file = _memory_file_for_device(self.device_cfg_path)
         self.memories = _load_memories(self.memory_file)
 
@@ -1531,6 +1538,10 @@ class RadioState:
                 # TX power levels (watts) and currently selected 0-based index.
                 "power_levels": list(self.power_levels),
                 "power_index":  self.power_index,
+                # 1-based index of the active device profile (0 = none/unknown).
+                # Used by the GUI to restore the device label on startup and to
+                # mark the active device with a checkmark in the device dialog.
+                "active_device_index": self.active_device_index,
             }
 
     # ----------------------------------------------------------- commands ----
@@ -1758,6 +1769,9 @@ class RadioState:
 
                     # Switch device identity: memories + GUI-state file.
                     self.device_cfg_path = cfg_path
+                    # Update the 1-based active_device_index so the GUI can
+                    # restore the device label on next hello/reload_state.
+                    self.active_device_index = idx + 1
                     self.memory_file = _memory_file_for_device(cfg_path)
                     self.memories = _load_memories(self.memory_file)
                     self._gui_state_file = _gui_state_file_for_device(cfg_path)
