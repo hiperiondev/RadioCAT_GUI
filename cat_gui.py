@@ -337,6 +337,9 @@ def _parse_args():
     ap.add_argument('--debug', action='store_true', default=False,
                     help='Enable debug output (e.g. print persistent state values '
                          'recovered from the server).')
+    ap.add_argument('--disable-upper-box', action='store_true', default=False,
+                    help='Hide the upper-left toggle button that opens the upper '
+                         'spec/waterfall panel.')
     _raw = ap.parse_args()
 
     # ── Merge: CLI overrides config; config overrides built-in default ────────
@@ -379,8 +382,9 @@ def _parse_args():
     args.disable_soundcard_select = _raw.disable_soundcard_select \
                                     if hasattr(_raw, 'disable_soundcard_select') else _def_dsc
     args.audio_list    = _raw.audio_list     # one-shot flag; intentionally not stored in config
-    args.restrict_band = _raw.restrict_band  # --restrict-band: block out-of-band LO changes
-    args.debug         = _raw.debug          # --debug: enable verbose debug output
+    args.restrict_band        = _raw.restrict_band         # --restrict-band: block out-of-band LO changes
+    args.debug                = _raw.debug                 # --debug: enable verbose debug output
+    args.disable_upper_box    = _raw.disable_upper_box     # --disable-upper-box: hide upper-left toggle btn
 
     _cli_host = hasattr(_raw, 'host')
     _cli_port = hasattr(_raw, 'port')
@@ -2820,6 +2824,8 @@ class App:
             cursor="hand2",
             command=self._toggle_spec_panel)
         self._toggle_btn.place(x=2,y=2)
+        if _ARGS and _ARGS.disable_upper_box:
+            self._toggle_btn.place_forget()
 
         spec_fr=tk.Frame(right_col,bg=C["spec_bg"],height=scaled('spec_h',sc))
         spec_fr.pack(side="top",fill="x")
