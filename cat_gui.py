@@ -2784,19 +2784,55 @@ class App:
         top.pack(side="top",fill="both",expand=True)
         self._top=top
 
-        self.rf_wf=WFCanvas(top)
+        # ── Content row: horizontal container for new_panel + right column ──
+        # This wrapper spans the full top area so _new_panel can run the full
+        # height of both the waterfall and the spectrum strip simultaneously.
+        content_row=tk.Frame(top,bg=C["win_bg"])
+        content_row.pack(side="top",fill="both",expand=True)
+        self._content_row=content_row
+
+        # New empty command panel (left side, shown only when split is open).
+        # Width matches the main frequency/left-control panel (left_w).
+        self._new_panel=tk.Frame(content_row,bg=C["panel_bg"],
+                                  width=scaled('left_w',sc))
+        self._new_panel.pack_propagate(False)
+        # Not packed yet — hidden by default
+
+        # Right column: holds waterfall (expands) + spectrum strip (fixed height)
+        right_col=tk.Frame(content_row,bg=C["win_bg"])
+        right_col.pack(side="left",fill="both",expand=True)
+        self._right_col=right_col
+
+        self.rf_wf=WFCanvas(right_col)
         self.rf_wf._app=self
         self.rf_wf.pack(side="top",fill="both",expand=True)
 
-        spec_fr=tk.Frame(top,bg=C["spec_bg"],height=scaled('spec_h',sc))
-        spec_fr.pack(side="top",fill="x"); spec_fr.pack_propagate(False)
+        # ── Toggle button: overlaid on upper-left of waterfall via place() ────
+        # ▼ = new panel closed (default)  |  ▲ = new panel open
+        self._panel_open=False
+        _tbtn_fs=max(7,int(round(8*sc)))
+        self._toggle_btn=tk.Button(
+            top,text="▼",
+            bg=C["btn_gray"],fg=C["text"],
+            font=_gui_font(_tbtn_fs),
+            relief="flat",bd=0,
+            padx=3,pady=1,
+            cursor="hand2",
+            command=self._toggle_spec_panel)
+        self._toggle_btn.place(x=2,y=2)
+
+        spec_fr=tk.Frame(right_col,bg=C["spec_bg"],height=scaled('spec_h',sc))
+        spec_fr.pack(side="top",fill="x")
+        spec_fr.pack_propagate(False)
         self._spec_fr=spec_fr
         self.rf_spec=SpecCanvas(spec_fr,self,show_filter=True)
         self.rf_spec.pack(fill="both",expand=True)
 
         # ── toolbar between RF and bottom ─────────────────────────────────────
-        self._toolbar1_parent=r
-        self._toolbar1=_toolbar(r,rbw="23.4 Hz",avg="2",sc=sc,app=self,box_id="rf",
+        # Parent is right_col (not root) so the toolbar shifts right with the
+        # waterfall and spectrum strip when the left panel is opened.
+        self._toolbar1_parent=right_col
+        self._toolbar1=_toolbar(right_col,rbw="23.4 Hz",avg="2",sc=sc,app=self,box_id="rf",
                                 initial_view=self.state.get("toolbar_view_rf","Waterfall"),
                                 spec_ref=self.state.get("spec_ref_rf",0),
                                 spec_ave=self.state.get("spec_ave_rf",2))
@@ -2821,6 +2857,30 @@ class App:
         # ── Bind window resize so bottom panel is always fully visible ─────────
         self._resize_after_id = None
         self.root.bind("<Configure>", self._on_resize, add="+")
+
+    # ── Toggle upper-left spec panel ──────────────────────────────────────────
+    def _toggle_spec_panel(self):
+        """Toggle the split command panel in the upper spectrum/waterfall area.
+
+        Closed (▼): waterfall + spectrum strip span full width (default).
+        Open   (▲): left side shows an empty panel (width = left control panel),
+                    right side shows both the waterfall and the spectrum strip.
+        """
+        sc=self._sc
+        self._panel_open=not self._panel_open
+        if self._panel_open:
+            # Insert new_panel on the left of content_row (before right_col),
+            # so it spans the full height of both waterfall and spectrum strip.
+            self._right_col.pack_forget()
+            self._new_panel.config(width=scaled('left_w',sc))
+            self._new_panel.pack(side="left",fill="y")
+            self._right_col.pack(side="left",fill="both",expand=True)
+            self._toggle_btn.config(text="▲")
+        else:
+            # Remove new_panel; right_col (waterfall + spectrum) fills the row
+            self._new_panel.pack_forget()
+            self._toggle_btn.config(text="▼")
+        self.root.after(50,self._apply_top_heights)
 
     # ── left control panel ────────────────────────────────────────────────────
     def _build_left(self,parent):
@@ -3988,6 +4048,9 @@ class App:
 
         # Also rebuild top-area fixed-height frames (spec strip)
         self._spec_fr.config(height=scaled('spec_h',sc))
+        # Keep the new command panel's width in sync with left_w at the new scale
+        if hasattr(self,'_new_panel'):
+            self._new_panel.config(width=scaled('left_w',sc))
 
         # Rebuild left and right panels
         self._build_left(self._bot)
@@ -4007,16 +4070,8 @@ class App:
                                 initial_view=self.state.get("toolbar_view_rf","Waterfall"),
                                 spec_ref=self.state.get("spec_ref_rf",0),
                                 spec_ave=self.state.get("spec_ave_rf",2))
-        # Re-pack toolbar1 before _bot by temporarily removing _bot from the
-        # geometry manager, letting _toolbar() pack itself in the correct slot,
-        # then re-packing _bot with its original options.  This avoids the
-        # fragile pack(before=...) call which requires both widgets to share
-        # the same geometry manager — a constraint that silently breaks if
-        # either widget is ever re-parented during a future refactor.
-        self._bot.pack_forget()
-        # _toolbar() calls bar.pack(side="top", fill="x") internally; no
-        # additional pack call is needed here.
-        self._bot.pack(side="top", fill="both", expand=False)
+        # toolbar1 is now in right_col (not root), so it packs naturally after
+        # spec_fr in that column. No ordering dance with _bot is needed.
 
         # Update the persistent scale label/buttons to show & match the
         # current scale value/size
