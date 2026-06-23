@@ -4,7 +4,7 @@
   "lo_b_freq": 21300000.0,
   "lo_active": "A",
   "zoom": 1,
-  "mode": "APRS",
+  "mode": "USB",
   "filter_lo": 100,
   "filter_hi": 2800,
   "agc": "Med",
@@ -70,5 +70,5 @@
   "spec_ref_af": 0.0,
   "spec_ave_af": 1,
   "sample_rate": 333333.0,
-  "antenna_index": 3
+  "antenna_index": 4
 }

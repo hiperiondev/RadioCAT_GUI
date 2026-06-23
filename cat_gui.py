@@ -5410,7 +5410,30 @@ class App:
                 self.state.get("allowed_bands", [])
             )
             _cur_ant = msg.get("current", self.state.get("antenna_index", 0))
-            self._open_antenna_dialog(_antennas, _cur_ant)
+            if getattr(self, '_antenna_apply_silent', False):
+                # Called automatically by reload_state on startup or device
+                # change — apply the active antenna's band restriction without
+                # opening the dialog. This is more reliable than re-deriving
+                # from the resp:ok state payload, which may carry empty
+                # sub-lists that cannot distinguish "inherit" from "no data".
+                self._antenna_apply_silent = False
+                _sa_ant_bands = self._antenna_allowed_bands.get(_cur_ant, [])
+                _sa_dev_bands = getattr(self, "_device_allowed_bands", [])
+                if _sa_ant_bands and _sa_dev_bands:
+                    self.state["allowed_bands"] = [
+                        b for b in _sa_ant_bands if b in _sa_dev_bands]
+                elif _sa_ant_bands:
+                    self.state["allowed_bands"] = list(_sa_ant_bands)
+                elif _sa_dev_bands:
+                    self.state["allowed_bands"] = list(_sa_dev_bands)
+                if hasattr(self, "_refresh_band_highlight"):
+                    self._refresh_band_highlight()
+                if hasattr(self, '_draw_ptt_btn'):
+                    self._draw_ptt_btn(bool(self.state.get('ptt', False)),
+                                       self._ptt_band_ok())
+                self._refresh()
+            else:
+                self._open_antenna_dialog(_antennas, _cur_ant)
         elif t == "memory_list":
             # Server replied to get_memories / save_memory — refresh the
             # memory dialog (if still open on the matching position).
@@ -5439,6 +5462,45 @@ class App:
                 # Use _ptt_band_ok() so --restrict-band is re-evaluated against
                 # the new device's allowed_bands (just merged into state above).
                 self._draw_ptt_btn(False, self._ptt_band_ok())
+            # Clear stale per-device antenna/band caches that were populated
+            # from the previous device's antenna dialog.  The resp:ok state
+            # handler (which runs before reload_state) applies antenna
+            # restrictions to allowed_bands using these caches — but after a
+            # device change they still hold the OLD device's data, so they
+            # corrupt the new device's allowed_bands.  Clearing them here and
+            # re-deriving the correct value from the server's own
+            # antenna_allowed_bands payload (embedded in state by resp:ok)
+            # ensures band buttons always reflect the current device + antenna.
+            self._antenna_allowed_bands = {}
+            if hasattr(self, '_device_allowed_bands'):
+                del self._device_allowed_bands
+            # Re-derive allowed_bands for the new device from the server's
+            # antenna_allowed_bands list and the restored antenna_index,
+            # correcting any stale-cache contamination from the state handler.
+            _rl_ant_idx = self.state.get("antenna_index", 0)
+            _rl_dev_bands = self.state.get("allowed_bands", [])
+            if _rl_ant_idx:
+                _rl_aab = self.state.get("antenna_allowed_bands", [])
+                _rl_ant_bands = (
+                    _rl_aab[_rl_ant_idx - 1]
+                    if 1 <= _rl_ant_idx <= len(_rl_aab) else [])
+                if _rl_ant_bands and _rl_dev_bands:
+                    self.state["allowed_bands"] = [
+                        b for b in _rl_ant_bands if b in _rl_dev_bands]
+                elif _rl_ant_bands:
+                    self.state["allowed_bands"] = list(_rl_ant_bands)
+                # else: no antenna restriction — keep device-level bands as-is
+            # The antenna_allowed_bands embedded in resp:ok may carry empty
+            # sub-lists that cannot distinguish "antenna inherits device
+            # restriction" from "no antenna-specific data available" — this
+            # is the case on initial hello where the server hasn't resolved
+            # per-antenna bands yet.  Request the full antenna_list so the
+            # handler can apply accurate bands immediately without opening
+            # the dialog (flag checked in the antenna_list branch below).
+            if self.state.get("antenna_index", 0) and getattr(self, 'net', None) \
+                    and getattr(self.net, 'connected', False):
+                self._antenna_apply_silent = True
+                self.net.send({"cmd": "get_antennas"})
             self._sup = True
             try:
                 # Frequency displays
@@ -5470,37 +5532,8 @@ class App:
                             int(self.state.get("lo_freq", 0)))
                         self._lo_band["B"] = _band_for_freq(
                             int(self.state.get("lo_b_freq", 0)))
-                    # Re-apply per-antenna band restriction for the restored
-                    # antenna_index so band buttons reflect the correct set.
-                    _rst_ant_idx = self.state.get("antenna_index", 0)
-                    if _rst_ant_idx:
-                        # Prefer the live cache populated by the antenna dialog
-                        # (most up-to-date).  Fall back to the list the server
-                        # embeds in every resp:ok payload so the restriction is
-                        # applied even when the antenna dialog has never been
-                        # opened (hasattr guard would otherwise skip this block).
-                        if hasattr(self, "_antenna_allowed_bands"):
-                            _rst_ant_bands = self._antenna_allowed_bands.get(
-                                _rst_ant_idx, [])
-                        else:
-                            _aab = self.state.get("antenna_allowed_bands", [])
-                            _rst_ant_bands = (
-                                _aab[_rst_ant_idx - 1]
-                                if 1 <= _rst_ant_idx <= len(_aab) else [])
-                        _rst_dev_bands = getattr(
-                            self, "_device_allowed_bands",
-                            self.state.get("allowed_bands", []))
-                        if _rst_ant_bands and _rst_dev_bands:
-                            # Device is the hard ceiling: antenna can only
-                            # restrict further, never grant bands the device
-                            # does not support.
-                            self.state["allowed_bands"] = [
-                                b for b in _rst_ant_bands
-                                if b in _rst_dev_bands]
-                        elif _rst_ant_bands:
-                            self.state["allowed_bands"] = list(_rst_ant_bands)
-                        elif _rst_dev_bands:
-                            self.state["allowed_bands"] = list(_rst_dev_bands)
+                    # allowed_bands has been re-derived above from the new
+                    # device's server data — safe to use directly here.
                     if hasattr(self, '_refresh_band_highlight'):
                         self._refresh_band_highlight()
                 # Re-centre the upper spectrum/waterfall span for the
@@ -5547,14 +5580,30 @@ class App:
             # The server always sends the device-level allowed_bands.  If a
             # specific antenna is selected its per-antenna restriction must
             # override that value — otherwise all band buttons stay enabled.
-            # antenna_allowed_bands is a 0-based list of 10 sorted lists sent
-            # by the server in every resp:ok payload.
+            # Prefer the live _antenna_allowed_bands cache (populated when the
+            # antenna dialog was last opened) because the antenna_allowed_bands
+            # list embedded in the resp:ok payload may contain empty sub-lists
+            # (meaning "inherit device restriction") and would leave allowed_bands
+            # at the device-level value, making all bands appear available.
             _st_ant_idx = self.state.get("antenna_index", 0)
-            _st_ant_ab  = self.state.get("antenna_allowed_bands", [])
-            if _st_ant_idx and 1 <= _st_ant_idx <= len(_st_ant_ab):
-                _st_ant_specific = _st_ant_ab[_st_ant_idx - 1]
-                if _st_ant_specific:   # non-empty = antenna has its own restriction
-                    self.state["allowed_bands"] = list(_st_ant_specific)
+            if _st_ant_idx:
+                if hasattr(self, "_antenna_allowed_bands"):
+                    _st_ant_bands = self._antenna_allowed_bands.get(_st_ant_idx, [])
+                else:
+                    _aab = self.state.get("antenna_allowed_bands", [])
+                    _st_ant_bands = (
+                        _aab[_st_ant_idx - 1]
+                        if 1 <= _st_ant_idx <= len(_aab) else [])
+                _st_dev_bands = getattr(
+                    self, "_device_allowed_bands",
+                    self.state.get("allowed_bands", []))
+                if _st_ant_bands and _st_dev_bands:
+                    self.state["allowed_bands"] = [
+                        b for b in _st_ant_bands if b in _st_dev_bands]
+                elif _st_ant_bands:
+                    self.state["allowed_bands"] = list(_st_ant_bands)
+                elif _st_dev_bands:
+                    self.state["allowed_bands"] = list(_st_dev_bands)
             # Sync all widget values from the newly merged state, suppressing
             # round-trip sends (same approach as reload_state).  This ensures
             # that after a hello/resp:ok the frequency displays, sliders, and
