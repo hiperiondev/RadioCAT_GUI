@@ -2102,27 +2102,78 @@ class SMeter(tk.Canvas):
                         fill="#040c1a",outline="")
         self.create_arc(bb,start=self.AR,extent=sw,style="arc",
                         outline=C["sep"],width=1)
-        ar=arc_r; sb=(cx-ar,cy-ar,cx+ar,cy+ar)
-        aL=self._ang(0); aS=self._ang(self._frac(self.S9)); aR=self._ang(1)
-        self.create_arc(sb,start=aS,extent=aL-aS,style="arc",
-                        outline=C["smeter_grn"],width=arc_w)
-        self.create_arc(sb,start=aR,extent=aS-aR,style="arc",
-                        outline=C["smeter_red"],width=arc_w)
-        for db,lbl in self.MAJOR:
-            f=self._frac(db)
-            col=C["smeter_red"] if db>self.S9 else C["text"]
-            x1,y1=self._pt(cx,cy,tick_outer,f)
-            x2,y2=self._pt(cx,cy,tick_major_inner,f)
-            self.create_line(x1,y1,x2,y2,fill=col,width=max(1,int(round(2*sc))))
-            xl,yl=self._pt(cx,cy,tick_label_r,f)
-            self.create_text(xl,yl,text=lbl,fill=col,
-                             font=_gui_font(label_fs,"bold"))
-        for db in self.MINOR:
-            f=self._frac(db)
-            col=C["smeter_red"] if db>self.S9 else C["text"]
-            x1,y1=self._pt(cx,cy,tick_outer,f)
-            x2,y2=self._pt(cx,cy,tick_minor_inner,f)
-            self.create_line(x1,y1,x2,y2,fill=col,width=1)
+
+        if self._tx_mode:
+            # ── SWR gauge arc (scale 1–5) replaces S-meter arc in TX mode ──────
+            # SWR zone colours — same palette used in the SWR text box below
+            _swr_zones = [
+                (1.0, 1.5, "#1a7a1a"),   # good    — green
+                (1.5, 2.0, "#8a7a00"),   # accept  — yellow
+                (2.0, 3.0, "#b05000"),   # poor    — orange
+                (3.0, 5.0, "#9a1010"),   # danger  — red
+            ]
+            _SWR_LO = 1.0; _SWR_HI = 5.0
+            def _swr_frac(v):
+                return (max(_SWR_LO, min(_SWR_HI, v)) - _SWR_LO) / (_SWR_HI - _SWR_LO)
+            ar = arc_r; sb = (cx-ar, cy-ar, cx+ar, cy+ar)
+            for z_lo, z_hi, z_col in _swr_zones:
+                f0 = _swr_frac(z_lo); f1 = _swr_frac(z_hi)
+                a0 = self._ang(f0); a1 = self._ang(f1)
+                # tkinter arc: start from a0, sweep toward a1 (negative = clockwise)
+                self.create_arc(sb, start=a1, extent=a0-a1,
+                                style="arc", outline=z_col, width=arc_w)
+            # Major ticks & labels: 1, 1.5, 2, 3, 4, 5
+            _swr_major = [(1.0,"1"),(1.5,"1.5"),(2.0,"2"),(3.0,"3"),(4.0,"4"),(5.0,"5")]
+            for sv, lbl in _swr_major:
+                f = _swr_frac(sv)
+                if   sv <= 1.5: col = "#1a7a1a"
+                elif sv <= 2.0: col = "#8a7a00"
+                elif sv <= 3.0: col = "#b05000"
+                else:           col = "#9a1010"
+                x1,y1 = self._pt(cx,cy,tick_outer,f)
+                x2,y2 = self._pt(cx,cy,tick_major_inner,f)
+                self.create_line(x1,y1,x2,y2,fill=col,width=max(1,int(round(2*sc))))
+                xl,yl = self._pt(cx,cy,tick_label_r,f)
+                self.create_text(xl,yl,text=lbl,fill=col,
+                                 font=_gui_font(label_fs,"bold"))
+            # Minor ticks: 2.5, 3.5, 4.5
+            for sv in (2.5, 3.5, 4.5):
+                f = _swr_frac(sv)
+                col = "#b05000" if sv < 3.0 else "#9a1010"
+                x1,y1 = self._pt(cx,cy,tick_outer,f)
+                x2,y2 = self._pt(cx,cy,tick_minor_inner,f)
+                self.create_line(x1,y1,x2,y2,fill=col,width=1)
+            # "SWR" label at the top-centre of the arc face
+            self.create_text(cx, cy - R * 0.55,
+                             text="SWR", fill=C["text"],
+                             font=_gui_font(label_fs, "bold"))
+            # Needle driven by live SWR value (stays at floor when no SWR yet)
+            swr_needle = self._swr if self._swr is not None else _SWR_LO
+            f_needle = _swr_frac(swr_needle)
+        else:
+            # ── Normal S-meter arc ───────────────────────────────────────────────
+            ar=arc_r; sb=(cx-ar,cy-ar,cx+ar,cy+ar)
+            aL=self._ang(0); aS=self._ang(self._frac(self.S9)); aR=self._ang(1)
+            self.create_arc(sb,start=aS,extent=aL-aS,style="arc",
+                            outline=C["smeter_grn"],width=arc_w)
+            self.create_arc(sb,start=aR,extent=aS-aR,style="arc",
+                            outline=C["smeter_red"],width=arc_w)
+            for db,lbl in self.MAJOR:
+                f=self._frac(db)
+                col=C["smeter_red"] if db>self.S9 else C["text"]
+                x1,y1=self._pt(cx,cy,tick_outer,f)
+                x2,y2=self._pt(cx,cy,tick_major_inner,f)
+                self.create_line(x1,y1,x2,y2,fill=col,width=max(1,int(round(2*sc))))
+                xl,yl=self._pt(cx,cy,tick_label_r,f)
+                self.create_text(xl,yl,text=lbl,fill=col,
+                                 font=_gui_font(label_fs,"bold"))
+            for db in self.MINOR:
+                f=self._frac(db)
+                col=C["smeter_red"] if db>self.S9 else C["text"]
+                x1,y1=self._pt(cx,cy,tick_outer,f)
+                x2,y2=self._pt(cx,cy,tick_minor_inner,f)
+                self.create_line(x1,y1,x2,y2,fill=col,width=1)
+            f_needle = self._frac(self.dbm)
         # digital readout — positioned at top-left of the canvas
         tag_fs   = max(5, int(round(6*sc)))
         tag_w    = max(38, int(round(52*sc)))   # width of "Signal:" label
@@ -2222,9 +2273,8 @@ class SMeter(tk.Canvas):
                          fill=swr_fg,
                          font=_gui_font(dbm_fs, "bold"),
                          anchor="w")
-        # needle
-        f=self._frac(self.dbm)
-        nx,ny=self._pt(cx,cy,needle_inner,f)
+        # needle — f_needle is set in both TX (SWR gauge) and RX (S-meter) branches above
+        nx,ny=self._pt(cx,cy,needle_inner,f_needle)
         self.create_line(cx,cy,nx,ny,fill=C["vfo_line"],width=needle_w)
         self.create_oval(cx-pivot_r,cy-pivot_r,cx+pivot_r,cy+pivot_r,
                          fill=C["vfo_line"],outline="")
