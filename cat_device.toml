@@ -126,9 +126,13 @@ mode_11 = "normal"
 # (e.g. "160m,80m,40m,20m,10m"). Omit or set to all 11 bands to allow
 # everything. Disallowed bands are greyed out in the GUI; in restrict-band
 # mode, frequencies within disallowed bands are also blocked.
+# power_levels: comma-separated list of TX power levels in watts shown in
+# the GUI Power selector (e.g. "5.0,10.0,25.0,50.0,100.0").
+# Empty or omitted = power selector is hidden in the GUI.
 sample_rate = 192000
 sample_rates = "192000,250000,500000,1000000,2000000"
 allowed_bands = "160m,80m,60m,40m,30m,20m,17m,15m,12m,10m"
+power_levels = "1.0,2.0,5.0,10.0,20.0"
 
 [antenna]
 # label_N (N=1..10): human-readable label for antenna port N shown

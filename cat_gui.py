@@ -2638,6 +2638,8 @@ class App:
             split=False,
             antenna_labels=[],
             antenna_index=0,
+            power_levels=[],
+            power_index=0,
         )
         self._sup=False
         # True only when the operator explicitly pressed Stop — used by
@@ -2852,6 +2854,18 @@ class App:
                                  anchor="w")
         self._ant_lbl.pack(side="left", fill="x", expand=True,
                            padx=(max(2, int(round(2*sc))), 0))
+        # Power TX selector — shown only when the device configures power_levels.
+        self._pwr_btn = _fbtn(ant_row, "Power", sc=sc,
+                              bg=C["btn_gray"], fg=C["btn_sel_fg"],
+                              command=self._request_power_levels)
+        self._pwr_btn.pack(side="right", padx=(max(1, int(round(2*sc))), 0))
+        self._pwr_lbl = tk.Label(ant_row, text="", bg=C["panel_bg"],
+                                 fg=C["text_dim"], font=_gui_font(fs_ant),
+                                 anchor="e")
+        self._pwr_lbl.pack(side="right", padx=(0, max(1, int(round(2*sc)))))
+        # Hidden until server confirms power_levels exist for this device.
+        self._pwr_btn.pack_forget()
+        self._pwr_lbl.pack_forget()
 
         # ── Mode buttons + FreqMgr ────────────────────────────────────────────
         mode_row=tk.Frame(lp,bg=C["panel_bg"])
@@ -4101,6 +4115,8 @@ class App:
             self._refresh_band_highlight()
         # Antenna button label: show currently selected antenna name.
         self._refresh_antenna_label()
+        # Power button/label: show/hide and update current level.
+        self._refresh_power_label()
 
 
     # ── Device selection dialog (populated from server) ───────────────────────
@@ -4402,6 +4418,98 @@ class App:
             self._ant_lbl.config(text=text, fg=C["text"])
         else:
             self._ant_lbl.config(text="—", fg=C["text_dim"])
+
+    # ── TX Power selection ────────────────────────────────────────────────────
+    def _request_power_levels(self):
+        """Send get_power_levels to the server; reply opens the Power dialog."""
+        if not (self.net and self.net.connected):
+            messagebox.showinfo("Power", "Not connected to server.",
+                                parent=self.root)
+            return
+        self.net.send({"cmd": "get_power_levels"})
+
+    def _open_power_dialog(self, levels, current=0):
+        """Open a modal window listing the TX power levels from the server.
+        Clicking a row sends set_power with the chosen 0-based index."""
+        sc  = self._sc
+        fs  = max(7, int(round(8 * sc)))
+        top = tk.Toplevel(self.root)
+        top.title("TX Power")
+        top.configure(bg=C["panel_bg"])
+        top.resizable(False, False)
+        top.grab_set()
+
+        tk.Label(top, text="Select TX power level:", bg=C["panel_bg"],
+                 fg=C["text"], font=_gui_font(fs)
+                 ).pack(padx=max(8, int(round(12*sc))),
+                        pady=(max(4, int(round(6*sc))), max(2, int(round(3*sc)))))
+
+        lst_fr = tk.Frame(top, bg=C["panel_bg"])
+        lst_fr.pack(fill="both", expand=True,
+                    padx=max(4, int(round(6*sc))),
+                    pady=(0, max(2, int(round(3*sc)))))
+
+        if not levels:
+            tk.Label(lst_fr, text="No power levels configured for this device.\n"
+                               "Add power_levels to the [sdr] section of the device TOML.",
+                     bg=C["panel_bg"], fg=C["text_dim"], font=_gui_font(fs),
+                     justify="left"
+                     ).pack(padx=max(4, int(round(6*sc))),
+                            pady=max(4, int(round(6*sc))))
+        else:
+            def _fmt_watts(w):
+                return f"{w:g} W"
+
+            def _pick(idx):
+                self.state["power_index"] = idx
+                self._refresh_power_label()
+                self.net.send({"cmd": "set_power", "index": idx})
+                top.destroy()
+
+            for pidx, w in enumerate(levels):
+                disp = _fmt_watts(w)
+                if pidx == current:
+                    disp += "  \u2713"
+                tk.Button(lst_fr, text=disp,
+                          bg=C["btn_gray"], fg=C["btn_sel_fg"],
+                          font=_gui_font(fs), relief="flat", bd=1,
+                          anchor="w",
+                          padx=max(6, int(round(8*sc))),
+                          pady=max(1, int(round(2*sc))),
+                          command=lambda i=pidx: _pick(i)
+                          ).pack(fill="x", pady=(0, max(1, int(round(1*sc)))))
+
+        tk.Button(lst_fr, text="Cancel", command=top.destroy,
+                  bg=C["btn_gray"], fg=C["btn_red_fg"],
+                  font=_gui_font(fs), relief="flat", bd=1,
+                  padx=max(6, int(round(8*sc))),
+                  pady=max(1, int(round(2*sc)))
+                  ).pack(fill="x", pady=(max(2, int(round(3*sc))), 0))
+
+        top.update_idletasks()
+        rw = self.root.winfo_x() + self.root.winfo_width()  // 2
+        rh = self.root.winfo_y() + self.root.winfo_height() // 2
+        tw = top.winfo_reqwidth()
+        th = top.winfo_reqheight()
+        top.geometry(f"+{rw - tw // 2}+{rh - th // 2}")
+
+    def _refresh_power_label(self):
+        """Update the Power button/label visibility and current value label."""
+        if not hasattr(self, "_pwr_btn"):
+            return
+        levels = self.state.get("power_levels", [])
+        idx    = self.state.get("power_index", 0)
+        if levels:
+            # Show button and label
+            self._pwr_btn.pack(side="right",
+                               padx=(max(1, int(round(2*self._sc))), 0))
+            lbl_text = f"{levels[idx]:g} W" if 0 <= idx < len(levels) else "—"
+            self._pwr_lbl.config(text=lbl_text, fg=C["text"])
+            self._pwr_lbl.pack(side="right",
+                               padx=(0, max(1, int(round(2*self._sc)))))
+        else:
+            self._pwr_btn.pack_forget()
+            self._pwr_lbl.pack_forget()
 
     # ── Soundcard device selection dialog ─────────────────────────────────────
     def _open_soundcard_dialog(self):
@@ -5434,6 +5542,10 @@ class App:
                 self._refresh()
             else:
                 self._open_antenna_dialog(_antennas, _cur_ant)
+        elif t == "power_level_list":
+            # Server replied to get_power_levels — open the power selection popup.
+            _cur_pw = msg.get("current", self.state.get("power_index", 0))
+            self._open_power_dialog(msg.get("levels", []), _cur_pw)
         elif t == "memory_list":
             # Server replied to get_memories / save_memory — refresh the
             # memory dialog (if still open on the matching position).

@@ -287,6 +287,9 @@ _DEVICE_CONFIG_DEFAULTS = {
         # Valid names: 160m, 80m, 60m, 40m, 30m, 20m, 17m, 15m, 12m, 10m, 6m.
         # All bands are allowed by default (empty string = all).
         "allowed_bands": "160m,80m,60m,40m,30m,20m,17m,15m,12m,10m,6m",
+        # Comma-separated list of TX power levels (watts) selectable in the GUI.
+        # Example: "5.0,10.0,25.0,50.0,100.0". Empty = power selection hidden.
+        "power_levels": "",
     },
     "antenna": {
         # Antenna port labels (up to 10). Empty label = slot unused/hidden.
@@ -439,7 +442,7 @@ _DEVICE_CONFIG_KEY_ORDER = {
     "user_buttons": [k for n in range(1, 15) for k in (f"label_{n}", f"type_{n}", f"list_{n}")],
     "user_mods": [k for n in range(1, 11) for k in (f"label_{n}", f"type_{n}")],
     "rf_usr_btns": [k for n in range(1, 12) for k in (f"label_{n}", f"mode_{n}")],
-    "sdr": ["sample_rate", "sample_rates", "allowed_bands"],
+    "sdr": ["sample_rate", "sample_rates", "allowed_bands", "power_levels"],
     "antenna": [f"label_{n}" for n in range(1, 11)] + [f"allowed_bands_{n}" for n in range(1, 11)],
 }
 _DEVICE_CONFIG_SECTION_ORDER = ["user_buttons", "user_mods", "rf_usr_btns", "sdr", "antenna"]
@@ -486,7 +489,10 @@ _DEVICE_CONFIG_SECTION_COMMENTS = {
         '# allowed_bands: comma-separated list of amateur bands this device permits\n'
         '# (e.g. "160m,80m,40m,20m,10m"). Omit or set to all 11 bands to allow\n'
         '# everything. Disallowed bands are greyed out in the GUI; in restrict-band\n'
-        '# mode, frequencies within disallowed bands are also blocked.',
+        '# mode, frequencies within disallowed bands are also blocked.\n'
+        '# power_levels: comma-separated list of TX power levels in watts shown in\n'
+        '# the GUI Power selector (e.g. "5.0,10.0,25.0,50.0,100.0").\n'
+        '# Empty or omitted = power selector is hidden in the GUI.',
     "antenna":
         '# label_N (N=1..10): human-readable label for antenna port N shown\n'
         '# in the GUI Antenna selector. Empty = slot unused/hidden. The GUI sends\n'
@@ -1132,6 +1138,8 @@ _GUI_STATE_KEYS = (
     # Antenna port selection — persisted per-device so the operator's
     # chosen antenna is restored on reconnect or device switch.
     "antenna_index",
+    # TX power selection — persisted per-device (0 = first level / none).
+    "power_index",
 )
 
 
@@ -1250,7 +1258,8 @@ class RadioState:
 
     def __init__(self, user_buttons=None, user_mod_labels=None, user_mod_types=None,
                  rf_usr_btns=None, iq_source=None, devices=None, device_cfg_path=None,
-                 sample_rates=None, default_sample_rate=None, antenna_labels=None):
+                 sample_rates=None, default_sample_rate=None, antenna_labels=None,
+                 power_levels=None):
         self.lock = threading.Lock()
         self.center_freq = 14_195_000.0
         self.sample_rate = 192_000.0
@@ -1359,6 +1368,10 @@ class RadioState:
         # Per-antenna band restrictions: list of 10 frozensets (one per slot).
         # Empty frozenset means "inherit device-level allowed_bands".
         self.antenna_allowed_bands = [frozenset()] * 10
+        # TX power levels (watts) from [sdr].power_levels. Empty = feature hidden.
+        # power_index: 0-based index into power_levels (0 = first level).
+        self.power_levels = list(power_levels) if power_levels else []
+        self.power_index  = 0
         if self.iq_source is None and default_sample_rate is not None:
             try:
                 _dsr = int(float(default_sample_rate))
@@ -1515,6 +1528,9 @@ class RadioState:
                 # Per-antenna band restrictions (list of 10 sorted lists).
                 # Empty list at index N means inherit device-level allowed_bands.
                 "antenna_allowed_bands": [sorted(s) for s in self.antenna_allowed_bands],
+                # TX power levels (watts) and currently selected 0-based index.
+                "power_levels": list(self.power_levels),
+                "power_index":  self.power_index,
             }
 
     # ----------------------------------------------------------- commands ----
@@ -1707,6 +1723,21 @@ class RadioState:
                         # Empty / unrecognised → permit everything
                         self.allowed_bands = _ab_parsed if _ab_parsed else _all_bands
 
+                        # TX power levels from [sdr].power_levels (watts, floats).
+                        _pw_raw = _sdr.get("power_levels",
+                                           _DEVICE_CONFIG_DEFAULTS["sdr"]["power_levels"])
+                        _pw_parsed = []
+                        for _pw in str(_pw_raw).split(","):
+                            _pw = _pw.strip()
+                            if _pw:
+                                try:
+                                    _pw_parsed.append(float(_pw))
+                                except ValueError:
+                                    pass
+                        self.power_levels = _pw_parsed
+                        # Reset power selection when switching devices.
+                        self.power_index = 0
+
                         # Antenna port labels (up to 10) from [antenna].label_N.
                         self.antenna_labels = [
                             str(_ant.get(f"label_{n}", ""))
@@ -1781,6 +1812,27 @@ class RadioState:
                 else:
                     print(f"[cat_server] WARNING: rejected select_antenna "
                           f"{_req_ant!r} — invalid or unconfigured slot")
+            elif c == "get_power_levels":
+                # GUI's "Power" button was pressed. Reply with the power
+                # level list defined in this device's [sdr].power_levels,
+                # plus the currently selected 0-based index.
+                outgoing = {"type": "power_level_list",
+                            "levels": list(self.power_levels),
+                            "current": self.power_index}
+            elif c == "set_power":
+                # {"cmd": "set_power", "index": N} — 0-based index into
+                # power_levels. Only accepted when N is a valid index.
+                try:
+                    _req_pw = int(cmd.get("index", 0))
+                except (TypeError, ValueError):
+                    _req_pw = -1
+                if 0 <= _req_pw < len(self.power_levels):
+                    self.power_index = _req_pw
+                    print(f"[cat_server] power selected: "
+                          f"{self.power_levels[_req_pw]} W (index {_req_pw})")
+                else:
+                    print(f"[cat_server] WARNING: rejected set_power "
+                          f"{cmd.get('index')!r} — out of range")
             elif c == "set_sample_rate":
                 # {"cmd": "set_sample_rate", "value": <Hz>} — only accepted
                 # if value is one of this device's configured sample_rates
@@ -2577,6 +2629,8 @@ def _parse_args():
     # TOML-only, from cat_device.toml's [sdr] section).
     _raw.sdr_sample_rate  = _sdr.get("sample_rate",  _DD["sdr"]["sample_rate"])
     _raw.sdr_sample_rates = _sdr.get("sample_rates", _DD["sdr"]["sample_rates"])
+    # TX power levels for the default device profile (TOML-only, from [sdr]).
+    _raw.sdr_power_levels = _sdr.get("power_levels", _DD["sdr"]["power_levels"])
     # Antenna port labels for the default device profile (TOML-only,
     # from cat_device.toml's [antenna] section).
     _raw.antenna_labels = [
@@ -2711,6 +2765,18 @@ def main():
               f"{' float' if iq_source.is_float else ''}, center_freq={cf}")
         print("[cat_server]   -> looping this file forever for spectrum/waterfall")
 
+    def _parse_power_levels(raw):
+        """Parse a comma-separated power_levels string into a sorted list of floats."""
+        result = []
+        for p in str(raw).split(","):
+            p = p.strip()
+            if p:
+                try:
+                    result.append(float(p))
+                except ValueError:
+                    pass
+        return result
+
     radio = RadioState(user_buttons=_build_user_buttons(args),
                        user_mod_labels=_build_user_mods(args),
                        user_mod_types=_build_user_mod_types(args),
@@ -2720,7 +2786,8 @@ def main():
                        device_cfg_path=args.device_config,
                        sample_rates=_parse_sample_rates(args.sdr_sample_rates),
                        default_sample_rate=args.sdr_sample_rate,
-                       antenna_labels=args.antenna_labels)
+                       antenna_labels=args.antenna_labels,
+                       power_levels=_parse_power_levels(args.sdr_power_levels))
 
     # BUG FIX: device identity mismatch on startup.
     # ----------------------------------------------------------------------

@@ -129,6 +129,7 @@ mode_11 = "normal"
 sample_rate = 192000
 sample_rates = "192000,250000,500000,1000000,2000000"
 allowed_bands = "80m,60m,40m,30m,20m,10m,6m"
+power_levels = "5.0,10.0,25.0,50.0,100.0"
 
 [antenna]
 # label_N (N=1..10): human-readable label for antenna port N shown

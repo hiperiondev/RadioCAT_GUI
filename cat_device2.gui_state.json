@@ -70,5 +70,6 @@
   "spec_ref_af": 0.0,
   "spec_ave_af": 1,
   "sample_rate": 333333.0,
-  "antenna_index": 4
+  "antenna_index": 4,
+  "power_index": 4
 }
