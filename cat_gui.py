@@ -1152,7 +1152,7 @@ class RTPAudioClient:
         self._sample_rate = sample_rate
         self._frame_ms    = frame_ms
         self._frame_samps = int(sample_rate * frame_ms / 1000)
-        with self._lock:                        # BUG-4: guard rebind against concurrent _rx_loop reads
+        with self._lock:                        # guard rebind against concurrent _rx_loop reads
             self._af_ring     = array.array('h')   # discard any samples from a prior session
             self._af_last_put = 0.0                # ensure first AF frame of new session is not skipped
 
@@ -1181,7 +1181,7 @@ class RTPAudioClient:
             pass
 
         threading.Thread(target=self._rx_loop, daemon=True).start()
-        threading.Thread(target=self._af_worker, daemon=True).start()  # BUG-6
+        threading.Thread(target=self._af_worker, daemon=True).start()
         # PTT starts OFF → open speaker stream immediately so audio plays on connect
         self._open_rx_stream()
         print(f"[audio] RTP client open  local_udp={self._local_port}"
@@ -1350,12 +1350,12 @@ class RTPAudioClient:
             # the server — into the local AF spectrum analyzer so the AF
             # spectrum/waterfall box always reflects the actual received
             # signal, independent of whether local playback is available.
-            # BUG-6: FFT is offloaded to _af_worker; just buffer here.
+            # FFT is offloaded to _af_worker; just buffer here.
             samples = array.array('h')
             samples.frombytes(pcm)
             if sys.byteorder != "little":
                 samples.byteswap()
-            with self._lock:                    # BUG-4: guard extend against concurrent open() rebind
+            with self._lock:                    # guard extend against concurrent open() rebind
                 self._af_ring.extend(samples)
                 if len(self._af_ring) > _AF_RING_MAX:
                     del self._af_ring[:-_AF_FFT_N]   # keep only the most recent window
@@ -1364,7 +1364,7 @@ class RTPAudioClient:
     # ── AF spectrum worker ────────────────────────────────────────────────────
     def _af_worker(self):
         """Dedicated thread: drains _af_ring and posts AF spectrum to the GUI
-        queue.  Keeps FFT computation off the UDP receive thread (BUG-6)."""
+        queue.  Keeps FFT computation off the UDP receive thread."""
         while self._alive:
             with self._lock:
                 if len(self._af_ring) >= _AF_FFT_N:
@@ -1701,7 +1701,7 @@ class WFCanvas(tk.Canvas):
             self.create_line(x,0,x,ch-lbl_h,fill=C["grid"],tags="wf_overlay")
             lbl=f"{f:.0f}" if self.af else f"{f/1000:.0f}"
             # Label drawn in the reserved bottom strip, below the image.
-            # BUG-10: skip labels whose left edge would be clipped at the canvas
+            # skip labels whose left edge would be clipped at the canvas
             # border (mirrors the same guard in SpecCanvas.draw()).
             _lbl_min_x = max(4, int(round(4 * sc)))
             if x >= _lbl_min_x:
@@ -1733,9 +1733,9 @@ class SpecCanvas(tk.Canvas):
         self.data=[]
         self.drag=None; self._last=0.0
         self._tx_active=False
-        self._peak       = None   # BUG-5: per-bin peak dB array (None until first draw)
-        self._peak_decay = 0.5    # BUG-5: dB/frame decay rate for peak-hold
-        # BUG-7: compute once — stipple is platform-constant for the process lifetime
+        self._peak       = None   # per-bin peak dB array (None until first draw)
+        self._peak_decay = 0.5    # dB/frame decay rate for peak-hold
+        # compute once — stipple is platform-constant for the process lifetime
         self._stipple = "gray50" if sys.platform.startswith("linux") else ""
 
         # ── Retained canvas items (created once; updated via coords/itemconfig) ──
@@ -1867,7 +1867,7 @@ class SpecCanvas(tk.Canvas):
             fl=self.app.state["filter_lo"]; fh=self.app.state["filter_hi"]
             x1=self._fx(ctr+fl); x2=self._fx(ctr+fh)
             xc=self._fx(ctr)
-            # BUG-7: self._stipple is computed once in __init__; no per-frame import.
+            # self._stipple is computed once in __init__; no per-frame import.
             self.coords(self._id_filt_r,  x1, 0, x2, draw_h)
             self.coords(self._id_filt_lo, x1, 0, x1, draw_h)
             self.coords(self._id_filt_hi, x2, 0, x2, draw_h)
@@ -1900,7 +1900,7 @@ class SpecCanvas(tk.Canvas):
             self.itemconfig(self._id_db_texts[idx], text=txt, font=gfont)
 
         # ── 4. Frequency grid lines + labels (ON TOP of trace) ────────────────
-        # BUG-12: measure the actual rendered width of the widest dB label
+        # measure the actual rendered width of the widest dB label
         # ("-150", 4 chars) so that X-axis frequency labels don't overlap the
         # Y-axis dB labels, even when a wide custom --gui-font is in use or the
         # scale is high enough to push TkFixedFont wider than the old estimate.

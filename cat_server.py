@@ -224,6 +224,15 @@ except ImportError:
     except ImportError:
         _tomllib = None
 
+if _tomllib is None:
+    print(
+        "[config] WARNING: tomllib/tomli not found — using minimal built-in TOML parser.\n"
+        "[config]          Multi-line strings, TOML arrays (e.g. sample_rates = [192000, 250000]),\n"
+        "[config]          and inline tables are NOT supported and will be misread silently.\n"
+        "[config]          Install tomli (pip install tomli) for full TOML support.",
+        flush=True,
+    )
+
 _SERVER_CONFIG_NAME = "cat_server.toml"   # transport + device list: [server], [audio], [devices]
 _DEVICE_CONFIG_NAME = "cat_device.toml"   # GUI behaviour for one device profile
 
@@ -331,13 +340,32 @@ def _parse_simple_toml(text):
         if '=' in line:
             k, _, v = line.partition('=')
             k = k.strip(); v = v.strip()
-            if (v.startswith('"') and v.endswith('"')) or \
-               (v.startswith("'") and v.endswith("'")):
-                section[k] = v[1:-1]
+            if v.startswith('"') and v.endswith('"'):
+                section[k] = v[1:-1].replace('\\"', '"').replace('\\\\', '\\')
+            elif v.startswith("'") and v.endswith("'"):
+                section[k] = v[1:-1]  # single-quoted: raw, no escape processing
             elif v == 'true':
                 section[k] = True
             elif v == 'false':
                 section[k] = False
+            elif v.startswith('['):
+                # TOML array — not supported by this fallback parser.
+                # Raise early so operators see a clear error rather than a
+                # silently wrong value (e.g. sample_rates parsed as the
+                # literal string "[192000, 250000]" instead of a list).
+                raise ValueError(
+                    f"_parse_simple_toml: TOML array value for key '{k}' is "
+                    "not supported by the built-in fallback parser. "
+                    "Use a comma-separated string instead "
+                    "(e.g. sample_rates = \"192000,250000\"), "
+                    "or install 'tomli' (pip install tomli) for full TOML support."
+                )
+            elif v.startswith('"""') or v.startswith("'''"):
+                raise ValueError(
+                    f"_parse_simple_toml: multi-line string value for key '{k}' is "
+                    "not supported by the built-in fallback parser. "
+                    "Install 'tomli' (pip install tomli) for full TOML support."
+                )
             else:
                 try:    section[k] = int(v)
                 except ValueError:
@@ -581,6 +609,7 @@ def _ensure_config(path, spec, kind="config"):
             print(f"[config] Created default {kind}: {path}")
         except Exception as e:
             print(f"[config] WARNING: could not write default {kind}: {e} — using built-in defaults")
+            return dict(spec.defaults)
         return _load_toml(path)
 
     _cfg = _load_toml(path)
@@ -674,6 +703,15 @@ def _rtp_unpack(data: bytes):
 
 def _linear16_to_ulaw(samples: bytes) -> bytes:
     """Convert raw 16-bit little-endian PCM to 8-bit μ-law bytes."""
+    if np is not None:
+        # Vectorised fast-path: ~20× faster than the pure-Python loop below.
+        s = np.frombuffer(samples, dtype="<i2").astype(np.int32)
+        sign = (s < 0).astype(np.uint8) * 0x80
+        s = np.abs(s).clip(0, 32767) + 33
+        exp = np.floor(np.log2(s)).clip(5, 12).astype(np.uint8) - 5
+        mantissa = ((s >> (exp.astype(np.int32) + 1)) & 0x0F).astype(np.uint8)
+        return (~(sign | (exp << 4) | mantissa) & 0xFF).astype(np.uint8).tobytes()
+    # Pure-Python fallback (used only when numpy is unavailable).
     out = bytearray(len(samples) // 2)
     for i in range(len(out)):
         s = struct.unpack_from("<h", samples, i * 2)[0]
@@ -781,10 +819,7 @@ class IQWavSource:
         self._pos = 0                # read offset (bytes) within the data chunk
         self._lock = threading.Lock()
         self._parse_header()
-        try:
-            self._fh = open(self.path, "rb")
-        except Exception:
-            raise
+        self._fh = open(self.path, "rb")
 
     # -- header parsing -------------------------------------------------------
     def _parse_header(self):
@@ -989,6 +1024,9 @@ class AudioWavSource:
                     else:
                         is_float = (audio_fmt == 3)
                 elif chunk_id == b"data":
+                    if chunk_size > 200 * 1024 * 1024:   # warn over 200 MB
+                        print(f"[audio] WARNING: {path}: large audio file "
+                              f"({chunk_size // 1024 // 1024} MB) — loading into RAM")
                     data = f.read(chunk_size)
                 # RIFF chunks are word (2-byte) aligned
                 f.seek(chunk_start + chunk_size + (chunk_size & 1))
@@ -1362,6 +1400,15 @@ class RadioState:
             snap[key] = list(val) if isinstance(val, list) else val
         return snap
 
+    # Per-attribute fill values used when a saved list is shorter than the
+    # current number of buttons.  user_btn_list_sel stores integer indices
+    # (−1 = nothing selected), so padding with False would be read as index 0.
+    _LIST_FILL_DEFAULTS = {
+        "user_btn_state":    False,
+        "rf_usr_btn_state":  False,
+        "user_btn_list_sel": -1,
+    }
+
     def _apply_gui_state(self, snap):
         """Restore a previously captured snapshot onto self.
         Called under self.lock (or before threads start, as in __init__)."""
@@ -1372,7 +1419,8 @@ class RadioState:
             cur = getattr(self, key, None)
             if isinstance(cur, list) and isinstance(val, list):
                 n = len(cur)
-                setattr(self, key, (list(val) + [False] * n)[:n])
+                fill = self._LIST_FILL_DEFAULTS.get(key, False)
+                setattr(self, key, (list(val) + [fill] * n)[:n])
             else:
                 setattr(self, key, val)
 
@@ -1578,6 +1626,10 @@ class RadioState:
                         _save_gui_state(self._gui_state_file, _out_snap)
                         print(f"[gui_state] saved state for {self.device_cfg_path!r}")
 
+                    if not cfg_path:
+                        print(f"[cat_server] WARNING: device index {idx+1} "
+                              f"({dev.get('label','?')!r}) has no config file configured "
+                              f"— keeping current buttons/rates")
                     if cfg_path:
                         dcfg = _ensure_config(cfg_path, DEVICE_CONFIG_SPEC, kind="device config")
                         _ubtn  = dcfg.get("user_buttons", {})
@@ -1857,25 +1909,25 @@ class RadioState:
                             del hist[:-200]
             # unknown commands are simply ignored (still get an "ok" reply)
 
+            # Persist GUI state while still holding self.lock so the snapshot
+            # is guaranteed to reflect the mutation just applied above.
+            # _autosave_gui_state captures the snapshot synchronously under
+            # the lock; actual file I/O is offloaded to a daemon thread.
+            _STATE_MUTATING_CMDS = {
+                "set_freq", "set_lo_a_freq", "set_tune_freq", "set_lo_b_freq",
+                "set_lo", "set_mode", "set_agc", "set_agc_thresh",
+                "set_filter", "set_rf_gain", "set_volume", "set_squelch",
+                "set_nb", "set_nr", "set_nbrf", "set_nbif",
+                "set_afc", "set_anf", "set_notch", "set_mute",
+                "set_zoom", "user_button", "rf_usr_button",
+                "set_spec_ref", "set_spec_ave", "set_sample_rate",
+                "select_antenna",
+            }
+            if c in _STATE_MUTATING_CMDS:
+                self._autosave_gui_state()
+
         # Show every change received from the GUI on the server console.
         self._log_cmd(cmd)
-
-        # Persist the updated GUI state for the active device after any
-        # operator-adjustable parameter change.  select_device handles its
-        # own save/restore above and is excluded here.
-        _STATE_MUTATING_CMDS = {
-            "set_freq", "set_lo_a_freq", "set_tune_freq", "set_lo_b_freq",
-            "set_lo", "set_mode", "set_agc", "set_agc_thresh",
-            "set_filter", "set_rf_gain", "set_volume", "set_squelch",
-            "set_nb", "set_nr", "set_nbrf", "set_nbif",
-            "set_afc", "set_anf", "set_notch", "set_mute",
-            "set_zoom", "user_button", "rf_usr_button",
-            "set_spec_ref", "set_spec_ave", "set_sample_rate",
-            "select_antenna",
-        }
-        if c in _STATE_MUTATING_CMDS:
-            with self.lock:
-                self._autosave_gui_state()
 
         return outgoing
 
@@ -2187,6 +2239,12 @@ class UDPAudioChannel:
 # ── TCP server ────────────────────────────────────────────────────────────────
 
 class ClientHandler(threading.Thread):
+    # Class-level counter: how many ClientHandler threads are currently alive.
+    # Protected by _client_count_lock so that the finally block in run() can
+    # safely decide whether this is the last client before clearing radio state.
+    _client_count: int = 0
+    _client_count_lock: threading.Lock = threading.Lock()
+
     def __init__(self, sock, addr, radio, audio_channel=None):
         super().__init__(daemon=True)
         self.sock = sock
@@ -2195,6 +2253,8 @@ class ClientHandler(threading.Thread):
         self.audio_channel = audio_channel
         self.send_lock = threading.Lock()
         self.alive = True
+        with ClientHandler._client_count_lock:
+            ClientHandler._client_count += 1
 
     def send_json(self, obj):
         try:
@@ -2270,9 +2330,15 @@ class ClientHandler(threading.Thread):
             pass
         finally:
             self.alive = False
-            with self.radio.lock:
-                self.radio.running = False
-                self.radio.ptt     = False   # already done on connect, but good here too
+            with ClientHandler._client_count_lock:
+                ClientHandler._client_count -= 1
+                is_last = (ClientHandler._client_count == 0)
+            if is_last:
+                # Only reset radio state when the last client leaves; a still-
+                # connected second client may have already sent {"cmd": "start"}.
+                with self.radio.lock:
+                    self.radio.running = False
+                    self.radio.ptt     = False
             try:
                 self.sock.close()
             except OSError:
@@ -2300,7 +2366,7 @@ class ClientHandler(threading.Thread):
                     break
             now = time.monotonic()
             if now >= next_text_tick:
-                next_text_tick = now + text_period
+                next_text_tick = time.monotonic() + text_period  # re-sample after any send_json blocking
                 for tmsg in self.radio.make_user_text_messages():
                     if not self.send_json(tmsg):
                         return   # socket dead — exit _stream_loop entirely
