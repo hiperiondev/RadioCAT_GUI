@@ -1,3 +1,9 @@
+<div align="center">
+  <a href="https://github.com/hiperiondev/RadioCAT_GUI">
+    <img src="images/full_gui.png" alt="screenshot">
+  </a>
+</div>
+
 # CAT GUI — Amateur Radio SDR Control Interface
 
 A Python client-server system for controlling a Software Defined Radio (SDR) transceiver. `cat_gui.py` is a full-featured Tkinter desktop front-end; `cat_server.py` is a protocol-compliant back-end that ships with a built-in signal simulator so the GUI works immediately out of the box — and can be replaced (or extended) with a real SDR hardware driver.
