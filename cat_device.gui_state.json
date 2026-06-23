@@ -1,7 +1,7 @@
 {
-  "center_freq": 14195000.0,
+  "center_freq": 28495000.0,
   "tune_freq": 28504000.0,
-  "lo_b_freq": 21025000.0,
+  "lo_b_freq": 28500000.0,
   "lo_active": "A",
   "zoom": 1,
   "mode": "RTTY",
@@ -70,5 +70,5 @@
   "spec_ref_af": 0.0,
   "spec_ave_af": 5,
   "sample_rate": 333333.0,
-  "antenna_index": 1
+  "antenna_index": 4
 }

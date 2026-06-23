@@ -2910,6 +2910,11 @@ class App:
             # directly from the display widget so any pending digit edits
             # are included without waiting for a server round-trip.
             self._update_rf_view(hz)
+            # Switching the active LO changes which frequency is TX
+            # (non-split mode), so re-evaluate PTT immediately.
+            if hasattr(self, '_draw_ptt_btn'):
+                self._draw_ptt_btn(bool(self.state.get("ptt", False)),
+                                   self._ptt_band_ok())
             self.root.update_idletasks()
             self.net.send({"cmd":"set_lo","lo":which})
 
@@ -3958,22 +3963,47 @@ class App:
         """Return True if PTT should be enabled.
 
         Combines the RTP-socket-bound guard (_ptt_enabled) with an optional
-        frequency/band check when --restrict-band is active: if the active LO
-        frequency is not inside any of the currently allowed amateur bands, PTT
-        is blocked.  This catches the case where the operator switches to an
-        antenna whose allowed_bands no longer covers the current frequency
-        (e.g. a mono-band antenna selected while the rig is on a different band).
+        frequency/band check when --restrict-band is active.
+
+        TX-frequency rules:
+          • SPLIT OFF: the active LO (A or B) is the TX frequency.
+          • SPLIT ON : LO A is always TX; LO B is always RX.
+            Both LO A and LO B frequencies must be in an allowed band
+            because the operator can flip split at any moment and
+            either may be used for transmit.
+
+        PTT is blocked if ANY of the relevant TX frequencies falls outside
+        all currently allowed bands.  It is enabled only when every
+        relevant TX frequency is inside an allowed band.
         """
         if not getattr(self, '_ptt_enabled', False):
             return False
         if not getattr(_ARGS, 'restrict_band', False):
             return True
-        active_lo = self.state.get('lo_active', 'A')
-        active_hz = int(self.state.get('lo_b_freq', 0) if active_lo == 'B'
-                        else self.state.get('lo_freq', 0))
         allowed = set(self.state.get('allowed_bands') or BAND_RANGES.keys())
-        band = _band_for_freq(active_hz)
-        return band is not None and band in allowed
+        split_on = bool(self.state.get('split', False))
+        if split_on:
+            # In split mode LO A = TX.  Check LO A only — that is the
+            # frequency that will actually be transmitted.
+            tx_hz = int(self.state.get('lo_freq', 0))
+            tx_freqs = [tx_hz]
+        else:
+            # Non-split: whichever LO is active is the TX frequency.
+            # Use the live tkinter StringVar (_lo_active) rather than
+            # state['lo_active'] — the state key is server-synced and may
+            # still hold the previous value at the moment the user clicks
+            # the LO A / LO B button, causing _ptt_band_ok to check the
+            # wrong frequency.
+            _lo_var = getattr(self, '_lo_active', None)
+            active_lo = _lo_var.get() if _lo_var is not None else self.state.get('lo_active', 'A')
+            tx_hz = int(self.state.get('lo_b_freq', 0) if active_lo == 'B'
+                        else self.state.get('lo_freq', 0))
+            tx_freqs = [tx_hz]
+        for hz in tx_freqs:
+            band = _band_for_freq(hz)
+            if band is None or band not in allowed:
+                return False
+        return True
 
     def _refresh(self):
         # ── Modulation buttons ──────────────────────────────────────────────
@@ -4893,7 +4923,16 @@ class App:
             freq=entry.get("freq",0) or 0
             disp=self._memory_disp_for(position)
             if disp is not None:
-                disp.set_value(int(freq),notify=True)
+                # Bypass --restrict-band enforcement: memory recall must always
+                # be allowed regardless of whether the stored frequency is in an
+                # enabled band.  The PTT button will still be disabled if the
+                # loaded frequency is out-of-band, but the load itself must not
+                # be blocked or silently reverted.
+                self._mem_loading = True
+                try:
+                    disp.set_value(int(freq),notify=True)
+                finally:
+                    self._mem_loading = False
 
         def _commit(idx,label,freq):
             if idx<len(self._mem_dialog_data):
@@ -4999,6 +5038,11 @@ class App:
         self.state["split"]=new_on
         self.net.send({"cmd":"set_split","enabled":new_on})
         self._refresh_split_ui()
+        # Toggling split changes which LO is the TX frequency, so the
+        # PTT allow/block state must be re-evaluated immediately.
+        if hasattr(self, '_draw_ptt_btn'):
+            self._draw_ptt_btn(bool(self.state.get("ptt", False)),
+                               self._ptt_band_ok())
 
     def _refresh_split_ui(self):
         on=bool(self.state.get("split",False))
@@ -5096,7 +5140,11 @@ class App:
 
     def on_freq_changed(self,hz):
         # ── --restrict-band enforcement ───────────────────────────────────────
-        if getattr(_ARGS, 'restrict_band', False) and hasattr(self, '_freq_allowed'):
+        # Skipped during memory recall (_mem_loading=True): the operator must
+        # always be able to load any stored frequency; PTT will still be
+        # disabled if the loaded frequency is outside an allowed band.
+        if getattr(_ARGS, 'restrict_band', False) and hasattr(self, '_freq_allowed') \
+                and not getattr(self, '_mem_loading', False):
             if not self._freq_allowed(hz, "A"):
                 # Revert the display to the last accepted LO A frequency
                 _prev = int(self.state.get("lo_freq", hz))
@@ -5113,6 +5161,12 @@ class App:
         # Re-centre upper spectrum/waterfall only if LO A is the active LO
         if self._lo_active.get()=="A":
             self._update_rf_view(hz)
+        # Re-evaluate PTT: LO A is always TX when split is on, and is TX
+        # when split is off and LO A is the active LO.  Either way a change
+        # to LO A's frequency may cross a band boundary.
+        if hasattr(self, '_draw_ptt_btn'):
+            self._draw_ptt_btn(bool(self.state.get("ptt", False)),
+                               self._ptt_band_ok())
         if not self._sup: self.net.send({"cmd":"set_lo_a_freq","hz":hz})
 
     def _swap_lo_a_b(self):
@@ -5138,10 +5192,19 @@ class App:
         # Send both frequency changes to the server unconditionally.
         self.net.send({"cmd":"set_lo_a_freq","hz":b_hz})
         self.net.send({"cmd":"set_lo_b_freq","hz":a_hz})
+        # Both LO frequencies changed, so the TX frequency may have crossed
+        # a band boundary.  Re-evaluate PTT immediately.
+        if hasattr(self, '_draw_ptt_btn'):
+            self._draw_ptt_btn(bool(self.state.get("ptt", False)),
+                               self._ptt_band_ok())
 
     def on_lo_b_changed(self,hz):
         # ── --restrict-band enforcement ───────────────────────────────────────
-        if getattr(_ARGS, 'restrict_band', False) and hasattr(self, '_freq_allowed'):
+        # Skipped during memory recall (_mem_loading=True): the operator must
+        # always be able to load any stored frequency; PTT will still be
+        # disabled if the loaded frequency is outside an allowed band.
+        if getattr(_ARGS, 'restrict_band', False) and hasattr(self, '_freq_allowed') \
+                and not getattr(self, '_mem_loading', False):
             if not self._freq_allowed(hz, "B"):
                 # Revert the display to the last accepted LO B frequency
                 _prev = int(self.state.get("lo_b_freq", hz))
@@ -5158,6 +5221,12 @@ class App:
         # Re-centre upper spectrum/waterfall only if LO B is the active LO
         if self._lo_active.get()=="B":
             self._update_rf_view(hz)
+        # Re-evaluate PTT: LO B is TX when split is off and LO B is active.
+        # Even when split is on (LO B = RX), toggling split later would make
+        # it TX, so we keep the button state accurate at all times.
+        if hasattr(self, '_draw_ptt_btn'):
+            self._draw_ptt_btn(bool(self.state.get("ptt", False)),
+                               self._ptt_band_ok())
         if not self._sup: self.net.send({"cmd":"set_lo_b_freq","hz":hz})
 
     def on_tune_changed(self,hz):
