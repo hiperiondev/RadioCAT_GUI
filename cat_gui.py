@@ -3321,7 +3321,8 @@ class App:
                        font=_gui_font(fs_split,"bold"),relief="flat",bd=0,highlightthickness=0,
                        padx=max(3,int(round(4*sc))),pady=max(1,int(round(1*sc))),
                        command=lambda:self._bw_step(-1))
-        self._bw_dn_btn.pack(side="left",padx=(_px_bw,0))
+        _sep_bw = max(4, int(round(6*sc)))
+        self._bw_dn_btn.pack(side="left",padx=(_px_bw, _sep_bw))
 
         self._bw_up_btn=tk.Button(split_row,text="►",anchor="center",
                        bg=C["btn_gray"],fg=C["btn_sel_fg"],
@@ -3329,7 +3330,7 @@ class App:
                        font=_gui_font(fs_split,"bold"),relief="flat",bd=0,highlightthickness=0,
                        padx=max(3,int(round(4*sc))),pady=max(1,int(round(1*sc))),
                        command=lambda:self._bw_step(+1))
-        self._bw_up_btn.pack(side="left",padx=(_px_bw,0))
+        self._bw_up_btn.pack(side="right",padx=(_sep_bw, _px_bw))
 
         # ── Bandwidth selector combobox (far right of split_row) ───────────────
         # Values are populated from server's bandwidth_map[current_mode].
@@ -3360,8 +3361,9 @@ class App:
         self._bw_combo = ttk.Combobox(split_row, textvariable=self._bw_var,
                                       state="readonly", style=_bw_style_name,
                                       width=max(5, int(round(6*sc))),
+                                      justify="center",
                                       font=_gui_font(fs_split))
-        self._bw_combo.pack(side="right", padx=(0, _px_bw))
+        self._bw_combo.pack(side="right", padx=(0, 0))
         # Send the selected bandwidth to the server whenever the operator
         # changes it, so it is persisted per-device on the server side.
         def _on_bw_selected(event=None):

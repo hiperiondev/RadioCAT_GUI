@@ -72,5 +72,5 @@
   "sample_rate": 333333.0,
   "antenna_index": 3,
   "power_index": 2,
-  "selected_bw": "25000"
+  "selected_bw": "12500"
 }
