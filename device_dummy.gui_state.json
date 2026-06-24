@@ -1,7 +1,7 @@
 {
   "center_freq": 10120000.0,
   "tune_freq": 14205000.0,
-  "lo_b_freq": 10119000.0,
+  "lo_b_freq": 10131500.0,
   "lo_active": "B",
   "zoom": 1,
   "mode": "FM",
@@ -72,5 +72,5 @@
   "sample_rate": 333333.0,
   "antenna_index": 3,
   "power_index": 2,
-  "selected_bw": "12500"
+  "selected_bw": "25000"
 }

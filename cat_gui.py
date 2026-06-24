@@ -3293,7 +3293,7 @@ class App:
 
         # ── SPLIT toggle — sits between LO A and LO B rows ─────────────────────
         split_row=tk.Frame(freq_box,bg=C["spec_bg"])
-        split_row.grid(row=1,column=0,sticky="w",
+        split_row.grid(row=1,column=0,sticky="ew",
                        padx=max(1,int(round(2*sc))),
                        pady=(0,max(0,int(round(1*sc)))))
         fs_split=max(6,int(round(7*sc)))
@@ -3322,7 +3322,7 @@ class App:
                        padx=max(3,int(round(4*sc))),pady=max(1,int(round(1*sc))),
                        command=lambda:self._bw_step(-1))
         _sep_bw = max(4, int(round(6*sc)))
-        self._bw_dn_btn.pack(side="left",padx=(_px_bw, _sep_bw))
+        # ◄ packed after combobox so it ends up left of combobox (side=right fill order)
 
         self._bw_up_btn=tk.Button(split_row,text="►",anchor="center",
                        bg=C["btn_gray"],fg=C["btn_sel_fg"],
@@ -3330,7 +3330,8 @@ class App:
                        font=_gui_font(fs_split,"bold"),relief="flat",bd=0,highlightthickness=0,
                        padx=max(3,int(round(4*sc))),pady=max(1,int(round(1*sc))),
                        command=lambda:self._bw_step(+1))
-        self._bw_up_btn.pack(side="right",padx=(_sep_bw, _px_bw))
+        # Pack order for side="right": ► first (rightmost), then combobox, then ◄ (leftmost)
+        self._bw_up_btn.pack(side="right", padx=(_sep_bw, _px_bw))
 
         # ── Bandwidth selector combobox (far right of split_row) ───────────────
         # Values are populated from server's bandwidth_map[current_mode].
@@ -3364,6 +3365,8 @@ class App:
                                       justify="center",
                                       font=_gui_font(fs_split))
         self._bw_combo.pack(side="right", padx=(0, 0))
+        # ◄ packed last among the three → ends up leftmost (adjacent to combobox)
+        self._bw_dn_btn.pack(side="right", padx=(0, _sep_bw))
         # Send the selected bandwidth to the server whenever the operator
         # changes it, so it is persisted per-device on the server side.
         def _on_bw_selected(event=None):
@@ -3427,12 +3430,6 @@ class App:
                     mid_x=(digit_right+band_left)/2
                     btn.place(in_=freq_box,x=mid_x,y=row_mid_y,
                               width=mem_sq,height=mem_sq,anchor="center")
-                    # The TX/RX labels (column 2) are created after these M
-                    # buttons, so without this they'd stack on top of the M
-                    # buttons near LO A / LO B (Tk z-orders later-created
-                    # siblings above earlier ones) — covering both the
-                    # button's label and its click target. Lifting here
-                    # keeps the M buttons clickable and visible every pass.
                     btn.lift()
             except Exception:
                 pass
