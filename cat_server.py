@@ -75,7 +75,7 @@ their default value) on every later run:
     any buttons itself.
 
   * cat_device.toml (--device-config PATH)  -- [user_buttons], [user_mods],
-    [rf_usr_btns], [sdr], [antenna]. This is one device profile's GUI configuration:
+    [rf_usr_btns], [sdr], [antenna], [bandwidth]. This is one device profile's GUI configuration:
     its user-defined buttons, user-defined modulation buttons, RF user
     buttons, selectable SDR sample rates, and antenna port definitions. No [devices] section here.
 
@@ -396,7 +396,7 @@ def _load_toml(path):
 
 # ── [bandwidth] section defaults and helpers ──────────────────────────────────
 # Default filter bandwidths (Hz) for the most common HF amateur modes.
-# Operators can add any extra modulation by editing [bandwidth] in cat_server.toml.
+# Operators can add any extra modulation by editing [bandwidth] in cat_device.toml.
 _BANDWIDTH_DEFAULTS = {
     "AM":  [3000, 6000, 9000, 10000],
     "FM":  [12500, 25000],
@@ -427,9 +427,9 @@ def _parse_bandwidth_value(raw):
 
 
 def _ensure_bandwidth_section(config_path):
-    """Ensure the [bandwidth] section in *config_path* (cat_server.toml) exists
-    and contains at least the five default modulation entries (AM, FM, LSB,
-    USB, CW).
+    """Ensure the [bandwidth] section in *config_path* (cat_device.toml or any
+    per-device config file) exists and contains at least the five default
+    modulation entries (AM, FM, LSB, USB, CW).
 
     If the section is missing it is appended to the file with all defaults.
     If the section exists but is missing one or more default modulations, the
@@ -487,7 +487,7 @@ def _ensure_bandwidth_section(config_path):
             "# The GUI bandwidth selector is populated from the entry whose",
             "# name matches the currently active modulation mode.",
             "# Add an entry here for every modulation label used in",
-            "# [user_mods] device configs.  Values are comma-separated Hz.",
+            "# [user_mods] of this file.  Values are comma-separated Hz.",
         ]
         # Emit default modulations in canonical order, extras sorted after.
         for mod in list(_BANDWIDTH_DEFAULTS.keys()) + sorted(
@@ -701,7 +701,7 @@ def _render_config(cfg, spec, extra_raw_sections=None):
     config dict, per the section/key order and comments in `spec`.
 
     extra_raw_sections: optional dict  {section_name: {key: raw_value}}
-    for sections not part of the spec (e.g. [bandwidth]) that should be
+    for sections not part of the spec (e.g. [bandwidth] in cat_device.toml) that should be
     appended verbatim after the spec-managed sections so they are preserved
     across rewrites triggered by self-correction logic.
     """
@@ -750,7 +750,7 @@ def _ensure_config(path, spec, kind="config"):
     moved to the other file by hand.
 
     Sections that are intentionally managed outside the spec machinery
-    (currently [bandwidth] in cat_server.toml) are silently preserved in any
+    (currently [bandwidth] in cat_device.toml) are silently preserved in any
     rewrite rather than being discarded or warned about.
     """
     # Sections managed by separate code outside _ConfigSpec, preserved on rewrite.
@@ -786,7 +786,7 @@ def _ensure_config(path, spec, kind="config"):
         try:
             with open(path, "w", encoding="utf-8") as f:
                 # Pass extra_raw_sections so sections like [bandwidth] are not
-                # silently discarded when the file is self-corrected.
+                # silently discarded when the device config is self-corrected.
                 f.write(_render_config(merged, spec, extra_raw_sections=_extra_secs))
             print(f"[config] Corrected {path}: added missing parameter(s) with "
                   f"default value(s) — {', '.join(added)}")
@@ -1296,6 +1296,10 @@ _GUI_STATE_KEYS = (
     "antenna_index",
     # TX power selection — persisted per-device (0 = first level / none).
     "power_index",
+    # BW combobox selection — persisted per-device so the operator's
+    # chosen filter bandwidth is restored on reconnect or device switch.
+    # Stored as a string (the Hz value shown in the combobox, e.g. "2700").
+    "selected_bw",
 )
 
 
@@ -1534,6 +1538,10 @@ class RadioState:
         # [bandwidth] section and sent to the GUI in every state dict so the
         # bandwidth selector combobox can be populated for the active mode.
         self.bandwidth_map = dict(bandwidth_map) if bandwidth_map else {}
+        # Currently selected BW combobox value (Hz as string, e.g. "2700").
+        # Persisted per-device via _GUI_STATE_KEYS so the operator's chosen
+        # filter bandwidth survives server restarts and device switches.
+        self.selected_bw = ""
         if self.iq_source is None and default_sample_rate is not None:
             try:
                 _dsr = int(float(default_sample_rate))
@@ -1704,10 +1712,14 @@ class RadioState:
                 # Used by the GUI to restore the device label on startup and to
                 # mark the active device with a checkmark in the device dialog.
                 "active_device_index": self.active_device_index,
-                # Bandwidth map: {mode_name: [Hz, ...]} from cat_server.toml
-                # [bandwidth]. The GUI populates the BW selector combobox from
-                # the entry matching the currently active modulation mode.
+                # Bandwidth map: {mode_name: [Hz, ...]} from the active device's
+                # [bandwidth] section. The GUI populates the BW selector combobox
+                # from the entry matching the currently active modulation mode.
                 "bandwidth_map": dict(self.bandwidth_map),
+                # Currently selected bandwidth (Hz as string, e.g. "2700").
+                # Persisted per-device; the GUI restores this into the BW combobox
+                # on startup and device switch.
+                "selected_bw": self.selected_bw,
             }
 
     # ----------------------------------------------------------- commands ----
@@ -2013,6 +2025,15 @@ class RadioState:
                 else:
                     print(f"[cat_server] WARNING: rejected set_power "
                           f"{cmd.get('index')!r} — out of range")
+            elif c == "set_selected_bw":
+                # {"cmd": "set_selected_bw", "value": "<Hz>"} — store the
+                # BW combobox selection chosen by the operator so it can be
+                # restored on reconnect or device switch.  The value is a Hz
+                # string matching one of the entries in bandwidth_map; any
+                # non-empty string is accepted (the GUI already validates the
+                # value is in the combobox before sending).
+                _bw_val = str(cmd.get("value", "")).strip()
+                self.selected_bw = _bw_val
             elif c == "set_sample_rate":
                 # {"cmd": "set_sample_rate", "value": <Hz>} — only accepted
                 # if value is one of this device's configured sample_rates
@@ -2153,7 +2174,7 @@ class RadioState:
                 "set_afc", "set_anf", "set_notch", "set_mute",
                 "set_zoom", "user_button", "rf_usr_button",
                 "set_spec_ref", "set_spec_ave", "set_sample_rate",
-                "select_antenna",
+                "select_antenna", "set_selected_bw",
             }
             if c in _STATE_MUTATING_CMDS:
                 self._autosave_gui_state()
@@ -2645,12 +2666,6 @@ def _parse_args():
     _devs = _cfg.get("devices", {})
     _D    = _SERVER_CONFIG_DEFAULTS
 
-    # ── [bandwidth] section: ensure defaults exist, load full map ─────────────
-    # Must run AFTER _ensure_config so the base file already exists and so any
-    # self-correction rewrite by _ensure_config has already happened.  The map
-    # is passed into RadioState and broadcast to the GUI in every state dict.
-    _bandwidth_map = _ensure_bandwidth_section(_config_path)
-
     # cat_device.toml: [user_buttons] + [user_mods] + [rf_usr_btns] + [sdr]
     # -- the buttons/mods/sample-rates for the *default* device profile
     # (everything that affects GUI behaviour for one profile).
@@ -2661,6 +2676,14 @@ def _parse_args():
     _sdr   = _dcfg.get("sdr",          {})
     _ant   = _dcfg.get("antenna",      {})
     _DD    = _DEVICE_CONFIG_DEFAULTS
+
+    # ── [bandwidth] section: ensure defaults exist, load full map ─────────────
+    # Must run AFTER _ensure_config for the device config so the file already
+    # exists and any self-correction rewrite has already happened.  The map
+    # is passed into RadioState and broadcast to the GUI in every state dict.
+    # [bandwidth] is a per-device setting: it lives in cat_device.toml (and in
+    # every per-device config file), NOT in cat_server.toml.
+    _bandwidth_map = _ensure_bandwidth_section(_device_config_path)
 
     _def_host       = _srv.get("host",       _D["server"]["host"])
     _def_port       = int(_srv.get("port",   _D["server"]["port"]))
@@ -2955,35 +2978,37 @@ def main():
     args = _parse_args()
     host = args.host
     port = args.port
-    bw_map = args.bandwidth_map   # {mode: [Hz, ...]} from [bandwidth] in cat_server.toml
+    bw_map = args.bandwidth_map   # {mode: [Hz, ...]} from [bandwidth] in cat_device.toml
 
     print(f"[cat_server] server config: {args.config}")
     print(f"[cat_server] device config: {args.device_config}")
 
     # ── [bandwidth] validation ────────────────────────────────────────────────
-    # Every non-empty [user_mods] label in every device config must have a
-    # corresponding entry in [bandwidth].  A missing entry means the bandwidth
-    # selector combobox would be empty for that mode — treat it as a fatal
-    # misconfiguration so the operator can fix it before users connect.
+    # Every non-empty [user_mods] label in a device config must have a
+    # corresponding entry in that same device config's [bandwidth] section.
+    # A missing entry means the bandwidth selector combobox would be empty
+    # for that mode — treat it as a fatal misconfiguration so the operator
+    # can fix it before users connect.
     _bw_errors = []
 
-    def _check_mods_vs_bw(mod_labels, source_desc):
+    def _check_mods_vs_bw(mod_labels, bw, cfg_path, source_desc):
         for lbl in mod_labels:
             lbl = lbl.strip()
-            if lbl and lbl not in bw_map:
+            if lbl and lbl not in bw:
                 _bw_errors.append(
                     f"  modulation '{lbl}' in {source_desc} has no [bandwidth] "
-                    f"entry in {args.config}"
+                    f"entry in {cfg_path}"
                 )
 
-    # Validate the default device config (labels already parsed into args).
+    # Validate the default device config against its own bandwidth map.
     _def_mod_labels = [
         getattr(args, f"user_mod_{n}", "") for n in range(1, NUM_USER_MODS + 1)
     ]
-    _check_mods_vs_bw(_def_mod_labels,
+    _check_mods_vs_bw(_def_mod_labels, bw_map,
+                      args.device_config,
                       f"default device config ({args.device_config!r})")
 
-    # Validate every device listed in [devices] (load each config lazily here).
+    # Validate every device listed in [devices] against its own [bandwidth].
     for n in range(1, 21):
         _dlbl = getattr(args, f"device_label_{n}", "").strip()
         _dcfg = getattr(args, f"device_config_{n}", "").strip()
@@ -2991,21 +3016,24 @@ def main():
             continue
         _dd = _ensure_config(_dcfg, DEVICE_CONFIG_SPEC,
                              kind=f"device config for '{_dlbl}'")
+        _dev_bw_map = _ensure_bandwidth_section(_dcfg)
         _umods = _dd.get("user_mods", {})
         _dev_mod_labels = [
             str(_umods.get(f"label_{m}", ""))
             for m in range(1, NUM_USER_MODS + 1)
         ]
-        _check_mods_vs_bw(_dev_mod_labels,
+        _check_mods_vs_bw(_dev_mod_labels, _dev_bw_map,
+                          _dcfg,
                           f"device '{_dlbl}' ({_dcfg!r})")
 
     if _bw_errors:
         print("[cat_server] ERROR: the following modulation button(s) have no "
-              "[bandwidth] entry in the server config:", file=sys.stderr)
+              "[bandwidth] entry in their device config:", file=sys.stderr)
         for _e in _bw_errors:
             print(_e, file=sys.stderr)
         print("[cat_server] Add the missing modulation(s) to the [bandwidth] "
-              f"section of {args.config} and restart.", file=sys.stderr)
+              "section of the relevant device config file and restart.",
+              file=sys.stderr)
         sys.exit(1)
 
     # ── Optional: load a recorded IQ wav file to drive the RF spectrum ────────

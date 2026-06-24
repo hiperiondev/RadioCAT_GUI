@@ -3362,6 +3362,15 @@ class App:
                                       width=max(5, int(round(6*sc))),
                                       font=_gui_font(fs_split))
         self._bw_combo.pack(side="right", padx=(0, _px_bw))
+        # Send the selected bandwidth to the server whenever the operator
+        # changes it, so it is persisted per-device on the server side.
+        def _on_bw_selected(event=None):
+            if getattr(self, '_sup', False):
+                return
+            val = self._bw_var.get().strip()
+            if val and getattr(self, 'net', None) and getattr(self.net, 'connected', False):
+                self.net.send({"cmd": "set_selected_bw", "value": val})
+        self._bw_combo.bind("<<ComboboxSelected>>", _on_bw_selected)
 
         lo_b_row=tk.Frame(freq_box,bg=C["spec_bg"])
         lo_b_row.grid(row=2,column=0,sticky="ew")
@@ -4261,7 +4270,12 @@ class App:
             _bw_opts = [str(v) for v in _bw_hz]
             self._bw_combo["values"] = _bw_opts
             if _bw_opts:
-                if self._bw_var.get() not in _bw_opts:
+                # Prefer the server-persisted selection for this device; fall
+                # back to the first option if it is missing or no longer valid.
+                _saved_bw = str(self.state.get("selected_bw", "")).strip()
+                if _saved_bw and _saved_bw in _bw_opts:
+                    self._bw_var.set(_saved_bw)
+                elif self._bw_var.get() not in _bw_opts:
                     self._bw_var.set(_bw_opts[0])
             else:
                 self._bw_var.set("")

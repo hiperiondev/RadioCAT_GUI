@@ -4,7 +4,7 @@
   "lo_b_freq": 14180799.0,
   "lo_active": "B",
   "zoom": 1,
-  "mode": "LSB",
+  "mode": "USB",
   "filter_lo": 100,
   "filter_hi": 2800,
   "agc": "Med",
@@ -71,5 +71,6 @@
   "spec_ave_af": 1,
   "sample_rate": 333333.0,
   "antenna_index": 1,
-  "power_index": 4
+  "power_index": 4,
+  "selected_bw": "3600"
 }

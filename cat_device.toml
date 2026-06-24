@@ -162,3 +162,15 @@ allowed_bands_7 = ""
 allowed_bands_8 = ""
 allowed_bands_9 = ""
 allowed_bands_10 = ""
+
+[bandwidth]
+# Available filter bandwidths (Hz) for each modulation mode.
+# The GUI bandwidth selector is populated from the entry whose
+# name matches the currently active modulation mode.
+# Add an entry here for every modulation label used in
+# [user_mods] of this file.  Values are comma-separated Hz.
+AM = "3000,6000,9000,10000"
+FM = "12500,25000"
+LSB = "2700,3600"
+USB = "2700,3600"
+CW = "250,500,1000,2000"
