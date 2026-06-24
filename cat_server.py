@@ -394,6 +394,128 @@ def _load_toml(path):
         return {}
 
 
+# ── [bandwidth] section defaults and helpers ──────────────────────────────────
+# Default filter bandwidths (Hz) for the most common HF amateur modes.
+# Operators can add any extra modulation by editing [bandwidth] in cat_server.toml.
+_BANDWIDTH_DEFAULTS = {
+    "AM":  [3000, 6000, 9000, 10000],
+    "FM":  [12500, 25000],
+    "LSB": [2700, 3600],
+    "USB": [2700, 3600],
+    "CW":  [250, 500, 1000, 2000],
+}
+
+
+def _parse_bandwidth_value(raw):
+    """Parse a bandwidth value from TOML into a sorted list of positive Hz ints.
+
+    Accepts a comma-separated string (e.g. "250,500,1000") as written in the
+    fallback-parser-compatible format, or a native TOML array (list/tuple)
+    produced by tomllib/tomli.  Unknown / non-positive tokens are silently
+    skipped.  Returns an empty list when nothing valid is found.
+    """
+    items = raw if isinstance(raw, (list, tuple)) else str(raw).split(",")
+    result = []
+    for item in items:
+        try:
+            v = int(float(str(item).strip()))
+            if v > 0:
+                result.append(v)
+        except (TypeError, ValueError):
+            continue
+    return sorted(set(result))
+
+
+def _ensure_bandwidth_section(config_path):
+    """Ensure the [bandwidth] section in *config_path* (cat_server.toml) exists
+    and contains at least the five default modulation entries (AM, FM, LSB,
+    USB, CW).
+
+    If the section is missing it is appended to the file with all defaults.
+    If the section exists but is missing one or more default modulations, the
+    missing entries are added.  Any operator-added modulations already in the
+    section are preserved unchanged.
+
+    Returns the complete bandwidth dict  {mode_name: [Hz, ...]}  so the
+    caller can pass it into RadioState and use it for startup validation.
+    """
+    raw_cfg = _load_toml(config_path)
+    bw_raw = raw_cfg.get("bandwidth")
+    bw_raw = bw_raw if isinstance(bw_raw, dict) else {}
+
+    # Parse all existing entries
+    bw_map = {}
+    for mod, val in bw_raw.items():
+        parsed = _parse_bandwidth_value(val)
+        if parsed:
+            bw_map[mod] = parsed
+
+    missing = {k: list(v) for k, v in _BANDWIDTH_DEFAULTS.items()
+               if k not in bw_map}
+
+    if not missing and bw_raw:
+        return bw_map           # File already correct — nothing to do
+
+    bw_map.update(missing)      # Merge in the missing defaults
+
+    # Rewrite the file: strip the old [bandwidth] block (if any) then append
+    # the fully updated section.  We operate directly on the text so only the
+    # [bandwidth] section is touched; every other section is left byte-for-byte
+    # identical.
+    try:
+        with open(config_path, "r", encoding="utf-8") as fh:
+            content = fh.read()
+
+        # Remove any existing [bandwidth] section
+        out_lines = []
+        in_bw = False
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped == "[bandwidth]":
+                in_bw = True
+                continue
+            if in_bw and stripped.startswith("[") and stripped.endswith("]"):
+                in_bw = False
+            if not in_bw:
+                out_lines.append(line)
+
+        # Build the replacement [bandwidth] section
+        bw_section = [
+            "",
+            "[bandwidth]",
+            "# Available filter bandwidths (Hz) for each modulation mode.",
+            "# The GUI bandwidth selector is populated from the entry whose",
+            "# name matches the currently active modulation mode.",
+            "# Add an entry here for every modulation label used in",
+            "# [user_mods] device configs.  Values are comma-separated Hz.",
+        ]
+        # Emit default modulations in canonical order, extras sorted after.
+        for mod in list(_BANDWIDTH_DEFAULTS.keys()) + sorted(
+                k for k in bw_map if k not in _BANDWIDTH_DEFAULTS):
+            if mod in bw_map:
+                val_str = ",".join(str(v) for v in bw_map[mod])
+                bw_section.append(f'{mod} = "{val_str}"')
+
+        new_content = (
+            "\n".join(out_lines).rstrip("\n") + "\n"
+            + "\n".join(bw_section) + "\n"
+        )
+        with open(config_path, "w", encoding="utf-8") as fh:
+            fh.write(new_content)
+
+        if not bw_raw:
+            print(f"[config] Added default [bandwidth] section to {config_path}")
+        else:
+            print(f"[config] Corrected {config_path} [bandwidth]: added missing "
+                  f"modulation(s): {', '.join(sorted(missing))}")
+
+    except Exception as exc:
+        print(f"[config] WARNING: could not update [bandwidth] in "
+              f"{config_path}: {exc} — using built-in defaults for this run")
+
+    return bw_map
+
+
 class _ConfigSpec:
     """Describes one kind of TOML config file: its sections, the default
     value for every key, the order keys/sections are rendered in, and the
@@ -574,9 +696,15 @@ def _merge_config_with_defaults(cfg, spec):
     return merged, added
 
 
-def _render_config(cfg, spec):
+def _render_config(cfg, spec, extra_raw_sections=None):
     """Render a complete, well-formed TOML document from a fully-merged
-    config dict, per the section/key order and comments in `spec`."""
+    config dict, per the section/key order and comments in `spec`.
+
+    extra_raw_sections: optional dict  {section_name: {key: raw_value}}
+    for sections not part of the spec (e.g. [bandwidth]) that should be
+    appended verbatim after the spec-managed sections so they are preserved
+    across rewrites triggered by self-correction logic.
+    """
     lines = [spec.header]
     for sec in spec.section_order:
         lines.append("")
@@ -588,6 +716,19 @@ def _render_config(cfg, spec):
         for key in spec.key_order[sec]:
             val = sec_vals.get(key, spec.defaults[sec][key])
             lines.append(f"{key} = {_fmt_toml_value(val)}")
+    if extra_raw_sections:
+        for sec_name, entries in extra_raw_sections.items():
+            if not isinstance(entries, dict):
+                continue
+            lines.append("")
+            lines.append(f"[{sec_name}]")
+            for k, v in entries.items():
+                if isinstance(v, (list, tuple)):
+                    # Serialize list as a comma-separated string — compatible
+                    # with the fallback parser which does not support TOML arrays.
+                    lines.append(f'{k} = "{",".join(str(x) for x in v)}"')
+                else:
+                    lines.append(f"{k} = {_fmt_toml_value(v)}")
     return "\n".join(lines) + "\n"
 
 
@@ -607,7 +748,14 @@ def _ensure_config(path, spec, kind="config"):
     pre-split single-file config that still has GUI-behaviour sections
     mixed into the server config (or vice versa) and needs those sections
     moved to the other file by hand.
+
+    Sections that are intentionally managed outside the spec machinery
+    (currently [bandwidth] in cat_server.toml) are silently preserved in any
+    rewrite rather than being discarded or warned about.
     """
+    # Sections managed by separate code outside _ConfigSpec, preserved on rewrite.
+    _SILENTLY_PRESERVED = {"bandwidth"}
+
     if not os.path.exists(path):
         try:
             with open(path, "w", encoding="utf-8") as f:
@@ -619,10 +767,16 @@ def _ensure_config(path, spec, kind="config"):
         return _load_toml(path)
 
     _cfg = _load_toml(path)
-    _extra = [sec for sec in _cfg.keys() if sec not in spec.section_order]
-    if _extra:
+    # Collect sections outside the spec to preserve them verbatim on any rewrite.
+    _extra_secs = {
+        sec: val for sec, val in _cfg.items()
+        if sec not in spec.section_order and isinstance(val, dict)
+    }
+    # Only warn about truly unexpected sections (not the ones we intentionally manage).
+    _warn_secs = [sec for sec in _extra_secs if sec not in _SILENTLY_PRESERVED]
+    if _warn_secs:
         print(f"[config] NOTE: {path} has section(s) not used by this file "
-              f"({kind}): {', '.join(_extra)} — they are ignored here. "
+              f"({kind}): {', '.join(_warn_secs)} — they are ignored here. "
               f"[server]/[audio]/[devices] belong in cat_server.toml; "
               f"[user_buttons]/[user_mods]/[rf_usr_btns]/[sdr]/[antenna] belong in "
               f"cat_device.toml (or your --device-config / [devices].config_N "
@@ -631,7 +785,9 @@ def _ensure_config(path, spec, kind="config"):
     if added:
         try:
             with open(path, "w", encoding="utf-8") as f:
-                f.write(_render_config(merged, spec))
+                # Pass extra_raw_sections so sections like [bandwidth] are not
+                # silently discarded when the file is self-corrected.
+                f.write(_render_config(merged, spec, extra_raw_sections=_extra_secs))
             print(f"[config] Corrected {path}: added missing parameter(s) with "
                   f"default value(s) — {', '.join(added)}")
         except Exception as e:
@@ -1259,7 +1415,7 @@ class RadioState:
     def __init__(self, user_buttons=None, user_mod_labels=None, user_mod_types=None,
                  rf_usr_btns=None, iq_source=None, devices=None, device_cfg_path=None,
                  sample_rates=None, default_sample_rate=None, antenna_labels=None,
-                 power_levels=None):
+                 power_levels=None, bandwidth_map=None):
         self.lock = threading.Lock()
         self.center_freq = 14_195_000.0
         self.sample_rate = 192_000.0
@@ -1374,6 +1530,10 @@ class RadioState:
         # power_index: 0-based index into power_levels (0 = first level).
         self.power_levels = list(power_levels) if power_levels else []
         self.power_index  = 0
+        # Bandwidth map: {mode_name: [Hz, ...]} loaded from cat_server.toml
+        # [bandwidth] section and sent to the GUI in every state dict so the
+        # bandwidth selector combobox can be populated for the active mode.
+        self.bandwidth_map = dict(bandwidth_map) if bandwidth_map else {}
         if self.iq_source is None and default_sample_rate is not None:
             try:
                 _dsr = int(float(default_sample_rate))
@@ -1544,6 +1704,10 @@ class RadioState:
                 # Used by the GUI to restore the device label on startup and to
                 # mark the active device with a checkmark in the device dialog.
                 "active_device_index": self.active_device_index,
+                # Bandwidth map: {mode_name: [Hz, ...]} from cat_server.toml
+                # [bandwidth]. The GUI populates the BW selector combobox from
+                # the entry matching the currently active modulation mode.
+                "bandwidth_map": dict(self.bandwidth_map),
             }
 
     # ----------------------------------------------------------- commands ----
@@ -2481,6 +2645,12 @@ def _parse_args():
     _devs = _cfg.get("devices", {})
     _D    = _SERVER_CONFIG_DEFAULTS
 
+    # ── [bandwidth] section: ensure defaults exist, load full map ─────────────
+    # Must run AFTER _ensure_config so the base file already exists and so any
+    # self-correction rewrite by _ensure_config has already happened.  The map
+    # is passed into RadioState and broadcast to the GUI in every state dict.
+    _bandwidth_map = _ensure_bandwidth_section(_config_path)
+
     # cat_device.toml: [user_buttons] + [user_mods] + [rf_usr_btns] + [sdr]
     # -- the buttons/mods/sample-rates for the *default* device profile
     # (everything that affects GUI behaviour for one profile).
@@ -2725,6 +2895,10 @@ def _parse_args():
             ap.error(f"--user_mod flags must be specified sequentially "
                      f"(1, 2, 3); cannot set --user_mod_{n} without "
                      f"filling the preceding slots")
+
+    # Store the bandwidth map so main() can pass it into RadioState and run
+    # the startup validation check against every configured device's [user_mods].
+    _raw.bandwidth_map = _bandwidth_map
     return _raw
 
 
@@ -2781,9 +2955,58 @@ def main():
     args = _parse_args()
     host = args.host
     port = args.port
+    bw_map = args.bandwidth_map   # {mode: [Hz, ...]} from [bandwidth] in cat_server.toml
 
     print(f"[cat_server] server config: {args.config}")
     print(f"[cat_server] device config: {args.device_config}")
+
+    # ── [bandwidth] validation ────────────────────────────────────────────────
+    # Every non-empty [user_mods] label in every device config must have a
+    # corresponding entry in [bandwidth].  A missing entry means the bandwidth
+    # selector combobox would be empty for that mode — treat it as a fatal
+    # misconfiguration so the operator can fix it before users connect.
+    _bw_errors = []
+
+    def _check_mods_vs_bw(mod_labels, source_desc):
+        for lbl in mod_labels:
+            lbl = lbl.strip()
+            if lbl and lbl not in bw_map:
+                _bw_errors.append(
+                    f"  modulation '{lbl}' in {source_desc} has no [bandwidth] "
+                    f"entry in {args.config}"
+                )
+
+    # Validate the default device config (labels already parsed into args).
+    _def_mod_labels = [
+        getattr(args, f"user_mod_{n}", "") for n in range(1, NUM_USER_MODS + 1)
+    ]
+    _check_mods_vs_bw(_def_mod_labels,
+                      f"default device config ({args.device_config!r})")
+
+    # Validate every device listed in [devices] (load each config lazily here).
+    for n in range(1, 21):
+        _dlbl = getattr(args, f"device_label_{n}", "").strip()
+        _dcfg = getattr(args, f"device_config_{n}", "").strip()
+        if not _dlbl or not _dcfg:
+            continue
+        _dd = _ensure_config(_dcfg, DEVICE_CONFIG_SPEC,
+                             kind=f"device config for '{_dlbl}'")
+        _umods = _dd.get("user_mods", {})
+        _dev_mod_labels = [
+            str(_umods.get(f"label_{m}", ""))
+            for m in range(1, NUM_USER_MODS + 1)
+        ]
+        _check_mods_vs_bw(_dev_mod_labels,
+                          f"device '{_dlbl}' ({_dcfg!r})")
+
+    if _bw_errors:
+        print("[cat_server] ERROR: the following modulation button(s) have no "
+              "[bandwidth] entry in the server config:", file=sys.stderr)
+        for _e in _bw_errors:
+            print(_e, file=sys.stderr)
+        print("[cat_server] Add the missing modulation(s) to the [bandwidth] "
+              f"section of {args.config} and restart.", file=sys.stderr)
+        sys.exit(1)
 
     # ── Optional: load a recorded IQ wav file to drive the RF spectrum ────────
     iq_source = None
@@ -2822,7 +3045,8 @@ def main():
                        sample_rates=_parse_sample_rates(args.sdr_sample_rates),
                        default_sample_rate=args.sdr_sample_rate,
                        antenna_labels=args.antenna_labels,
-                       power_levels=_parse_power_levels(args.sdr_power_levels))
+                       power_levels=_parse_power_levels(args.sdr_power_levels),
+                       bandwidth_map=bw_map)
 
     # BUG FIX: device identity mismatch on startup.
     # ----------------------------------------------------------------------

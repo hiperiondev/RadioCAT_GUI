@@ -4,7 +4,7 @@ cat_gui.py
 """
 import argparse, array, cmath, collections, json, logging, math, os, queue, socket, struct, sys, threading, time, traceback, datetime
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 
 # ── Optional NumPy (used for FFT when available) ──────────────────────────────
 try:
@@ -2739,6 +2739,7 @@ class App:
             antenna_index=0,
             power_levels=[],
             power_index=0,
+            bandwidth_map={},   # {mode: [Hz, ...]} — populated from server on connect
         )
         self._sup=False
         # True only when the operator explicitly pressed Stop — used by
@@ -3311,6 +3312,56 @@ class App:
                        padx=max(4,int(round(6*sc))),pady=max(1,int(round(1*sc))),
                        command=lambda:self._swap_lo_a_b())
         self._swap_btn.pack(side="left",padx=(max(2,int(round(3*sc))),0))
+
+        # ── ◄ / ► frequency step buttons (step by selected bandwidth) ──────────
+        _px_bw=max(1,int(round(2*sc)))
+        self._bw_dn_btn=tk.Button(split_row,text="◄",anchor="center",
+                       bg=C["btn_gray"],fg=C["btn_sel_fg"],
+                       activebackground=C["btn_sel"],activeforeground=C["btn_sel_fg"],
+                       font=_gui_font(fs_split,"bold"),relief="flat",bd=0,highlightthickness=0,
+                       padx=max(3,int(round(4*sc))),pady=max(1,int(round(1*sc))),
+                       command=lambda:self._bw_step(-1))
+        self._bw_dn_btn.pack(side="left",padx=(_px_bw,0))
+
+        self._bw_up_btn=tk.Button(split_row,text="►",anchor="center",
+                       bg=C["btn_gray"],fg=C["btn_sel_fg"],
+                       activebackground=C["btn_sel"],activeforeground=C["btn_sel_fg"],
+                       font=_gui_font(fs_split,"bold"),relief="flat",bd=0,highlightthickness=0,
+                       padx=max(3,int(round(4*sc))),pady=max(1,int(round(1*sc))),
+                       command=lambda:self._bw_step(+1))
+        self._bw_up_btn.pack(side="left",padx=(_px_bw,0))
+
+        # ── Bandwidth selector combobox (far right of split_row) ───────────────
+        # Values are populated from server's bandwidth_map[current_mode].
+        # Configure a dark-theme style for the combobox.
+        _bw_style_name = "BW.TCombobox"
+        _bw_style = ttk.Style()
+        try:
+            _bw_style.theme_use("clam")
+        except Exception:
+            pass
+        _bw_style.configure(_bw_style_name,
+            fieldbackground=C["btn_gray"],
+            background=C["btn_gray"],
+            foreground=C["btn_sel_fg"],
+            selectbackground=C["btn_sel"],
+            selectforeground=C["btn_sel_fg"],
+            arrowcolor=C["btn_sel_fg"],
+            bordercolor=C["sep"],
+            lightcolor=C["btn_gray"],
+            darkcolor=C["btn_gray"],
+        )
+        _bw_style.map(_bw_style_name,
+            fieldbackground=[("readonly", C["btn_gray"])],
+            foreground=[("readonly", C["btn_sel_fg"])],
+        )
+        _bw_combo_w = max(60, int(round(70*sc)))
+        self._bw_var = tk.StringVar()
+        self._bw_combo = ttk.Combobox(split_row, textvariable=self._bw_var,
+                                      state="readonly", style=_bw_style_name,
+                                      width=max(5, int(round(6*sc))),
+                                      font=_gui_font(fs_split))
+        self._bw_combo.pack(side="right", padx=(0, _px_bw))
 
         lo_b_row=tk.Frame(freq_box,bg=C["spec_bg"])
         lo_b_row.grid(row=2,column=0,sticky="ew")
@@ -4202,6 +4253,18 @@ class App:
                 _umb.grid_remove()
         # Apply/clear the AF-box text-panel split for the active mode (if any)
         self._update_af_text_split()
+        # ── Bandwidth selector combobox — update options for current mode ───────
+        if hasattr(self, '_bw_combo'):
+            _bw_map = self.state.get("bandwidth_map") or {}
+            _mode   = self.state.get("mode", "")
+            _bw_hz  = _bw_map.get(_mode, [])
+            _bw_opts = [str(v) for v in _bw_hz]
+            self._bw_combo["values"] = _bw_opts
+            if _bw_opts:
+                if self._bw_var.get() not in _bw_opts:
+                    self._bw_var.set(_bw_opts[0])
+            else:
+                self._bw_var.set("")
         # User-defined buttons: refresh label and (for push-push type) the
         # pressed/released highlight. A button with no label configured on
         # the server (empty string) is shown disabled/greyed-out and cannot
@@ -5518,6 +5581,31 @@ class App:
         if hasattr(self, '_draw_ptt_btn'):
             self._draw_ptt_btn(bool(self.state.get("ptt", False)),
                                self._ptt_band_ok())
+
+    def _bw_step(self, direction):
+        """Shift the active LO frequency by the currently selected bandwidth.
+
+        direction: +1 = step up (► button), -1 = step down (◄ button).
+        The bandwidth amount is taken from the BW selector combobox.
+        """
+        if not hasattr(self, '_bw_var'):
+            return
+        bw_str = self._bw_var.get().strip()
+        if not bw_str:
+            return
+        try:
+            bw_hz = int(bw_str)
+        except ValueError:
+            return
+        if bw_hz <= 0:
+            return
+        active = self._lo_active.get() if hasattr(self, '_lo_active') else "A"
+        if active == "B" and hasattr(self, 'lo_b_disp'):
+            new_hz = max(0, self.lo_b_disp.value + direction * bw_hz)
+            self.lo_b_disp.set_value(int(new_hz), notify=True)
+        elif hasattr(self, 'lo_disp'):
+            new_hz = max(0, self.lo_disp.value + direction * bw_hz)
+            self.lo_disp.set_value(int(new_hz), notify=True)
 
     def on_lo_b_changed(self,hz):
         # ── --restrict-band enforcement ───────────────────────────────────────
