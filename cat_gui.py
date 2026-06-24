@@ -3424,13 +3424,11 @@ class App:
         # ── SDR-Device / Soundcard / Bandwidth / Sample Rate ──────────────────
         r1=tk.Frame(lp,bg=C["panel_bg"])
         r1.pack(fill="x",padx=max(2,int(round(4*sc))),pady=(max(1,int(round(2*sc))),max(1,int(round(1*sc)))))
-        for t in ["Device","Bandwidth","Sample Rate"]:
+        for t in ["Device","Sample Rate"]:
             if t == "Device":
                 _dcmd = self._request_device_list
-            elif t == "Sample Rate":
-                _dcmd = self._request_sample_rates
             else:
-                _dcmd = lambda t=t: self.net.send({"cmd":"ui_button","name":t})
+                _dcmd = self._request_sample_rates
             _fbtn(r1,t,sc=sc,command=_dcmd
                   ).pack(side="left",padx=max(1,int(round(1*sc))),fill="x",expand=True)
         if not _ARGS.disable_soundcard_select:

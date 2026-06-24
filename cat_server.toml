@@ -14,10 +14,10 @@ no_audio = false
 # Up to 20 SDR device profiles. label_N = display name shown in the GUI
 # Device list; config_N = path to a TOML config file loaded on selection.
 # Devices with empty labels are hidden. Fill slots in order: 1, 2, 3…
-label_1 = "SDR 1"
-config_1 = "cat_device.toml"
-label_2 = "SDR 2"
-config_2 = "cat_device2.toml"
+label_1 = "Xiegu G90"
+config_1 = "device_xiegu_g90.toml"
+label_2 = "Dummy"
+config_2 = "device_dummy.toml"
 label_3 = ""
 config_3 = ""
 label_4 = ""
