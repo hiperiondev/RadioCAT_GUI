@@ -757,14 +757,22 @@ def _ensure_config(path, spec, kind="config"):
     _SILENTLY_PRESERVED = {"bandwidth"}
 
     if not os.path.exists(path):
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(_render_config(spec.defaults, spec))
-            print(f"[config] Created default {kind}: {path}")
-        except Exception as e:
-            print(f"[config] WARNING: could not write default {kind}: {e} — using built-in defaults")
-            return dict(spec.defaults)
-        return _load_toml(path)
+        # On first run, only create the .example companion file for the
+        # operator's reference.  The actual config file is intentionally NOT
+        # auto-created so the operator must provide their own (or rename the
+        # example).  Built-in defaults are used for this run.
+        example_path = path + ".example"
+        if not os.path.exists(example_path):
+            try:
+                with open(example_path, "w", encoding="utf-8") as f:
+                    f.write(_render_config(spec.defaults, spec))
+                print(f"[config] Created example {kind}: {example_path}")
+            except Exception as e:
+                print(f"[config] WARNING: could not write example {kind}: {e}")
+        print(f"[config] {path} not found — using built-in defaults "
+              f"(copy {example_path} to {path} to customise)")
+        return dict(spec.defaults)
+
 
     _cfg = _load_toml(path)
     # Collect sections outside the spec to preserve them verbatim on any rewrite.
@@ -1327,7 +1335,10 @@ def _load_gui_state(path):
 
 
 def _save_gui_state(path, state):
-    """Atomically write *state* dict to *path* (write-then-rename)."""
+    """Atomically write *state* dict to *path* (write-then-rename).
+    Only writes if *path* already exists — never auto-creates the file."""
+    if not os.path.exists(path):
+        return
     try:
         d = os.path.dirname(path)
         if d:
@@ -1364,7 +1375,8 @@ def _load_memories(path):
         print(f"[memory] WARNING: could not read {path}: {e} — starting fresh")
         raw = {}
 
-    changed = not raw
+    file_missing = not raw
+    changed = False
     for pos in MEMORY_POSITIONS:
         slots_in = raw.get(pos)
         if not isinstance(slots_in, list):
@@ -1390,7 +1402,7 @@ def _load_memories(path):
             changed = True
         mems[pos] = slots
 
-    if changed:
+    if changed and not file_missing:
         _save_memories(path, mems)
     return mems
 
@@ -2981,6 +2993,46 @@ def _build_devices(args):
     return devices
 
 
+def _create_example_files(device_cfg_path):
+    """Create .example companion files next to the device config on first run.
+
+    Two files are created (if they do not already exist):
+      <base>.memories.json.example -- empty memory bank (3 positions × 20 slots)
+      <base>.gui_state.json.example -- empty GUI-state dict with key descriptions
+
+    The <base>.toml.example (and cat_server.toml.example) files are handled by
+    _ensure_config when the respective config files are absent, so they are not
+    duplicated here.
+
+    These files are written once for the user's reference and are NEVER read
+    by the server; they exist purely as documentation / starting-point copies
+    that the operator can inspect or rename and customise.
+    """
+    base, _ext = os.path.splitext(device_cfg_path)
+
+    # ── cat_device.memories.json.example ─────────────────────────────────────
+    mem_example = base + ".memories.json.example"
+    if not os.path.exists(mem_example):
+        try:
+            empty_mems = {pos: _empty_memory_slots() for pos in MEMORY_POSITIONS}
+            with open(mem_example, "w", encoding="utf-8") as f:
+                json.dump(empty_mems, f, indent=2)
+            print(f"[config] Created example memories file : {mem_example}")
+        except Exception as e:
+            print(f"[config] WARNING: could not write {mem_example}: {e}")
+
+    # ── cat_device.gui_state.json.example ────────────────────────────────────
+    gui_example = base + ".gui_state.json.example"
+    if not os.path.exists(gui_example):
+        try:
+            example_state = {k: "<persisted at runtime>" for k in _GUI_STATE_KEYS}
+            with open(gui_example, "w", encoding="utf-8") as f:
+                json.dump(example_state, f, indent=2)
+            print(f"[config] Created example GUI-state file: {gui_example}")
+        except Exception as e:
+            print(f"[config] WARNING: could not write {gui_example}: {e}")
+
+
 def main():
     args = _parse_args()
     host = args.host
@@ -2989,6 +3041,10 @@ def main():
 
     print(f"[cat_server] server config: {args.config}")
     print(f"[cat_server] device config: {args.device_config}")
+
+    # ── Create .example companion files (once, for user reference only) ───────
+    # These are never read by the server; they exist purely as documentation.
+    _create_example_files(args.device_config)
 
     # ── [bandwidth] validation ────────────────────────────────────────────────
     # Every non-empty [user_mods] label in a device config must have a
