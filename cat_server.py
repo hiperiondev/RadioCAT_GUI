@@ -1945,6 +1945,13 @@ class RadioState:
                         # Reset selection to 0 (none) when switching devices.
                         self.antenna_index = 0
 
+                        # Reload bandwidth map from the new device's [bandwidth]
+                        # section.  bandwidth_map is set once at startup and is
+                        # never otherwise updated, so switching devices left the
+                        # GUI's BW selector populated with the previous device's
+                        # entries for every modulation mode.
+                        self.bandwidth_map = _ensure_bandwidth_section(cfg_path)
+
                     # Switch device identity: memories + GUI-state file.
                     self.device_cfg_path = cfg_path
                     # Update the 1-based active_device_index so the GUI can

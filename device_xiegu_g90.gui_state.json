@@ -1,10 +1,10 @@
 {
-  "center_freq": 18100000.0,
+  "center_freq": 14195000.0,
   "tune_freq": 14205000.0,
-  "lo_b_freq": 14180799.0,
+  "lo_b_freq": 28500000.0,
   "lo_active": "B",
   "zoom": 1,
-  "mode": "CW",
+  "mode": "RTTY",
   "filter_lo": 100,
   "filter_hi": 2800,
   "agc": "Med",
@@ -70,7 +70,7 @@
   "spec_ref_af": 0.0,
   "spec_ave_af": 1,
   "sample_rate": 333333.0,
-  "antenna_index": 1,
+  "antenna_index": 4,
   "power_index": 4,
   "selected_bw": "2000"
 }

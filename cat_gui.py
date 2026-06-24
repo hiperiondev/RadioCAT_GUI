@@ -5794,15 +5794,24 @@ class App:
         elif t=="user_text":
             # Server-pushed text for a "text"/"text_input" user-mod slot.
             # Suppressed while the radio is stopped — text only flows when running.
-            # Only render it if that slot's panel is the one currently shown
-            # (the GUI may have switched to a different mode in the meantime).
-            if not self.state.get("running", False):
-                pass
-            else:
+            # Always buffer for the slot so history is preserved across slot
+            # switches; only update the live widget when that slot is visible.
+            if self.state.get("running", False):
                 idx=msg.get("index")
                 text=msg.get("text","")
-                if idx is not None and getattr(self,"_text_pane_idx",None)==idx and text:
-                    self._append_text_rx(text)
+                if idx is not None and text:
+                    # Buffer regardless of which slot is currently shown
+                    buf=self._text_buf.setdefault(idx,[])
+                    buf.append(text)
+                    if len(buf)>500:
+                        del buf[:-500]
+                    # Update the visible widget only when this slot is active
+                    if getattr(self,"_text_pane_idx",None)==idx \
+                            and hasattr(self,"_text_rx"):
+                        self._text_rx.config(state="normal")
+                        self._text_rx.insert("end",text+"\n")
+                        self._text_rx.see("end")
+                        self._text_rx.config(state="disabled")
         elif t == "device_list":
             # Server replied to get_devices — open the selection popup on the
             # GUI thread (we are already on the GUI thread inside poll/_handle).
@@ -6016,9 +6025,14 @@ class App:
                 print("[state] Retrieved persistent values from server:")
                 for _k in sorted(incoming.keys()):
                     print(f"[state]   {_k} = {incoming[_k]!r}")
-            # PTT is owned by the GUI button — never let the server's reflected
-            # state overwrite it.  Any other field is safe to merge normally.
+            # PTT and running are owned by the GUI — never let the server's
+            # reflected state overwrite them.  On connect the GUI sends hello
+            # before start; the server's resp:ok therefore carries running=False
+            # (the start command hasn't been processed yet), which would
+            # permanently set self.state["running"]=False and keep PTT disabled.
+            # The GUI is the authoritative source for both fields.
             incoming.pop("ptt", None)
+            incoming.pop("running", None)
             _old_sr = self.state.get("sample_rate")
             self.state.update(incoming)
             # The server always sends the device-level allowed_bands.  If a
