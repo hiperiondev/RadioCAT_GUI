@@ -3093,6 +3093,9 @@ class App:
                                    self._ptt_band_ok())
             self.root.update_idletasks()
             self.net.send({"cmd":"set_lo","lo":which})
+            # If LOCK is active, re-scope it to the newly selected LO.
+            if getattr(self, '_freq_locked', False) and hasattr(self, '_apply_lock_state'):
+                self._apply_lock_state()
 
         def _refresh_lo_btns():
             a=self._lo_active.get()
@@ -3312,6 +3315,15 @@ class App:
                        padx=max(4,int(round(6*sc))),pady=max(1,int(round(1*sc))),
                        command=lambda:self._swap_lo_a_b())
         self._swap_btn.pack(side="left",padx=(max(2,int(round(3*sc))),0))
+
+        self._freq_locked = False
+        self._lock_btn=tk.Button(split_row,text="LOCK",anchor="center",
+                       bg=C["btn_gray"],fg=C["btn_sel_fg"],
+                       activebackground=C["btn_sel"],activeforeground=C["btn_sel_fg"],
+                       font=_gui_font(fs_split,"bold"),relief="flat",bd=0,highlightthickness=0,
+                       padx=max(4,int(round(6*sc))),pady=max(1,int(round(1*sc))),
+                       command=lambda:self._toggle_lock())
+        self._lock_btn.pack(side="left",padx=(max(2,int(round(3*sc))),0))
 
         # ── ◄ / ► frequency step buttons (step by selected bandwidth) ──────────
         _px_bw=max(1,int(round(2*sc)))
@@ -4354,6 +4366,9 @@ class App:
         self._refresh_antenna_label()
         # Power button/label: show/hide and update current level.
         self._refresh_power_label()
+        # Frequency LOCK: re-apply button highlight and M-button states.
+        if hasattr(self, '_lock_btn'):
+            self._apply_lock_state()
 
 
     # ── Device selection dialog (populated from server) ───────────────────────
@@ -5415,6 +5430,10 @@ class App:
         if hasattr(self, '_draw_ptt_btn'):
             self._draw_ptt_btn(bool(self.state.get("ptt", False)),
                                self._ptt_band_ok())
+        # If LOCK is active, re-scope it: SPLIT on → lock both LOs,
+        # SPLIT off → lock only the currently active LO.
+        if getattr(self, '_freq_locked', False) and hasattr(self, '_apply_lock_state'):
+            self._apply_lock_state()
 
     def _refresh_split_ui(self):
         on=bool(self.state.get("split",False))
@@ -5536,6 +5555,15 @@ class App:
         self.rf_wf.set_freq_range(f0,f1)
 
     def on_freq_changed(self,hz):
+        # ── Frequency-lock enforcement ────────────────────────────────────────
+        if getattr(getattr(self, 'lo_disp', None), '_locked', False):
+            _prev = int(self.state.get("lo_freq", hz))
+            self._sup = True
+            try:
+                self.lo_disp.set_value(_prev, notify=False)
+            finally:
+                self._sup = False
+            return
         # ── --restrict-band enforcement ───────────────────────────────────────
         # Skipped during memory recall (_mem_loading=True): the operator must
         # always be able to load any stored frequency; PTT will still be
@@ -5565,6 +5593,70 @@ class App:
             self._draw_ptt_btn(bool(self.state.get("ptt", False)),
                                self._ptt_band_ok())
         if not self._sup: self.net.send({"cmd":"set_lo_a_freq","hz":hz})
+
+    def _toggle_lock(self):
+        """Toggle the frequency-lock state.
+
+        When LOCK is active:
+        - All FreqDisp widgets (LO A, LO B, Tune) are set read-only so the
+          operator cannot change the active frequency via the digit display.
+        - The memory 'M' buttons are disabled so no new memory can be loaded.
+        - The LOCK button is highlighted in the active (selected) colour.
+        Toggling again restores normal operation.
+        """
+        self._freq_locked = not getattr(self, '_freq_locked', False)
+        self._apply_lock_state()
+
+    def _apply_lock_state(self):
+        """Apply or remove the frequency lock, scoped to the active LO.
+
+        Rules:
+        - LOCK off  → nothing is locked; all freq displays and M buttons normal.
+        - LOCK on, SPLIT off → only the currently active LO (A or B) is locked;
+          the other LO and Tune remain freely tunable.
+        - LOCK on, SPLIT on  → both LO A and LO B are locked (TX=A, RX=B are
+          both frozen); Tune remains freely tunable.
+        """
+        locked = getattr(self, '_freq_locked', False)
+        split  = bool(self.state.get("split", False)) if hasattr(self, 'state') else False
+        active = self._lo_active.get() if hasattr(self, '_lo_active') else "A"
+
+        # Determine which LOs to lock
+        if not locked:
+            lock_a = lock_b = False
+        elif split:
+            lock_a = lock_b = True          # both sides frozen during SPLIT
+        else:
+            lock_a = (active == "A")
+            lock_b = (active == "B")
+
+        # Highlight LOCK button while active
+        if hasattr(self, '_lock_btn'):
+            self._lock_btn.config(
+                bg=C["btn_sel"] if locked else C["btn_gray"],
+                fg=C["btn_sel_fg"])
+
+        # Propagate lock flag to each FreqDisp widget
+        # (on_freq_changed / on_lo_b_changed / on_tune_changed read disp._locked)
+        for attr, flag in (('lo_disp', lock_a), ('lo_b_disp', lock_b), ('tune_disp', False)):
+            disp = getattr(self, attr, None)
+            if disp is not None:
+                disp._locked = flag
+
+        # Enable / disable M buttons keyed by position string
+        _mem_btns = getattr(self, '_mem_btns', {})
+        for position, btn in _mem_btns.items():
+            if position == "LO A":
+                block = lock_a
+            elif position == "LO B":
+                block = lock_b
+            else:
+                block = False   # Tune M button never blocked by freq lock
+            try:
+                btn.config(state="disabled" if block else "normal",
+                           fg=C["text_dim"] if block else C["btn_sel_fg"])
+            except Exception:
+                pass
 
     def _swap_lo_a_b(self):
         """Swap the LO A and LO B frequencies and push both changes to the server."""
@@ -5621,6 +5713,15 @@ class App:
             self.lo_disp.set_value(int(new_hz), notify=True)
 
     def on_lo_b_changed(self,hz):
+        # ── Frequency-lock enforcement ────────────────────────────────────────
+        if getattr(getattr(self, 'lo_b_disp', None), '_locked', False):
+            _prev = int(self.state.get("lo_b_freq", hz))
+            self._sup = True
+            try:
+                self.lo_b_disp.set_value(_prev, notify=False)
+            finally:
+                self._sup = False
+            return
         # ── --restrict-band enforcement ───────────────────────────────────────
         # Skipped during memory recall (_mem_loading=True): the operator must
         # always be able to load any stored frequency; PTT will still be
@@ -5652,6 +5753,15 @@ class App:
         if not self._sup: self.net.send({"cmd":"set_lo_b_freq","hz":hz})
 
     def on_tune_changed(self,hz):
+        # ── Frequency-lock enforcement ────────────────────────────────────────
+        if getattr(getattr(self, 'tune_disp', None), '_locked', False):
+            _prev = int(self.state.get("tune_freq", hz))
+            self._sup = True
+            try:
+                self.tune_disp.set_value(_prev, notify=False)
+            finally:
+                self._sup = False
+            return
         self.state["tune_freq"]=hz
         if not self._sup: self.net.send({"cmd":"set_tune_freq","hz":hz})
 
