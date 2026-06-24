@@ -4150,6 +4150,9 @@ class App:
         """
         if not getattr(self, '_ptt_enabled', False):
             return False
+        # PTT is always blocked while the radio is stopped.
+        if not self.state.get('running', False):
+            return False
         if not getattr(_ARGS, 'restrict_band', False):
             return True
         allowed = set(self.state.get('allowed_bands') or BAND_RANGES.keys())
@@ -4893,18 +4896,16 @@ class App:
             self.net.send({"cmd": "hello"})
             self.net.send({"cmd": "set_ptt",   "enabled": False})
             self.net.send({"cmd": "set_split",  "enabled": False})
-            if not self._user_stopped:
-                self.net.send({"cmd": "start"})
-        _auto_start = not self._user_stopped
-        self.state["running"] = _auto_start
+            self.net.send({"cmd": "start"})
+        # GUI always starts in run mode on every new connection — never carry
+        # over a previous _user_stopped flag so the radio is always ready.
+        self._user_stopped = False
+        self.state["running"] = True
         threading.Thread(target=_send_hello_burst, daemon=True).start()
         self.conn_btn.config(text="Disconnect", state="normal",
                              bg="#2a0e0e", fg=C["btn_red_fg"])
         self.conn_status.config(fg=C["btn_grn_fg"])
-        if _auto_start:
-            self.start_btn.config(text="Stop", bg="#6a1414", fg=C["btn_red_fg"])
-        else:
-            self.start_btn.config(text="Start", bg=C["btn_grn"], fg=C["btn_grn_fg"])
+        self.start_btn.config(text="Stop", bg="#6a1414", fg=C["btn_red_fg"])
 
     def _on_disconnected(self, reason=None):
         self.state["running"]=False
@@ -5406,12 +5407,37 @@ class App:
     def _toggle_run(self):
         if not self.net.connected: return
         if self.state["running"]:
+            # Always turn PTT off before entering stop mode.
+            # Send set_ptt to server first so it clears any active TX state.
+            if self.state.get("ptt", False):
+                self.state["ptt"] = False
+                self.net.send({"cmd": "set_ptt", "enabled": False,
+                               "udp_port": self.rtp_audio.local_udp_port()})
+                self.rtp_audio.set_ptt(False)
+                self.smeter.set_tx(False)
+                if hasattr(self, 'rf_wf'):   self.rf_wf.set_tx(False)
+                if hasattr(self, 'rf_spec'): self.rf_spec.set_tx(False)
             self.net.send({"cmd":"stop"}); self.state["running"]=False
             self._user_stopped = True   # remember the operator chose to stop
+            # Disable PTT button while stopped
+            if hasattr(self, '_draw_ptt_btn'):
+                self._draw_ptt_btn(False, False)
+            if hasattr(self, '_ptt_canvas'):
+                self._ptt_canvas.config(cursor="arrow")
             self.start_btn.config(text="Start",bg=C["btn_grn"],fg=C["btn_grn_fg"])
         else:
+            # Always start with PTT off when entering run mode.
+            self.state["ptt"] = False
+            self.net.send({"cmd": "set_ptt", "enabled": False,
+                           "udp_port": self.rtp_audio.local_udp_port()})
+            self.rtp_audio.set_ptt(False)
             self.net.send({"cmd":"start"}); self.state["running"]=True
             self._user_stopped = False  # operator restarted — clear the flag
+            # Re-enable PTT button (subject to band/socket guard)
+            if hasattr(self, '_draw_ptt_btn'):
+                self._draw_ptt_btn(False, self._ptt_band_ok())
+            if hasattr(self, '_ptt_canvas') and self._ptt_band_ok():
+                self._ptt_canvas.config(cursor="hand2")
             self.start_btn.config(text="Stop",bg="#6a1414",fg=C["btn_red_fg"])
 
     def adj_zoom(self,d):
@@ -5666,12 +5692,16 @@ class App:
                     self.af_wf.add_row(spec)
         elif t=="user_text":
             # Server-pushed text for a "text"/"text_input" user-mod slot.
+            # Suppressed while the radio is stopped — text only flows when running.
             # Only render it if that slot's panel is the one currently shown
             # (the GUI may have switched to a different mode in the meantime).
-            idx=msg.get("index")
-            text=msg.get("text","")
-            if idx is not None and getattr(self,"_text_pane_idx",None)==idx and text:
-                self._append_text_rx(text)
+            if not self.state.get("running", False):
+                pass
+            else:
+                idx=msg.get("index")
+                text=msg.get("text","")
+                if idx is not None and getattr(self,"_text_pane_idx",None)==idx and text:
+                    self._append_text_rx(text)
         elif t == "device_list":
             # Server replied to get_devices — open the selection popup on the
             # GUI thread (we are already on the GUI thread inside poll/_handle).
