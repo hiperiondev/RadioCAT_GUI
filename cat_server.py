@@ -764,8 +764,29 @@ def _ensure_config(path, spec, kind="config"):
         example_path = path + ".example"
         if not os.path.exists(example_path):
             try:
+                # For device config examples, append the default [bandwidth]
+                # section (with comments) so the operator sees all available
+                # keys in one file.
+                _base_content = _render_config(spec.defaults, spec)
+                if spec is DEVICE_CONFIG_SPEC:
+                    _bw_lines = [
+                        "",
+                        "[bandwidth]",
+                        "# Available filter bandwidths (Hz) for each modulation mode.",
+                        "# The GUI bandwidth selector is populated from the entry whose",
+                        "# name matches the currently active modulation mode.",
+                        "# Add an entry here for every modulation label used in",
+                        "# [user_mods] device configs.  Values are comma-separated Hz.",
+                    ]
+                    for _mod, _vals in _BANDWIDTH_DEFAULTS.items():
+                        _val_str = ",".join(str(v) for v in _vals)
+                        _bw_lines.append(f'%s = "%s"' % (_mod, _val_str))
+                    _base_content = (
+                        _base_content.rstrip("\n") + "\n"
+                        + "\n".join(_bw_lines) + "\n"
+                    )
                 with open(example_path, "w", encoding="utf-8") as f:
-                    f.write(_render_config(spec.defaults, spec))
+                    f.write(_base_content)
                 print(f"[config] Created example {kind}: {example_path}")
             except Exception as e:
                 print(f"[config] WARNING: could not write example {kind}: {e}")
