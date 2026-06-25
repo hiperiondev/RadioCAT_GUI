@@ -4606,6 +4606,8 @@ class App:
             messagebox.showinfo("Antenna", "Not connected to server.",
                                 parent=self.root)
             return
+        if self.state.get("ptt", False):
+            return
         self.net.send({"cmd": "get_antennas"})
 
     def _open_antenna_dialog(self, antennas, current=0):

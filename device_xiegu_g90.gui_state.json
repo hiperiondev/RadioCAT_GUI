@@ -1,17 +1,17 @@
 {
-  "center_freq": 28400000.0,
+  "center_freq": 3700000.0,
   "tune_freq": 14206000.0,
-  "lo_b_freq": 28140500.0,
-  "lo_active": "B",
+  "lo_b_freq": 28153000.0,
+  "lo_active": "A",
   "zoom": 1,
-  "mode": "RTTY",
+  "mode": "APRS",
   "filter_lo": 100,
   "filter_hi": 2800,
   "agc": "Med",
-  "agc_thresh": -140.0,
-  "rf_gain": 0.0,
-  "volume": 45.0,
-  "squelch": -56.0,
+  "agc_thresh": -106.0,
+  "rf_gain": 28.0,
+  "volume": 38.0,
+  "squelch": -82.0,
   "nb": false,
   "nr": false,
   "nbrf": false,
@@ -50,7 +50,7 @@
     false
   ],
   "user_btn_list_sel": [
-    1,
+    2,
     -1,
     -1,
     -1,
@@ -70,7 +70,7 @@
   "spec_ref_af": 0.0,
   "spec_ave_af": 1,
   "sample_rate": 333333.0,
-  "antenna_index": 4,
+  "antenna_index": 2,
   "power_index": 4,
   "selected_bw": "500"
 }

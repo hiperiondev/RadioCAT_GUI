@@ -1333,10 +1333,14 @@ _GUI_STATE_KEYS = (
 
 
 def _gui_state_file_for_device(device_cfg_path):
-    """Return path of the GUI-state JSON file for this device config.
-    Mirrors the naming convention of _memory_file_for_device."""
+    """Return the absolute path of the GUI-state JSON file for this device config.
+
+    Always returns an absolute path so that daemon threads (whose CWD may
+    differ from the main thread) consistently resolve to the same file.
+    Mirrors the naming convention of _memory_file_for_device.
+    """
     if device_cfg_path:
-        base, _ext = os.path.splitext(device_cfg_path)
+        base, _ext = os.path.splitext(os.path.abspath(device_cfg_path))
         return base + ".gui_state.json"
     return os.path.join(os.getcwd(), "cat_default.gui_state.json")
 
@@ -1357,17 +1361,26 @@ def _load_gui_state(path):
 
 def _save_gui_state(path, state):
     """Atomically write *state* dict to *path* (write-then-rename).
-    Only writes if *path* already exists — never auto-creates the file."""
-    if not os.path.exists(path):
+
+    Only saves if *path* already exists — gui_state files are per-device and
+    must be explicitly created by the operator; the server never auto-creates
+    them (unlike memory files).
+
+    Uses an absolute path so that daemon threads (which may have a different
+    working directory than the main thread) always resolve to the same file.
+    The old relative-path bug caused os.replace(.tmp -> .json) to fail when
+    _autosave_gui_state ran on a daemon thread with a different CWD.
+    """
+    # Resolve once to an absolute path so the exists-check and the write both
+    # refer to the same file regardless of the calling thread's CWD.
+    abs_path = os.path.abspath(path)
+    if not os.path.exists(abs_path):
         return
     try:
-        d = os.path.dirname(path)
-        if d:
-            os.makedirs(d, exist_ok=True)
-        tmp = path + ".tmp"
+        tmp = abs_path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
-        os.replace(tmp, path)
+        os.replace(tmp, abs_path)
     except Exception as e:
         print(f"[gui_state] WARNING: could not save {path}: {e}")
 
