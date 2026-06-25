@@ -95,7 +95,7 @@ type_10 = "normal"
 # Buttons with empty labels are hidden in the GUI.
 label_1 = "BtnUsr1"
 mode_1 = "normal"
-config_1 = "{}"
+config_1 = '{"BW":{"type":"slide","range":[100,3000]},"Noise":{"type":"check"},"Mode":{"type":"radio","options":["AM","FM","SSB"]},"Profile":{"type":"list","values":[{"key":"Wide","val":"wide"},{"key":"Narrow","val":"narrow"}]}}'
 label_2 = "BtnUsr2"
 mode_2 = "normal"
 config_2 = "{}"

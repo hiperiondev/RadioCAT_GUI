@@ -73,5 +73,12 @@
   "antenna_index": 0,
   "power_index": 0,
   "selected_bw": "",
-  "rf_usr_btn_config_vals": {}
+  "rf_usr_btn_config_vals": {
+    "1": {
+      "BW": 3000,
+      "Noise": true,
+      "Mode": "SSB",
+      "Profile": "narrow"
+    }
+  }
 }
