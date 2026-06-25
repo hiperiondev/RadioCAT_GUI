@@ -3459,34 +3459,62 @@ class App:
         tk.Label(sv,text="Volume",bg=C["panel_bg"],fg=C["text_dim"],
                  font=_gui_font(fs_sl)).grid(row=0,column=0,sticky="w")
         self.vol_var=tk.DoubleVar(value=self.state["volume"])
+        self._vol_lbl=tk.Label(sv,text=f'{self.state["volume"]:.0f}',
+                               bg=C["panel_bg"],fg=C["text"],font=_gui_font(fs_sl),
+                               width=5,anchor="w")
+        self._vol_lbl.grid(row=0,column=2,sticky="w")
+        def _vol_cmd(v,_lbl=self._vol_lbl):
+            _lbl.config(text=f'{float(v):.0f}')
+            self.net.send({"cmd":"set_volume","value":float(v)})
         tk.Scale(sv,from_=0,to=100,orient="horizontal",variable=self.vol_var,
                  bg=C["panel_bg"],fg=C["text"],troughcolor=C["btn_gray"],
                  highlightthickness=0,showvalue=0,length=sl_len,
-                 command=lambda v:self.net.send({"cmd":"set_volume","value":float(v)})
+                 command=_vol_cmd
                  ).grid(row=0,column=1,sticky="ew",padx=max(2,int(round(4*sc))))
         tk.Label(sv,text="AGC Thresh.",bg=C["panel_bg"],fg=C["text_dim"],
                  font=_gui_font(fs_sl)).grid(row=1,column=0,sticky="w")
         self.agct_var=tk.DoubleVar(value=self.state.get("agc_thresh",-100))
+        self._agct_lbl=tk.Label(sv,text=f'{self.state.get("agc_thresh",-100):.0f}',
+                                bg=C["panel_bg"],fg=C["text"],font=_gui_font(fs_sl),
+                                width=5,anchor="w")
+        self._agct_lbl.grid(row=1,column=2,sticky="w")
+        def _agct_cmd(v,_lbl=self._agct_lbl):
+            _lbl.config(text=f'{float(v):.0f}')
+            self.net.send({"cmd":"set_agc_thresh","value":float(v)})
         tk.Scale(sv,from_=-140,to=-20,orient="horizontal",variable=self.agct_var,
                  bg=C["panel_bg"],fg=C["text"],troughcolor=C["btn_gray"],
                  highlightthickness=0,showvalue=0,length=sl_len,
-                 command=lambda v:self.net.send({"cmd":"set_agc_thresh","value":float(v)})
+                 command=_agct_cmd
                  ).grid(row=1,column=1,sticky="ew",padx=max(2,int(round(4*sc))))
         tk.Label(sv,text="RF Gain",bg=C["panel_bg"],fg=C["text_dim"],
                  font=_gui_font(fs_sl)).grid(row=2,column=0,sticky="w")
         self.rfg_var=tk.DoubleVar(value=self.state.get("rf_gain",20.0))
+        self._rfg_lbl=tk.Label(sv,text=f'{self.state.get("rf_gain",20.0):.0f}',
+                               bg=C["panel_bg"],fg=C["text"],font=_gui_font(fs_sl),
+                               width=5,anchor="w")
+        self._rfg_lbl.grid(row=2,column=2,sticky="w")
+        def _rfg_cmd(v,_lbl=self._rfg_lbl):
+            _lbl.config(text=f'{float(v):.0f}')
+            self.net.send({"cmd":"set_rf_gain","value":float(v)})
         tk.Scale(sv,from_=0,to=60,orient="horizontal",variable=self.rfg_var,
                  bg=C["panel_bg"],fg=C["text"],troughcolor=C["btn_gray"],
                  highlightthickness=0,showvalue=0,length=sl_len,
-                 command=lambda v:self.net.send({"cmd":"set_rf_gain","value":float(v)})
+                 command=_rfg_cmd
                  ).grid(row=2,column=1,sticky="ew",padx=max(2,int(round(4*sc))))
         tk.Label(sv,text="Squelch",bg=C["panel_bg"],fg=C["text_dim"],
                  font=_gui_font(fs_sl)).grid(row=3,column=0,sticky="w")
         self.sql_var=tk.DoubleVar(value=self.state.get("squelch",-130.0))
+        self._sql_lbl=tk.Label(sv,text=f'{self.state.get("squelch",-130.0):.0f}',
+                               bg=C["panel_bg"],fg=C["text"],font=_gui_font(fs_sl),
+                               width=5,anchor="w")
+        self._sql_lbl.grid(row=3,column=2,sticky="w")
+        def _sql_cmd(v,_lbl=self._sql_lbl):
+            _lbl.config(text=f'{float(v):.0f}')
+            self.net.send({"cmd":"set_squelch","value":float(v)})
         tk.Scale(sv,from_=-140,to=0,orient="horizontal",variable=self.sql_var,
                  bg=C["panel_bg"],fg=C["text"],troughcolor=C["btn_gray"],
                  highlightthickness=0,showvalue=0,length=sl_len,
-                 command=lambda v:self.net.send({"cmd":"set_squelch","value":float(v)})
+                 command=_sql_cmd
                  ).grid(row=3,column=1,sticky="ew",padx=max(2,int(round(4*sc))))
 
         sv.grid_columnconfigure(1, weight=1)
@@ -6077,13 +6105,25 @@ class App:
                         int(self.state.get("tune_freq", 0)), notify=False)
                 # Sliders / scale variables
                 if hasattr(self, 'vol_var'):
-                    self.vol_var.set(self.state.get("volume", 80.0))
+                    _v = self.state.get("volume", 80.0)
+                    self.vol_var.set(_v)
+                    if hasattr(self, '_vol_lbl'):
+                        self._vol_lbl.config(text=f'{_v:.0f}')
                 if hasattr(self, 'agct_var'):
-                    self.agct_var.set(self.state.get("agc_thresh", -100.0))
+                    _v = self.state.get("agc_thresh", -100.0)
+                    self.agct_var.set(_v)
+                    if hasattr(self, '_agct_lbl'):
+                        self._agct_lbl.config(text=f'{_v:.0f}')
                 if hasattr(self, 'rfg_var'):
-                    self.rfg_var.set(self.state.get("rf_gain", 20.0))
+                    _v = self.state.get("rf_gain", 20.0)
+                    self.rfg_var.set(_v)
+                    if hasattr(self, '_rfg_lbl'):
+                        self._rfg_lbl.config(text=f'{_v:.0f}')
                 if hasattr(self, 'sql_var'):
-                    self.sql_var.set(self.state.get("squelch", -130.0))
+                    _v = self.state.get("squelch", -130.0)
+                    self.sql_var.set(_v)
+                    if hasattr(self, '_sql_lbl'):
+                        self._sql_lbl.config(text=f'{_v:.0f}')
                 # LO A/B selector
                 if hasattr(self, '_lo_active'):
                     self._lo_active.set(self.state.get("lo_active", "A"))
@@ -6188,13 +6228,25 @@ class App:
                     self.tune_disp.set_value(
                         int(self.state.get("tune_freq", 0)), notify=False)
                 if hasattr(self, 'vol_var'):
-                    self.vol_var.set(self.state.get("volume", 80.0))
+                    _v = self.state.get("volume", 80.0)
+                    self.vol_var.set(_v)
+                    if hasattr(self, '_vol_lbl'):
+                        self._vol_lbl.config(text=f'{_v:.0f}')
                 if hasattr(self, 'agct_var'):
-                    self.agct_var.set(self.state.get("agc_thresh", -100.0))
+                    _v = self.state.get("agc_thresh", -100.0)
+                    self.agct_var.set(_v)
+                    if hasattr(self, '_agct_lbl'):
+                        self._agct_lbl.config(text=f'{_v:.0f}')
                 if hasattr(self, 'rfg_var'):
-                    self.rfg_var.set(self.state.get("rf_gain", 20.0))
+                    _v = self.state.get("rf_gain", 20.0)
+                    self.rfg_var.set(_v)
+                    if hasattr(self, '_rfg_lbl'):
+                        self._rfg_lbl.config(text=f'{_v:.0f}')
                 if hasattr(self, 'sql_var'):
-                    self.sql_var.set(self.state.get("squelch", -130.0))
+                    _v = self.state.get("squelch", -130.0)
+                    self.sql_var.set(_v)
+                    if hasattr(self, '_sql_lbl'):
+                        self._sql_lbl.config(text=f'{_v:.0f}')
                 if hasattr(self, '_lo_active'):
                     self._lo_active.set(self.state.get("lo_active", "A"))
                     self._refresh_lo_btns()
