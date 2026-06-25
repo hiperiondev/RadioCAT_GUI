@@ -3491,43 +3491,6 @@ class App:
 
         sv.grid_columnconfigure(1, weight=1)
 
-
-        # ── SDR-Device / Soundcard / Bandwidth / Sample Rate ──────────────────
-        r1=tk.Frame(lp,bg=C["panel_bg"])
-        r1.pack(fill="x",padx=max(2,int(round(4*sc))),pady=(max(1,int(round(2*sc))),max(1,int(round(1*sc)))))
-        for t in ["Device","Sample Rate"]:
-            if t == "Device":
-                _dcmd = self._request_device_list
-            else:
-                _dcmd = self._request_sample_rates
-            _fbtn(r1,t,sc=sc,command=_dcmd
-                  ).pack(side="left",padx=max(1,int(round(1*sc))),fill="x",expand=True)
-        if not _ARGS.disable_soundcard_select:
-            _fbtn(r1,"Soundcard",sc=sc,
-                  command=self._open_soundcard_dialog
-                  ).pack(side="left",padx=max(1,int(round(1*sc))),fill="x",expand=True)
-
-        # ── transport bar ─────────────────────────────────────────────────────
-        tb=tk.Frame(lp,bg=C["panel_bg"])
-        tb.pack(fill="x",padx=max(2,int(round(4*sc))),pady=max(1,int(round(1*sc))))
-        colors={"●":"#cc2020","▶":"#22aa22","⏸":"#aaaa20",
-                "■":"#607090","◀◀":"#607090","▶▶":"#607090","∞":"#607090"}
-        actions={"●":"rec","▶":"play","⏸":"pause","■":"stop",
-                 "◀◀":"rw","▶▶":"ff","∞":"infinite"}
-        fs_tp=max(8,int(round(BASE['btn_big_size']*sc)))
-        for sym in ["●","▶","⏸","■","◀◀","▶▶","∞"]:
-            tk.Button(tb,text=sym,bg=C["btn_gray"],fg=colors[sym],
-                      font=_gui_font(fs_tp),relief="flat",bd=1,
-                      width=2,pady=0,
-                      command=lambda sym=sym:self.net.send({"cmd":"transport","action":actions[sym]})
-                      ).pack(side="left",padx=max(1,int(round(1*sc))))
-
-        # ── Start ─────────────────────────────────────────────────────────────
-        r3=tk.Frame(lp,bg=C["panel_bg"])
-        r3.pack(fill="x",padx=max(2,int(round(4*sc))),pady=max(1,int(round(1*sc))))
-        self.start_btn=_fbtn(r3,"Start",sc=sc,command=self._toggle_run)
-        self.start_btn.pack(side="left",padx=max(1,int(round(1*sc))),fill="x",expand=True)
-
         # ── User-button rows (NR/NB RF/NB IF/AFC/Mute/AGC Med/Notch/ANotch
         #    removed — these frames now only hold the user-defined buttons
         #    below). ──────────────────────────────────────────────────────
@@ -3570,6 +3533,42 @@ class App:
                         anchor="center",
                         padx=max(2,int(round(2*sc))),pady=max(1,int(round(2*sc))))
             b.grid(row=0,column=col,padx=_ubtn_px,sticky="ew"); self.user_btns[idx]=b
+
+        # ── SDR-Device / Soundcard / Bandwidth / Sample Rate ──────────────────
+        r1=tk.Frame(lp,bg=C["panel_bg"])
+        r1.pack(fill="x",padx=max(2,int(round(4*sc))),pady=(max(1,int(round(2*sc))),max(1,int(round(1*sc)))))
+        for t in ["Device","Sample Rate"]:
+            if t == "Device":
+                _dcmd = self._request_device_list
+            else:
+                _dcmd = self._request_sample_rates
+            _fbtn(r1,t,sc=sc,command=_dcmd
+                  ).pack(side="left",padx=max(1,int(round(1*sc))),fill="x",expand=True)
+        if not _ARGS.disable_soundcard_select:
+            _fbtn(r1,"Soundcard",sc=sc,
+                  command=self._open_soundcard_dialog
+                  ).pack(side="left",padx=max(1,int(round(1*sc))),fill="x",expand=True)
+
+        # ── transport bar ─────────────────────────────────────────────────────
+        tb=tk.Frame(lp,bg=C["panel_bg"])
+        tb.pack(fill="x",padx=max(2,int(round(4*sc))),pady=max(1,int(round(1*sc))))
+        colors={"●":"#cc2020","▶":"#22aa22","⏸":"#aaaa20",
+                "■":"#607090","◀◀":"#607090","▶▶":"#607090","∞":"#607090"}
+        actions={"●":"rec","▶":"play","⏸":"pause","■":"stop",
+                 "◀◀":"rw","▶▶":"ff","∞":"infinite"}
+        fs_tp=max(8,int(round(BASE['btn_big_size']*sc)))
+        for sym in ["●","▶","⏸","■","◀◀","▶▶","∞"]:
+            tk.Button(tb,text=sym,bg=C["btn_gray"],fg=colors[sym],
+                      font=_gui_font(fs_tp),relief="flat",bd=1,
+                      width=2,pady=0,
+                      command=lambda sym=sym:self.net.send({"cmd":"transport","action":actions[sym]})
+                      ).pack(side="left",padx=max(1,int(round(1*sc))))
+
+        # ── Start ─────────────────────────────────────────────────────────────
+        r3=tk.Frame(lp,bg=C["panel_bg"])
+        r3.pack(fill="x",padx=max(2,int(round(4*sc))),pady=max(1,int(round(1*sc))))
+        self.start_btn=_fbtn(r3,"Start",sc=sc,command=self._toggle_run)
+        self.start_btn.pack(side="left",padx=max(1,int(round(1*sc))),fill="x",expand=True)
 
         # ── Date/time + connect controls (bottom of left panel) ──────────────
         bot_l=tk.Frame(lp,bg=C["panel_bg"])
