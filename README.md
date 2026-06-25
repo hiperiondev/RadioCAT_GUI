@@ -86,7 +86,7 @@ The reference server included here is a **simulator**: it generates synthetic RF
 └────────────────────────────────────────────────────┘
 ```
 
-**TCP control channel** — newline-delimited UTF-8 JSON objects. The GUI sends one command object per line; the server always replies with a `{"resp": "ok"}` (plus a full state dict on `hello` and `select_device`). While running, the server additionally pushes `{"type": "data", ...}` frames at ~10 Hz with fresh spectrum, S-meter, and squelch data.
+**TCP control channel** — newline-delimited UTF-8 JSON objects. The GUI sends one command object per line; the server replies with `{"resp": "ok"}` for every command. For `hello` and `select_device` only, the reply also includes a full state dict: `{"resp": "ok", "state": {...}}`. While running, the server additionally pushes `{"type": "data", ...}` frames at ~10 Hz with fresh spectrum, S-meter, and squelch data.
 
 **UDP audio channel** — RTP datagrams with a 12-byte header and a G.711 μ-law (PCMU) payload at 8 kHz / 8-bit / mono / 20 ms frames (160 bytes of μ-law per packet). Bidirectional: server → GUI when PTT is off (receive audio); GUI → server when PTT is on (microphone audio for TX).
 
@@ -98,7 +98,7 @@ The reference server included here is a **simulator**: it generates synthetic RF
 - **RF waterfall** — O(width) per-frame incremental `PhotoImage.put()` scroll, adjustable speed (1–10), freezes with "● TX" badge during transmit
 - **RF spectrum** — retained-item canvas (no `delete("all")` per frame), draggable IF passband overlay, peak-hold display with configurable decay, VFO cursor line
 - **AF waterfall** — same engine as RF waterfall; driven from locally-decoded RTP audio (not a server-computed value), so what is drawn always matches what you hear
-- **AF spectrum** — local FFT of received PCM; uses `numpy.fft.rfft` when available, falls back to a pure-Python Cooley-Tukey radix-2 FFT with Hamming windowing
+- **AF spectrum** — local FFT of received PCM; a Hamming window is applied in all cases; uses `numpy.fft.rfft` when available, falls back to a pure-Python Cooley-Tukey radix-2 FFT otherwise
 - Reference level (SCALE) adjustable ±5 dB steps; FFT averaging (AVE) 1–10; per-box Waterfall / Spectrum toggle
 - Frequency-axis grid lines and labels auto-scaled to a "nice" step size for any span or zoom level
 
@@ -117,18 +117,22 @@ The reference server included here is a **simulator**: it generates synthetic RF
 - **Filter** — passband dragged directly on the IF spectrum canvas; low and high edge independently adjustable
 - **Zoom** — in/out buttons or mouse-wheel on the IF spectrum; zoom narrows the RF span displayed
 - Toggle buttons: NB (noise blanker), NR (noise reduction), NB RF, NB IF, AFC, ANF, Notch, Mute
-- **S-meter** — arc-style analog meter with peak-hold bar; numeric dBm and S-unit text readout; squelch open/closed LED
+- **S-meter** — arc-style analog meter with peak-hold bar; numeric dBm and S-unit text readout; squelch open/closed LED. During transmit the arc automatically switches to an **SWR gauge** (scale 1.0–5.0) with colour-coded zones (green → red)
 
 ### Radio Management
 - **Start / Stop** — arms or disarms the SDR (server begins or stops streaming data)
 - **PTT** — circular button, instantaneous TX/RX switching; waterfall/spectrum frozen with badge during TX
+- **SWAP** — swaps the LO A and LO B frequencies in one click
+- **LOCK** — locks the active LO (or both LOs when SPLIT is on) to prevent accidental frequency changes; the frequency displays and **M** buttons for locked LOs are disabled
 - **Transport bar** — Record ●, Play ▶, Pause ⏸, Stop ■, Rewind ◀◀, Fast-forward ▶▶, Loop ∞
 - **Device selector** — up to 20 named device profiles; switching saves current state and restores the target device's persisted state and memories
+- **Bandwidth selector** — combobox populated from the server's `bandwidth_map` for the current mode; `◄` / `►` step buttons shift the active LO by the selected bandwidth
+- **TX Power selector** — shown when the device profile defines `power_levels`; opens a modal dialog that sends `set_power` to the server
 - **Antenna selector** — up to 10 labeled ports per device, each with its own optional band restriction
 - **Sample Rate selector** — per-device list of selectable SDR sample rates
 - **Soundcard selector** — PyAudio device enumeration; independently pick mic and speaker device
 - **User-defined buttons** — 14 programmable buttons (7 + 7 rows), each independently `normal` (momentary) or `push` (toggle/latch)
-- **RF user buttons** — 11 programmable buttons left of the band array, same normal/push types
+- **RF user buttons** — 11 programmable buttons left of the band array, same normal/push types; a **long-press (≥ 3 s)** opens an in-app config dialog whose widgets are defined per-button in the device profile's `config_N` key
 - **Text/RTTY pane** — user-defined modulation modes can split the AF box to reveal a read-only text panel or a live RTTY-style bidirectional chat panel
 
 ### Window & Scaling
@@ -244,12 +248,19 @@ cd C:\CAT
 python cat_server.py
 ```
 
-On first run this creates `cat_server.toml` and `cat_device.toml` in `C:\CAT` with annotated defaults. The console will show:
+On first run (when no `cat_server.toml` or `cat_device.toml` exist), the server creates annotated `.example` template files next to where the real configs would live, then runs on built-in defaults. The console will show:
 
 ```
-[config] Created default config: cat_server.toml
-[config] Created default config: cat_device.toml
+[config] cat_server.toml not found — using built-in defaults (copy cat_server.toml.example to cat_server.toml to customise)
+[config] cat_device.toml not found — using built-in defaults (copy cat_device.toml.example to cat_device.toml to customise)
 [cat_server] listening on 0.0.0.0:50101
+```
+
+To persist your settings, copy (or rename) the `.example` files:
+
+```cmd
+copy cat_server.toml.example cat_server.toml
+copy cat_device.toml.example cat_device.toml
 ```
 
 **Windows Firewall prompt** — Windows may show a security alert the first time the server opens a socket. Click **"Allow access"** (at minimum for Private networks) so the GUI can reach it, even when both processes are on the same machine.
@@ -403,6 +414,13 @@ python cat_server.py
 python cat_server.py
 ```
 
+On first run, if `cat_server.toml` or `cat_device.toml` are absent, the server creates `.example` template files and runs on built-in defaults. Copy the examples to activate custom configuration:
+
+```bash
+cp cat_server.toml.example cat_server.toml
+cp cat_device.toml.example cat_device.toml
+```
+
 **2. Start the GUI** (connects to 127.0.0.1:50101 by default):
 
 ```bash
@@ -417,7 +435,7 @@ The RF waterfall and spectrum will begin scrolling, the S-meter will animate, an
 
 ## Configuration Files
 
-Both sides generate TOML configuration files on first run with annotated defaults, and **self-correct** on every subsequent run: if a key is missing (e.g., after an upgrade adds a new option), it is added at its default value and the file is rewritten in place.
+Both sides **self-correct** their TOML configuration files on every run: if a key is missing (e.g. after an upgrade adds a new option), it is added at its default value and the file is rewritten in place.
 
 ### cat\_gui.toml — GUI Settings
 
@@ -480,8 +498,8 @@ Created as `cat_device.toml` (override with `--device-config PATH`). Defines the
 [user_buttons]
 # Up to 14 user-defined buttons. Slots must be filled in order (no gaps).
 label_1 = "CW Spot"
-type_1 = "push"     # "normal" (momentary) or "push" (toggle/latch)
-list_1 = ""         # comma-separated dropdown items (optional)
+type_1 = "push"     # "normal" (momentary), "push" (toggle/latch), or "list" (selection dropdown)
+list_1 = ""         # comma-separated dropdown items when type is "list" (max 20 chars each)
 label_2 = ""
 # ... label_3 / type_3 / list_3 ... label_14 / type_14 / list_14
 
@@ -493,9 +511,31 @@ type_1 = "text_input"  # "normal", "text", or "text_input"
 
 [rf_usr_btns]
 # Up to 11 buttons shown left of the band array in the RF panel.
+# Buttons with empty labels are hidden in the GUI.
 label_1 = "ATU"
-mode_1 = "push"     # "normal" or "push"
-# ... label_2 / mode_2 ... label_11 / mode_11
+mode_1 = "push"     # "normal" (momentary) or "push" (push-push toggle)
+# config_1: JSON-encoded dict defining the long-press (≥ 3 s) configure dialog.
+# Empty string or "{}" = no dialog for this button.
+# Each key is the widget label; the value is a widget spec object.
+# Four widget types are supported:
+#   slide  → {"type": "slide", "range": [min, max]}
+#   list   → {"type": "list", "values": [{"key": "Label", "val": "value"}, …]}
+#   check  → {"type": "check"}
+#   radio  → {"type": "radio", "options": ["val1", "val2", …]}
+# Example (slider 0–100, a two-option radio group, and a checkbox):
+config_1 = '{"Power": {"type":"slide","range":[0,100]}, "Band": {"type":"radio","options":["HF","VHF"]}, "Bypass": {"type":"check"}}'
+# ... label_2 / mode_2 / config_2 ... label_11 / mode_11 / config_11
+
+[bandwidth]
+# Available filter bandwidths (Hz) for each modulation mode.
+# A matching entry is required for every label defined in [user_mods];
+# the server will refuse to start (sys.exit) if any label is missing here.
+AM  = "3000,6000,9000,10000"
+FM  = "12500,25000"
+LSB = "2700,3600"
+USB = "2700,3600"
+CW  = "250,500,1000,2000"
+# RTTY = "250,500"   ← add one line per [user_mods] label you define
 
 [sdr]
 sample_rate = 192000
@@ -503,6 +543,8 @@ sample_rate = 192000
 sample_rates = "192000,250000,500000,1000000,2000000"
 # Comma-separated list of bands this device may tune to (empty = all).
 allowed_bands = "160m,80m,60m,40m,30m,20m,17m,15m,12m,10m,6m"
+# Comma-separated TX power levels in watts; empty = power selector hidden.
+power_levels = "5.0,10.0,25.0,50.0,100.0"
 
 [antenna]
 # Up to 10 antenna ports. Empty label = slot unused/hidden.
@@ -521,7 +563,7 @@ These are generated automatically next to each device's config file:
 
 | File | Content |
 |------|---------|
-| `<device>.gui_state.json` | Persisted operator settings: frequencies (LO A/B/Tune), mode, filter, AGC, gains, squelch, toggles, zoom, sample rate, button states, antenna selection, spectrum display settings |
+| `<device>.gui_state.json` | Persisted operator settings: frequencies (LO A/B/Tune), mode, filter, AGC, gains, squelch, toggles, zoom, sample rate, button states, antenna selection, spectrum display settings, selected bandwidth (`selected_bw`), RF user button configure-dialog values (`rf_usr_btn_config_vals`) |
 | `<device>.memories.json` | 3 × 20 frequency memories (LO A, LO B, Tune) with labels and frequencies |
 
 State is saved when the operator switches away from a device and restored when they switch back. Memory slots are written immediately whenever a slot is saved from the GUI.
@@ -562,6 +604,13 @@ Audio:
 Misc:
   --config PATH          Load GUI TOML config from PATH instead of ./cat_gui.toml
   --debug                Enable verbose debug output on the console
+
+Band Restriction:
+  --restrict-band        Hard-block any LO change that falls outside the active
+                         device's allowed_bands (standard amateur bands outside
+                         that list are always rejected). Without this flag,
+                         allowed_bands only grays out band buttons; keyboard and
+                         mouse-wheel frequency entry are unrestricted.
 ```
 
 ### cat\_server.py CLI Flags
@@ -609,7 +658,7 @@ All messages are UTF-8, newline-terminated JSON objects (`\n`). One object per l
 
 ### GUI → Server Commands
 
-Every command receives an immediate `{"resp": "ok"}` reply. Commands marked ★ also receive a full state dict: `{"resp": "ok", "state": {...}}`.
+Every command receives an immediate `{"resp": "ok"}` reply. Commands marked ★ also return a full state dict in the same reply: `{"resp": "ok", "state": {...full radio state...}}`.
 
 #### Startup
 
@@ -647,6 +696,7 @@ Every command receives an immediate `{"resp": "ok"}` reply. Commands marked ★ 
 | `set_anf` | `enabled: bool` | Automatic notch filter |
 | `set_notch` | `enabled: bool` | Manual notch filter |
 | `set_mute` | `enabled: bool` | Audio mute |
+| `set_selected_bw` | `value: int` | Set the active bandwidth from the current mode's `bandwidth_map` list (Hz) |
 
 #### Spectrum Display
 
@@ -675,16 +725,25 @@ Every command receives an immediate `{"resp": "ok"}` reply. Commands marked ★ 
 | `set_sample_rate` | `value: int` | Set sample rate (must be in this device's configured list) |
 | `get_antennas` | — | Returns `{"type": "antenna_list", "antennas": [...], "current": N, "device_allowed_bands": [...]}` |
 | `select_antenna` | `index: int` | 1-based antenna port index (0 = deselect) |
+| `get_power_levels` | — | Returns the list of TX power levels for the current device |
+| `set_power` | `index: int` | Select TX power level by 0-based index from the device's `power_levels` list; silently ignored (with a console warning) if index is out of range |
 
 #### User Buttons & Text
 
 | Command | Fields | Notes |
 |---------|--------|-------|
-| `user_button` | `index: int` | Momentary press of user button N |
+| `user_button` | `index: int` | Momentary press of user button N (1-based) |
 | `user_button` | `index: int, enabled: bool` | Push-push (toggle) state of user button N |
+| `user_button` | `index: int, choice: int` | Selection index for a `"list"`-type user button |
+| `rf_usr_button` | `index: int` | Momentary press or push-push toggle of RF user button N (1–11, left of band buttons) |
+| `rf_usr_button` | `index: int, enabled: bool` | Explicit push state for a `"push"`-type RF user button |
+| `rf_usr_btn_config_set` | `index: int, values: {name: value, …}` | Store configure-dialog values for RF user button N; persisted to `.gui_state.json` |
 | `user_text` | `index: int, text: str` | Text submitted by the operator in a `text_input` mode panel |
-| `ui_button` | `name: str` | Named UI button press (e.g. `"Full Screen"`, `"Bandwidth"`) |
 | `ui_display` | `box: str, view: str` | Waterfall / Spectrum view toggle |
+| `ui_toolbar` | `box: str, action: str` | Toolbar button click (Waterfall / Spectrum toolbar) |
+| `ui_smeter_btn` | `action: str` | S-meter button click (Peak / S-units / Squelch) |
+| `ui_button` | `action: str` | GUI control button (Full Screen, SDR-Device, FreqMgr, Minimize, Exit) |
+| `memory` | — | Legacy momentary "M" button press (no-op; kept for backward compatibility with older GUI builds) |
 
 #### Frequency Memories
 
@@ -716,6 +775,7 @@ Every command receives an immediate `{"resp": "ok"}` reply. Commands marked ★ 
   "smeter_dbm": -73.0,
   "smeter_text": "S9",
   "squelch_open": true,
+  "swr": null,                             // float (e.g. 1.35) while PTT on; null otherwise
   "state": { ... }                         // incremental state fields
 }
 ```
@@ -732,6 +792,8 @@ The GUI uses `f_start`/`f_stop` to position the RF spectrum/waterfall frequency 
 | `sample_rate_list` | `rates: [int], current: int` | Response to `get_sample_rates` |
 | `antenna_list` | `antennas: [...], current: int, device_allowed_bands: [...]` | Response to `get_antennas` |
 | `memory_list` | `position: str, memories: [{label, freq}×20]` | Response to `get_memories` or `save_memory` |
+| `power_level_list` | `levels: [str], current: int` | Response to `get_power_levels`; drives the TX Power selector dialog |
+| `bandwidth_map` | `map: {mode: [int, ...]}` | Sent on connect and on device switch; populates the Bandwidth selector combobox per mode |
 | `user_text` | `index: int, text: str` | Server-pushed text to a `text`/`text_input` panel slot |
 | `disconnected` | (optional `reason`) | Emitted by GUI internally when the TCP connection drops |
 
@@ -748,11 +810,21 @@ nb, nr, nbrf, nbif, afc, anf, notch, mute
 ptt, split, running
 zoom, sample_rate
 user_buttons, user_btn_state, user_btn_list_sel
-rf_usr_btns, rf_usr_btn_state
+rf_usr_btns, rf_usr_btn_state, rf_usr_btn_config_vals
 user_mod_labels, user_mod_types
 spec_ref_rf, spec_ave_rf, spec_ref_af, spec_ave_af
 allowed_bands, antenna_labels, antenna_index, antenna_allowed_bands
+bandwidth_map, selected_bw
+power_levels, power_index
+active_device_index
 ```
+
+Key notes:
+- `rf_usr_btn_config_vals` — dict keyed by 1-based button index (as string); value is a `{name: value}` dict of the last values submitted via `rf_usr_btn_config_set`. Persisted to `.gui_state.json`.
+- `selected_bw` — currently selected bandwidth as an Hz string (e.g. `"2700"`). Persisted per-device.
+- `active_device_index` — 1-based index of the active device profile (0 = none). Used by the GUI to restore the device label on startup and mark the active device in the Device dialog.
+- `antenna_allowed_bands` — list of 10 sorted-band-name lists (one per antenna slot). Empty inner list = inherit device-level `allowed_bands`.
+- `swr` in **data frames only** — float SWR reading (e.g. `1.35`) while PTT is on; `null` when PTT is off. Drives the SWR gauge on the S-meter. (Not in the state dict; only in `type: "data"` frames.)
 
 ---
 
@@ -780,15 +852,23 @@ A narrow strip between the RF panel and the bottom row contains per-box controls
 
 The left-hand panel is fixed-width and hosts all transceiver controls, top to bottom:
 
-**S-meter row** — arc-style analog S-meter canvas with animated needle, peak-hold indicator, squelch open/closed LED, and a PTT circular button pinned to the right.
+**S-meter row** — arc-style analog S-meter canvas with animated needle, peak-hold indicator, squelch open/closed LED, and a PTT circular button pinned to the right. When PTT is active the arc gauge automatically switches to an **SWR meter** (scale 1.0–5.0) with colour-coded zones (green for low SWR, stepping through amber to red at high SWR); the dBm / S-unit text area is replaced with a numeric SWR readout. The S-meter resumes when PTT is released.
 
 **Frequency displays** — three `FreqDisp` widgets (LO A, LO B, Tune). Each shows 9 amber digits with thousands separators. A row of LO A/B selector buttons sits between the displays; SPLIT state shows TX/RX labels beside the active LOs. An **M** button beside each row opens the frequency memory dialog for that row.
+
+**SWAP / LOCK / BW row** — immediately below the LO selector buttons:
+- **SWAP** — exchanges the LO A and LO B frequencies in one click.
+- **LOCK** — toggles a frequency lock on the active LO. When locked the frequency display and **M** button for that LO are disabled to prevent accidental QSY. With SPLIT active, LOCK applies to both LO A and LO B simultaneously.
+- **◄ / ►** — shift the active LO down or up by the currently selected bandwidth.
+- **Bandwidth combobox** — dropdown populated from `bandwidth_map[current_mode]`; selecting a value sends `set_selected_bw` to the server.
 
 **Band buttons** — 11 ITU Region 2 bands (160 m – 6 m). Clicking QSYs LO to the band center. Buttons outside the device's `allowed_bands` (or the selected antenna's restriction) are grayed out automatically.
 
 **Volume / AGC Threshold / RF Gain / Squelch** — four horizontal sliders with labels.
 
-**Device / Bandwidth / Sample Rate / Soundcard** — buttons that open dialogs or send `ui_button` commands.
+**Device / Sample Rate / Soundcard** — buttons that open modal selection dialogs.
+
+**Power** — TX power level button; shown only when the server reports `power_levels` for the current device. Opens a level-selection dialog; the chosen level is sent as `set_power`.
 
 **Mode buttons** — standard modulation modes (LSB, USB, AM, FM, CW, …) plus up to 10 server-defined user modulation modes.
 
@@ -800,7 +880,7 @@ The left-hand panel is fixed-width and hosts all transceiver controls, top to bo
 
 **User-defined button rows** — 14 buttons in two rows of 7. Labels and types come from the server; unlabeled buttons are hidden.
 
-**RF user buttons** — 11 buttons shown above the band buttons in the RF panel, to the left of the band array.
+**RF user buttons** — 11 buttons shown above the band buttons in the RF panel, to the left of the band array. A **long-press (≥ 3 seconds)** on any button opens a runtime configure dialog. The dialog's widgets are defined in the device profile's `config_N` key for that button (see `cat_device.toml` above); values submitted in the dialog are sent as `rf_usr_btn_config_set` and persisted to `.gui_state.json`.
 
 **Date/time + connection controls** — UTC clock (green); host/port fields and a Connect button with a status LED. In autoconnect mode the entire row is hidden.
 
@@ -879,6 +959,10 @@ All geometry constants are defined in a `BASE` dictionary at scale 1.0. The effe
 
 | Scale Level | Factor | Target Resolution |
 |:-----------:|:------:|:----------------:|
+| −5 | 0.33× | very small displays |
+| −4 | 0.41× | — |
+| −3 | 0.51× | — |
+| −2 | 0.64× | — |
 | −1 | 0.80× | < 1280×720 |
 | 0 | 1.00× | 1280×720 |
 | 1 | 1.25× | 1920×1080 |
@@ -935,14 +1019,18 @@ The PostScript family name is resolved by fonttools (preferred), then `fc-query`
 | File | Created By | Content |
 |------|-----------|---------|
 | `cat_gui.toml` | GUI on first run | GUI display, connection, audio settings |
-| `cat_server.toml` | Server on first run | TCP/UDP transport, device list |
-| `cat_device.toml` | Server on first run | Default device profile (buttons, mods, SDR, antennas) |
-| `<device>.gui_state.json` | Server on device switch | Persisted per-device operator settings |
-| `<device>.memories.json` | Server on memory save | Per-device 3×20 frequency memories |
-| `cat_default.gui_state.json` | Server fallback | State file for the default (no explicit device config) profile |
-| `cat_default.memories.json` | Server fallback | Memory file for the default profile |
+| `cat_server.toml.example` | Server on first run (if `cat_server.toml` is absent) | Annotated template — copy to `cat_server.toml` to customise |
+| `cat_device.toml.example` | Server on first run (if `cat_device.toml` is absent) | Annotated template — copy to `cat_device.toml` to customise |
+| `<device>.gui_state.json` | Operator (must create manually) | Persisted per-device operator settings; server saves into it but never creates it |
+| `<device>.memories.json` | Server on first memory save | Per-device 3×20 frequency memories |
+| `<device>.gui_state.json.example` | Server on first run | Example gui_state file for reference / starting point |
+| `<device>.memories.json.example` | Server on first run | Example memories file for reference / starting point |
 
-All `.toml` files are self-healing: missing keys added at their default value, file rewritten in place.
+> **Config file creation:** When `cat_server.toml` or `cat_device.toml` is absent the server writes a `<name>.toml.example` companion file and runs on built-in defaults for that session. The actual `.toml` file is **never** auto-created; the operator must copy or rename the `.example` file to activate custom configuration.
+
+> **gui_state files:** The server saves into `<device>.gui_state.json` but will never create it if it does not exist. An `.example` version is written on first run for reference. The operator must create the real file (e.g. by copying the example) before per-device state will be persisted across restarts.
+
+All `.toml` files are self-healing: missing keys are added at their default value and the file is rewritten in place.
 
 ---
 
@@ -957,3 +1045,5 @@ The reference server is structured so that the signal-generation layer is easy t
 - **`IQWavSource`** — a complete, standalone IQ WAV reader with looping and FFT output. Wrap a real SDR API (SoapySDR, RTL-SDR Python bindings, etc.) in the same interface (`read_block(n)` → complex numpy array) to feed live IQ samples into `_iq_fft_spectrum_db()`.
 
 The JSON protocol is intentionally simple: any language or framework that can open a TCP socket and write newline-terminated JSON can drive the GUI.
+
+> **`[bandwidth]` validation:** The server performs a **fatal check** (`sys.exit(1)`) at startup if any label defined in `[user_mods]` lacks a matching entry in the `[bandwidth]` section of the active device config. Always add a `[bandwidth]` entry for every custom modulation mode you define, or the server will refuse to start.
