@@ -698,6 +698,7 @@ C = dict(
     panel_mid   = "#0e1a2e",   # toolbar / dividers
     spec_bg     = "#010610",   # spectrum/AF canvas bg — near-black navy
     btn_gray    = "#182438",   # default button
+    btn_cfg     = "#1e2e48",   # button with a longpress config window defined
     btn_grn     = "#0e3018",   # green highlight button face
     btn_grn_fg  = "#22dd44",   # green button text
     btn_red_fg  = "#dd2222",   # red "Exit" text
@@ -4360,11 +4361,13 @@ class App:
             if lbl:
                 b.config(text=lbl)
                 cfg=self._rf_usr_btn_cfg(idx)
+                has_cfg = bool(cfg.get("config"))
+                _off_bg = C["btn_cfg"] if has_cfg else C["btn_gray"]
                 if cfg.get("type")=="push":
                     on=self._rf_usr_btn_state(idx)
-                    b.config(bg=C["btn_sel"] if on else C["btn_gray"],fg=C["btn_sel_fg"])
+                    b.config(bg=C["btn_sel"] if on else _off_bg,fg=C["btn_sel_fg"])
                 else:
-                    b.config(bg=C["btn_gray"],fg=C["btn_sel_fg"])
+                    b.config(bg=_off_bg,fg=C["btn_sel_fg"])
                 try:
                     b.pack_info()
                 except tk.TclError:
@@ -5613,14 +5616,21 @@ class App:
         all_vals = self.state.get("rf_usr_btn_config_vals") or {}
         saved    = all_vals.get(str(idx)) or {}
 
+        # Config dialog background: one step lighter than the main panel so it
+        # reads as a distinct overlay while staying in the dark theme.
+        _dlg_bg  = C["btn_gray"]   # #182438 — slightly lighter than panel_bg
+        _dlg_fg  = C["text"]
+        _dlg_btn = C["btn_sel"]
+
         dlg = tk.Toplevel(self.root)
+        dlg.configure(bg=_dlg_bg)
         btn_lbl = self._rf_usr_btn_label(idx) or f"Btn {idx}"
         dlg.title(f"Configure: {btn_lbl}")
         dlg.resizable(False, False)
         dlg.update_idletasks()
         dlg.grab_set()
 
-        frm = tk.Frame(dlg, padx=pad*2, pady=pad)
+        frm = tk.Frame(dlg, padx=pad*2, pady=pad, bg=_dlg_bg)
         frm.pack(fill="both", expand=True)
 
         # ── build one row per config item ─────────────────────────────────────
@@ -5629,7 +5639,8 @@ class App:
         for row, (name, spec) in enumerate(config_dict.items()):
             wtype = spec.get("type", "check")
 
-            lbl = tk.Label(frm, text=name, font=_gui_font(fs), anchor="w")
+            lbl = tk.Label(frm, text=name, font=_gui_font(fs), anchor="w",
+                           bg=_dlg_bg, fg=_dlg_fg)
             lbl.grid(row=row, column=0, sticky="w", padx=(0, pad), pady=pad//2)
 
             if wtype == "slide":
@@ -5639,10 +5650,11 @@ class App:
                 init = max(lo, min(hi, init))
                 var = tk.DoubleVar(value=init)
                 _vars[name] = ("slide", var)
-                cell = tk.Frame(frm)
+                cell = tk.Frame(frm, bg=_dlg_bg)
                 cell.grid(row=row, column=1, sticky="ew", padx=(0, pad))
                 val_lbl = tk.Label(cell, text=f"{init:.0f}",
-                                   font=_gui_font(fs), width=5, anchor="e")
+                                   font=_gui_font(fs), width=5, anchor="e",
+                                   bg=_dlg_bg, fg=_dlg_fg)
                 val_lbl.pack(side="right")
                 scl = ttk.Scale(cell, from_=lo, to=hi, variable=var,
                                 orient="horizontal", length=max(120, int(round(120*sc))),
@@ -5681,7 +5693,7 @@ class App:
                     init = options[0]
                 var = tk.StringVar(value=init)
                 _vars[name] = ("radio", var)
-                radio_frm = tk.Frame(frm)
+                radio_frm = tk.Frame(frm, bg=_dlg_bg)
                 radio_frm.grid(row=row, column=1, sticky="w", pady=pad//2)
                 for opt in options:
                     ttk.Radiobutton(radio_frm, text=str(opt),
@@ -5694,7 +5706,7 @@ class App:
         sep.grid(row=n_rows, column=0, columnspan=2,
                  sticky="ew", pady=(pad, 0))
 
-        btn_frm = tk.Frame(frm)
+        btn_frm = tk.Frame(frm, bg=_dlg_bg)
         btn_frm.grid(row=n_rows+1, column=0, columnspan=2, pady=pad)
 
         def _ok():
@@ -5723,9 +5735,15 @@ class App:
             dlg.destroy()
 
         tk.Button(btn_frm, text="OK", command=_ok,
-                  width=8, font=_gui_font(fs)).pack(side="left", padx=pad)
+                  width=8, font=_gui_font(fs),
+                  bg=_dlg_btn, fg=C["btn_sel_fg"],
+                  activebackground=C["btn_sel"], activeforeground=C["btn_sel_fg"]
+                  ).pack(side="left", padx=pad)
         tk.Button(btn_frm, text="Cancel", command=dlg.destroy,
-                  width=8, font=_gui_font(fs)).pack(side="left", padx=pad)
+                  width=8, font=_gui_font(fs),
+                  bg=_dlg_bg, fg=_dlg_fg,
+                  activebackground=C["btn_gray"], activeforeground=C["text"]
+                  ).pack(side="left", padx=pad)
 
         frm.columnconfigure(1, weight=1)
 

@@ -75,10 +75,10 @@
   "selected_bw": "10000",
   "rf_usr_btn_config_vals": {
     "1": {
-      "BW": 100,
-      "Noise": true,
-      "Mode": "SSB",
-      "Profile": "wide"
+      "BW": 3000,
+      "Noise": false,
+      "Mode": "AM",
+      "Profile": "narrow"
     }
   }
 }
