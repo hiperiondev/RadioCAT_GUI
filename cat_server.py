@@ -1387,25 +1387,24 @@ def _load_gui_state(path):
 def _save_gui_state(path, state):
     """Atomically write *state* dict to *path* (write-then-rename).
 
-    Only saves if *path* already exists — gui_state files are per-device and
-    must be explicitly created by the operator; the server never auto-creates
-    them (unlike memory files).
+    Creates the file if it does not yet exist (default values on first run),
+    then overwrites it on every subsequent call.
 
     Uses an absolute path so that daemon threads (which may have a different
     working directory than the main thread) always resolve to the same file.
     The old relative-path bug caused os.replace(.tmp -> .json) to fail when
     _autosave_gui_state ran on a daemon thread with a different CWD.
     """
-    # Resolve once to an absolute path so the exists-check and the write both
-    # refer to the same file regardless of the calling thread's CWD.
+    # Resolve once to an absolute path so all operations refer to the same file.
     abs_path = os.path.abspath(path)
-    if not os.path.exists(abs_path):
-        return
+    is_new = not os.path.exists(abs_path)
     try:
         tmp = abs_path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
         os.replace(tmp, abs_path)
+        if is_new:
+            print(f"[gui_state] Created default GUI-state file: {abs_path}")
     except Exception as e:
         print(f"[gui_state] WARNING: could not save {path}: {e}")
 
@@ -1434,8 +1433,8 @@ def _load_memories(path):
         print(f"[memory] WARNING: could not read {path}: {e} — starting fresh")
         raw = {}
 
-    file_missing = not raw
-    changed = False
+    file_missing = not os.path.exists(path)
+    changed = file_missing  # always write if the file didn't exist
     for pos in MEMORY_POSITIONS:
         slots_in = raw.get(pos)
         if not isinstance(slots_in, list):
@@ -1461,8 +1460,10 @@ def _load_memories(path):
             changed = True
         mems[pos] = slots
 
-    if changed and not file_missing:
+    if changed:
         _save_memories(path, mems)
+        if file_missing:
+            print(f"[memory] Created default memory file: {path}")
     return mems
 
 
@@ -1653,6 +1654,10 @@ class RadioState:
         if _saved:
             self._apply_gui_state(_saved)
             print(f"[gui_state] restored state for {self.device_cfg_path!r}")
+        else:
+            # No saved state yet — create the file now with current defaults
+            # so subsequent saves (via _autosave_gui_state) always find it.
+            _save_gui_state(self._gui_state_file, self._capture_gui_state())
 
     # ─────────────────────────────────── per-device GUI state helpers ────────
 
@@ -2045,7 +2050,8 @@ class RadioState:
                         self._apply_gui_state(_in_snap)
                         print(f"[gui_state] restored state for {cfg_path!r}")
                     else:
-                        print(f"[gui_state] no saved state for {cfg_path!r} — keeping defaults")
+                        print(f"[gui_state] no saved state for {cfg_path!r} — creating with defaults")
+                        _save_gui_state(self._gui_state_file, self._capture_gui_state())
 
                 # reload_state tells the GUI to resync all widgets from the
                 # state dict that arrives in the preceding resp:ok.

@@ -1,10 +1,10 @@
 {
   "center_freq": 14195000.0,
   "tune_freq": 14205000.0,
-  "lo_b_freq": 10120000.0,
+  "lo_b_freq": 14195000.0,
   "lo_active": "A",
   "zoom": 1,
-  "mode": "RTTY",
+  "mode": "AM",
   "filter_lo": 100,
   "filter_hi": 2800,
   "agc": "Med",
@@ -69,16 +69,9 @@
   "spec_ave_rf": 2,
   "spec_ref_af": 0.0,
   "spec_ave_af": 1,
-  "sample_rate": 333333.0,
-  "antenna_index": 2,
-  "power_index": 2,
-  "selected_bw": "10000",
-  "rf_usr_btn_config_vals": {
-    "1": {
-      "BW": 3000,
-      "Noise": false,
-      "Mode": "AM",
-      "Profile": "narrow"
-    }
-  }
+  "sample_rate": 192000.0,
+  "antenna_index": 0,
+  "power_index": 0,
+  "selected_bw": "",
+  "rf_usr_btn_config_vals": {}
 }

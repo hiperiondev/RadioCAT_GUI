@@ -4,7 +4,7 @@
   "lo_b_freq": 14195000.0,
   "lo_active": "A",
   "zoom": 1,
-  "mode": "APRS",
+  "mode": "USB",
   "filter_lo": 100,
   "filter_hi": 2800,
   "agc": "Med",
@@ -50,7 +50,7 @@
     false
   ],
   "user_btn_list_sel": [
-    2,
+    -1,
     -1,
     -1,
     -1,

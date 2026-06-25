@@ -17,7 +17,7 @@
 #       "list" (opens a selection list; choice persists on the button)
 # list_N: comma-separated items shown in the list dialog when type is "list"
 #         (max 20 characters per item; unused when type != "list")
-label_1 = "UsrBtn1"
+label_1 = "UsrBtn"
 type_1 = "normal"
 list_1 = ""
 label_2 = "UsrBtn2"
@@ -86,7 +86,7 @@ label_8 = "FT8"
 type_8 = "normal"
 label_9 = "FT2"
 type_9 = "normal"
-label_10 = "FT4"
+label_10 = "J2CL"
 type_10 = "normal"
 
 [rf_usr_btns]
@@ -95,16 +95,7 @@ type_10 = "normal"
 # Buttons with empty labels are hidden in the GUI.
 label_1 = "BtnUsr1"
 mode_1 = "normal"
-config_1 = '{
-             "BW":{"type":"slide","range":[100,3000]},
-             "Noise":{"type":"check"},
-             "Mode":{"type":"radio","options":["AM","FM","SSB"]},
-             "Profile":{"type":"list","values":[
-                                                {"key":"Wide","val":"wide"},
-                                                {"key":"Narrow","val":"narrow"}
-                                               ]
-                       }
-             }'
+config_1 = "{}"
 label_2 = "BtnUsr2"
 mode_2 = "normal"
 config_2 = "{}"
@@ -151,8 +142,8 @@ config_11 = "{}"
 # Empty or omitted = power selector is hidden in the GUI.
 sample_rate = 192000
 sample_rates = "192000,250000,500000,1000000,2000000"
-allowed_bands = "80m,60m,40m,30m,20m,10m,6m"
-power_levels = "5.0,10.0,25.0,50.0,100.0"
+allowed_bands = "160m,80m,60m,40m,30m,20m,17m,15m,12m,10m"
+power_levels = "1.0,2.0,5.0,10.0,20.0"
 
 [antenna]
 # label_N (N=1..10): human-readable label for antenna port N shown
@@ -162,20 +153,20 @@ power_levels = "5.0,10.0,25.0,50.0,100.0"
 # antenna N is selected (e.g. "160m,80m,40m,20m,10m"). Empty string means
 # inherit the device-level allowed_bands restriction. Valid names:
 # 160m 80m 60m 40m 30m 20m 17m 15m 12m 10m 6m.
-label_1 = "Dipole 40m"
-label_2 = "Yagi 20m,10m"
-label_3 = "Moxon 17m,15m"
-label_4 = "Magic all bands"
+label_1 = "End Fed"
+label_2 = "Dipole 80m"
+label_3 = "Dipole 40m"
+label_4 = "Yagi 10m"
 label_5 = ""
 label_6 = ""
 label_7 = ""
 label_8 = ""
 label_9 = ""
 label_10 = ""
-allowed_bands_1 = "40m"
-allowed_bands_2 = "20m,10m"
-allowed_bands_3 = "17m,15m"
-allowed_bands_4 = ""
+allowed_bands_1 = "20m,17m"
+allowed_bands_2 = "80m"
+allowed_bands_3 = "40m"
+allowed_bands_4 = "10m"
 allowed_bands_5 = ""
 allowed_bands_6 = ""
 allowed_bands_7 = ""
