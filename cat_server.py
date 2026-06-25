@@ -2755,7 +2755,6 @@ def _parse_args():
     _pre.add_argument('--device-config', default=None)
     _pre_args, _ = _pre.parse_known_args()
     _config_path = _pre_args.config or os.path.join(os.getcwd(), _SERVER_CONFIG_NAME)
-    _device_config_path = _pre_args.device_config or os.path.join(os.getcwd(), _DEVICE_CONFIG_NAME)
 
     # ── Load / create the two TOML configs ────────────────────────────────────
     # cat_server.toml: [server] + [audio] + [devices] (transport settings +
@@ -2766,9 +2765,30 @@ def _parse_args():
     _devs = _cfg.get("devices", {})
     _D    = _SERVER_CONFIG_DEFAULTS
 
-    # cat_device.toml: [user_buttons] + [user_mods] + [rf_usr_btns] + [sdr]
-    # -- the buttons/mods/sample-rates for the *default* device profile
-    # (everything that affects GUI behaviour for one profile).
+    # Resolve the default device config path:
+    # - If --device-config was given on the CLI, use that.
+    # - Otherwise, if [devices] in cat_server.toml lists at least one device
+    #   with a non-empty config_1 path, use that first device's config file.
+    # - Fall back to ./cat_device.toml only as a last resort (no [devices]
+    #   defined at all, and no --device-config flag).
+    # This prevents the server from reading/writing the generic cat_device.toml
+    # when a proper [devices] list is already configured.
+    if _pre_args.device_config:
+        _device_config_path = _pre_args.device_config
+    else:
+        _first_device_cfg = str(_devs.get("config_1", "")).strip()
+        if _first_device_cfg:
+            _device_config_path = _first_device_cfg
+        else:
+            _device_config_path = os.path.join(os.getcwd(), _DEVICE_CONFIG_NAME)
+
+    # cat_device.toml (or first device's config): [user_buttons] + [user_mods]
+    # + [rf_usr_btns] + [sdr] -- the buttons/mods/sample-rates for the default
+    # device profile.  When a [devices] list is present this path is device #1's
+    # own config file, which main() will also adopt as the startup identity via
+    # select_device(1).  Reading and self-correcting the same file here avoids
+    # the "phantom" cat_device.toml that otherwise appears and causes the
+    # WARNING messages on startup.
     _dcfg  = _ensure_config(_device_config_path, DEVICE_CONFIG_SPEC, kind="device config")
     _ubtn  = _dcfg.get("user_buttons", {})
     _umods = _dcfg.get("user_mods",    {})
