@@ -30,5 +30,6 @@
   "sample_rate": "<persisted at runtime>",
   "antenna_index": "<persisted at runtime>",
   "power_index": "<persisted at runtime>",
-  "selected_bw": "<persisted at runtime>"
+  "selected_bw": "<persisted at runtime>",
+  "rf_usr_btn_config_vals": "<persisted at runtime>"
 }

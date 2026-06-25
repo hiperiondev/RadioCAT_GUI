@@ -95,26 +95,37 @@ type_10 = "normal"
 # Buttons with empty labels are hidden in the GUI.
 label_1 = "BtnUsr1"
 mode_1 = "normal"
+config_1 = "{}"
 label_2 = "BtnUsr2"
 mode_2 = "normal"
+config_2 = "{}"
 label_3 = "BtnUsr3"
 mode_3 = "normal"
+config_3 = "{}"
 label_4 = "BtnUsr4"
 mode_4 = "normal"
+config_4 = "{}"
 label_5 = "BtnUsr5"
 mode_5 = "normal"
+config_5 = "{}"
 label_6 = "BtnUsr6"
 mode_6 = "normal"
+config_6 = "{}"
 label_7 = "BtnUsr7"
 mode_7 = "normal"
+config_7 = "{}"
 label_8 = "BtnUsr8"
 mode_8 = "normal"
+config_8 = "{}"
 label_9 = "BtnUsr9"
 mode_9 = "normal"
+config_9 = "{}"
 label_10 = "BtnUsra"
 mode_10 = "normal"
+config_10 = "{}"
 label_11 = "BtnUsrb"
 mode_11 = "normal"
+config_11 = "{}"
 
 [sdr]
 # sample_rate: SDR hardware sample rate (Hz) applied when this device
@@ -164,11 +175,6 @@ allowed_bands_9 = ""
 allowed_bands_10 = ""
 
 [bandwidth]
-# Available filter bandwidths (Hz) for each modulation mode.
-# The GUI bandwidth selector is populated from the entry whose
-# name matches the currently active modulation mode.
-# Add an entry here for every modulation label used in
-# [user_mods] device configs.  Values are comma-separated Hz.
 AM = "3000,6000,9000,10000"
 FM = "12500,25000"
 LSB = "2700,3600"

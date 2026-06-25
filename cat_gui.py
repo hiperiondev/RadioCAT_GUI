@@ -2720,7 +2720,7 @@ class App:
             user_buttons=[{"label":"","type":"normal","list_items":[]} for _ in range(14)],
             user_btn_state=[False]*14,
             user_btn_list_sel=[-1]*14,
-            rf_usr_btns=[{"label":"","type":"normal"} for _ in range(11)],
+            rf_usr_btns=[{"label":"","type":"normal","config":{}} for _ in range(11)],
             rf_usr_btn_state=[False]*11,
             user_mod_labels=[""]*10,  # up to 10 user-defined modulation buttons
             user_mod_types=["normal"]*10,
@@ -3268,14 +3268,23 @@ class App:
         rf_usr_col=tk.Frame(band_area,bg=C["spec_bg"])
         rf_usr_col.pack(side="left",anchor="n",padx=(0,max(4,int(round(6*sc)))))
         self._rf_usr_btns={}   # idx -> Button
+        # Long-press state: after-id while button is held, fired flag after 1 s
+        self._rf_usr_btn_hold_ids   = {}   # idx -> after_id (pending 1-s timer)
+        self._rf_usr_btn_long_fired = {}   # idx -> bool (True once long-press fires)
+        self._rf_usr_btn_pressed    = {}   # idx -> bool (True while physically held)
         for _rui in range(11):
             _ruidx=_rui+1
             _rub=tk.Button(rf_usr_col,text="",anchor="center",
                            bg=C["btn_gray"],fg=C["btn_sel_fg"],
                            activebackground=C["btn_sel"],activeforeground=C["btn_sel_fg"],
                            font=_gui_font(fs_band),relief="flat",bd=0,highlightthickness=0,
-                           padx=_bpx,pady=0,
-                           command=lambda i=_ruidx:self._rf_usr_btn_press(i))
+                           padx=_bpx,pady=0)
+            # Use explicit press/release bindings so a 3-second hold opens the
+            # configure dialog instead of triggering the normal click action.
+            _rub.bind("<ButtonPress-1>",
+                      lambda e,i=_ruidx:self._rf_usr_btn_start_hold(i))
+            _rub.bind("<ButtonRelease-1>",
+                      lambda e,i=_ruidx:self._rf_usr_btn_end_hold(i))
             # Do not pack now — _refresh packs/forgets based on server labels
             self._rf_usr_btns[_ruidx]=_rub
 
@@ -5496,12 +5505,16 @@ class App:
 
     # ── RF user buttons (server-configured, indices 1..11, left of band btns) ─
     def _rf_usr_btn_cfg(self,idx):
-        """Return {"label":..., "type":...} for RF user button idx (1..11)."""
+        """Return {"label":..., "type":..., "config":...} for RF user button idx (1..11)."""
         ub=self.state.get("rf_usr_btns") or []
         if 1<=idx<=len(ub) and ub[idx-1]:
             cfg=ub[idx-1]
-            return {"label":cfg.get("label",""),"type":cfg.get("type","normal")}
-        return {"label":"","type":"normal"}
+            return {
+                "label":  cfg.get("label",""),
+                "type":   cfg.get("type","normal"),
+                "config": cfg.get("config",{}),
+            }
+        return {"label":"","type":"normal","config":{}}
 
     def _rf_usr_btn_label(self,idx):
         return self._rf_usr_btn_cfg(idx).get("label","").strip()[:7]
@@ -5527,6 +5540,194 @@ class App:
         else:
             self.net.send({"cmd":"rf_usr_button","index":idx})
         self._refresh()
+
+    # ── RF user button long-press (3 s hold → configure dialog) ──────────────
+
+    def _rf_usr_btn_start_hold(self, idx):
+        """Called on ButtonPress-1: start a 1-second timer for long-press detection.
+        Returns "break" to suppress tk.Button's internal class binding (which
+        grabs the pointer and fires spurious ButtonRelease when cursor drifts off)."""
+        self._rf_usr_btn_long_fired[idx] = False
+        self._rf_usr_btn_pressed[idx] = True
+        aid = self.root.after(1000, lambda: self._rf_usr_btn_long_press(idx))
+        self._rf_usr_btn_hold_ids[idx] = aid
+        return "break"
+
+    def _rf_usr_btn_end_hold(self, idx):
+        """Called on ButtonRelease-1: cancel timer and act (short press) if < 1 s.
+        Ignores spurious releases fired while the pointer is outside the button
+        (tk.Button emits ButtonRelease when cursor drifts off during a hold).
+        Returns "break" to suppress tk.Button's class-level invoke()."""
+        # Ignore release if the long-press dialog already fired
+        if self._rf_usr_btn_long_fired.get(idx, False):
+            self._rf_usr_btn_pressed[idx] = False
+            return "break"
+        # Detect spurious release: pointer left the button while held.
+        # In that case tk.Button fires ButtonRelease but the physical button
+        # is still down — check widget geometry to decide.
+        btn = self._rf_usr_btns.get(idx)
+        if btn is not None and self._rf_usr_btn_pressed.get(idx, False):
+            try:
+                px = btn.winfo_pointerx() - btn.winfo_rootx()
+                py = btn.winfo_pointery() - btn.winfo_rooty()
+                w  = btn.winfo_width()
+                h  = btn.winfo_height()
+                pointer_inside = (0 <= px < w) and (0 <= py < h)
+            except Exception:
+                pointer_inside = True   # assume inside on error
+            if not pointer_inside:
+                # Spurious release — pointer drifted off; keep the timer running
+                return "break"
+        self._rf_usr_btn_pressed[idx] = False
+        aid = self._rf_usr_btn_hold_ids.pop(idx, None)
+        if aid is not None:
+            self.root.after_cancel(aid)
+        if not self._rf_usr_btn_long_fired.get(idx, False):
+            self._rf_usr_btn_press(idx)
+        return "break"
+
+    def _rf_usr_btn_long_press(self, idx):
+        """Called after 1-second hold: open the configure dialog (if config exists)."""
+        self._rf_usr_btn_hold_ids.pop(idx, None)
+        self._rf_usr_btn_long_fired[idx] = True
+        self._rf_usr_btn_pressed[idx] = False
+        cfg = self._rf_usr_btn_cfg(idx)
+        config_dict = cfg.get("config") or {}
+        if not config_dict or not isinstance(config_dict, dict):
+            return   # no config defined — nothing to open
+        self._open_rf_usr_btn_config_dialog(idx, config_dict)
+
+    def _open_rf_usr_btn_config_dialog(self, idx, config_dict):
+        """Open a Toplevel configure window for rf_usr_btn *idx*.
+
+        config_dict maps item names to spec dicts (type, range/values/options).
+        Saved values are loaded from server-persisted state and, on OK,
+        sent back to the server via rf_usr_btn_config_set for per-device
+        persistence.
+        """
+        sc = self._sc
+        fs  = max(8, int(round(10 * sc)))
+        pad = max(4, int(round(6 * sc)))
+
+        # Retrieve previously persisted values for this button (may be empty)
+        all_vals = self.state.get("rf_usr_btn_config_vals") or {}
+        saved    = all_vals.get(str(idx)) or {}
+
+        dlg = tk.Toplevel(self.root)
+        btn_lbl = self._rf_usr_btn_label(idx) or f"Btn {idx}"
+        dlg.title(f"Configure: {btn_lbl}")
+        dlg.resizable(False, False)
+        dlg.update_idletasks()
+        dlg.grab_set()
+
+        frm = tk.Frame(dlg, padx=pad*2, pady=pad)
+        frm.pack(fill="both", expand=True)
+
+        # ── build one row per config item ─────────────────────────────────────
+        _vars = {}   # name → (wtype, tk_var, [optional extras])
+
+        for row, (name, spec) in enumerate(config_dict.items()):
+            wtype = spec.get("type", "check")
+
+            lbl = tk.Label(frm, text=name, font=_gui_font(fs), anchor="w")
+            lbl.grid(row=row, column=0, sticky="w", padx=(0, pad), pady=pad//2)
+
+            if wtype == "slide":
+                lo, hi = (spec.get("range") or [0, 100])[:2]
+                lo, hi = float(lo), float(hi)
+                init = float(saved.get(name, lo))
+                init = max(lo, min(hi, init))
+                var = tk.DoubleVar(value=init)
+                _vars[name] = ("slide", var)
+                cell = tk.Frame(frm)
+                cell.grid(row=row, column=1, sticky="ew", padx=(0, pad))
+                val_lbl = tk.Label(cell, text=f"{init:.0f}",
+                                   font=_gui_font(fs), width=5, anchor="e")
+                val_lbl.pack(side="right")
+                scl = ttk.Scale(cell, from_=lo, to=hi, variable=var,
+                                orient="horizontal", length=max(120, int(round(120*sc))),
+                                command=lambda v, vl=val_lbl: vl.config(
+                                    text=f"{float(v):.0f}"))
+                scl.pack(side="left", fill="x", expand=True)
+
+            elif wtype == "list":
+                values_list = spec.get("values") or []
+                keys    = [str(v.get("key","")) for v in values_list]
+                val_map = {str(v.get("key","")): str(v.get("val",""))
+                           for v in values_list}
+                rev_map = {str(v.get("val","")): str(v.get("key",""))
+                           for v in values_list}
+                saved_val = str(saved.get(name,""))
+                # Show the key that corresponds to the saved server value
+                init_key  = rev_map.get(saved_val, keys[0] if keys else "")
+                var = tk.StringVar(value=init_key)
+                _vars[name] = ("list", var, val_map)
+                cb = ttk.Combobox(frm, textvariable=var, values=keys,
+                                  state="readonly", width=16,
+                                  font=_gui_font(fs))
+                cb.grid(row=row, column=1, sticky="w", pady=pad//2)
+
+            elif wtype == "check":
+                init = bool(saved.get(name, False))
+                var = tk.BooleanVar(value=init)
+                _vars[name] = ("check", var)
+                chk = ttk.Checkbutton(frm, variable=var)
+                chk.grid(row=row, column=1, sticky="w", pady=pad//2)
+
+            elif wtype == "radio":
+                options = list(spec.get("options") or [])
+                init = str(saved.get(name, options[0] if options else ""))
+                if init not in options and options:
+                    init = options[0]
+                var = tk.StringVar(value=init)
+                _vars[name] = ("radio", var)
+                radio_frm = tk.Frame(frm)
+                radio_frm.grid(row=row, column=1, sticky="w", pady=pad//2)
+                for opt in options:
+                    ttk.Radiobutton(radio_frm, text=str(opt),
+                                    variable=var, value=str(opt)
+                                    ).pack(side="left", padx=max(2, pad//2))
+
+        # ── OK / Cancel buttons ───────────────────────────────────────────────
+        n_rows = len(config_dict)
+        sep = ttk.Separator(frm, orient="horizontal")
+        sep.grid(row=n_rows, column=0, columnspan=2,
+                 sticky="ew", pady=(pad, 0))
+
+        btn_frm = tk.Frame(frm)
+        btn_frm.grid(row=n_rows+1, column=0, columnspan=2, pady=pad)
+
+        def _ok():
+            result = {}
+            for name, entry in _vars.items():
+                wtype = entry[0]
+                if wtype == "slide":
+                    result[name] = round(float(entry[1].get()))
+                elif wtype == "list":
+                    key = entry[1].get()
+                    result[name] = entry[2].get(key, key)   # send val, not key
+                elif wtype == "check":
+                    result[name] = bool(entry[1].get())
+                elif wtype == "radio":
+                    result[name] = entry[1].get()
+            self.net.send({"cmd": "rf_usr_btn_config_set",
+                           "index": idx, "values": result})
+            # Mirror the saved values into local state immediately so the
+            # next long-press reload reads the current values without
+            # waiting for a server reconnect to refresh rf_usr_btn_config_vals.
+            _cv = self.state.get("rf_usr_btn_config_vals")
+            if not isinstance(_cv, dict):
+                _cv = {}
+            _cv[str(idx)] = dict(result)
+            self.state["rf_usr_btn_config_vals"] = _cv
+            dlg.destroy()
+
+        tk.Button(btn_frm, text="OK", command=_ok,
+                  width=8, font=_gui_font(fs)).pack(side="left", padx=pad)
+        tk.Button(btn_frm, text="Cancel", command=dlg.destroy,
+                  width=8, font=_gui_font(fs)).pack(side="left", padx=pad)
+
+        frm.columnconfigure(1, weight=1)
 
     def _toggle_run(self):
         if not self.net.connected: return

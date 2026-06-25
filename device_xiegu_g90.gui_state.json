@@ -72,5 +72,6 @@
   "sample_rate": 333333.0,
   "antenna_index": 2,
   "power_index": 4,
-  "selected_bw": "500"
+  "selected_bw": "500",
+  "rf_usr_btn_config_vals": {}
 }

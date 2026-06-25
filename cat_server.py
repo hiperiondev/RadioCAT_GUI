@@ -275,6 +275,14 @@ _DEVICE_CONFIG_DEFAULTS = {
     "rf_usr_btns": {
         **{f"label_{n}": "" for n in range(1, 12)},
         **{f"mode_{n}":  "normal" for n in range(1, 12)},
+        # config_N: JSON-encoded dict of named configure objects shown when the
+        # button is held for 3 seconds.  Empty string or "{}" = no dialog.
+        # Each key is the label; value is {"type":..., ...}.  Types:
+        #   slide  → {"type":"slide","range":[min,max]}
+        #   list   → {"type":"list","values":[{"key":"Label","val":"value"},…]}
+        #   check  → {"type":"check"}
+        #   radio  → {"type":"radio","options":["val1","val2",…]}
+        **{f"config_{n}": "{}" for n in range(1, 12)},
     },
     "sdr": {
         # Sample rate (Hz) applied when this device profile is loaded.
@@ -316,11 +324,14 @@ def _parse_simple_toml(text):
     for raw in text.splitlines():
         # Strip comments only when the '#' is outside of a quoted region.
         line = raw
-        in_quote = False
+        in_dquote = False
+        in_squote = False
         for ci, ch in enumerate(raw):
-            if ch == '"':
-                in_quote = not in_quote
-            elif ch == '#' and not in_quote:
+            if ch == '"' and not in_squote:
+                in_dquote = not in_dquote
+            elif ch == "'" and not in_dquote:
+                in_squote = not in_squote
+            elif ch == '#' and not in_dquote and not in_squote:
                 line = raw[:ci]
                 break
         line = line.strip()
@@ -563,7 +574,7 @@ _SERVER_CONFIG_SECTION_COMMENTS = {
 _DEVICE_CONFIG_KEY_ORDER = {
     "user_buttons": [k for n in range(1, 15) for k in (f"label_{n}", f"type_{n}", f"list_{n}")],
     "user_mods": [k for n in range(1, 11) for k in (f"label_{n}", f"type_{n}")],
-    "rf_usr_btns": [k for n in range(1, 12) for k in (f"label_{n}", f"mode_{n}")],
+    "rf_usr_btns": [k for n in range(1, 12) for k in (f"label_{n}", f"mode_{n}", f"config_{n}")],
     "sdr": ["sample_rate", "sample_rates", "allowed_bands", "power_levels"],
     "antenna": [f"label_{n}" for n in range(1, 11)] + [f"allowed_bands_{n}" for n in range(1, 11)],
 }
@@ -644,10 +655,21 @@ DEVICE_CONFIG_SPEC = _ConfigSpec(
 
 
 def _fmt_toml_value(v):
-    """Render a Python value back into TOML literal syntax."""
+    """Render a Python value back into TOML literal syntax.
+
+    Strings that contain double-quotes but no single-quotes are written as
+    TOML single-quoted (literal) strings so that embedded JSON – which uses
+    double-quotes extensively – is stored without any escape sequences.
+    This keeps the file human-readable and avoids the \\"-escape sequences
+    that the built-in fallback _parse_simple_toml would have to unescape.
+    All other strings use the standard double-quoted form.
+    """
     if isinstance(v, bool):
         return "true" if v else "false"
     if isinstance(v, str):
+        if '"' in v and "'" not in v:
+            # Safe to use single-quoted (literal) TOML string: no escaping needed.
+            return "'" + v + "'"
         return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
     return str(v)
 
@@ -1329,6 +1351,9 @@ _GUI_STATE_KEYS = (
     # chosen filter bandwidth is restored on reconnect or device switch.
     # Stored as a string (the Hz value shown in the combobox, e.g. "2700").
     "selected_bw",
+    # Per-button configure dialog values — dict keyed by button index (str).
+    # Persisted per-device so operator settings survive reconnect/device switch.
+    "rf_usr_btn_config_vals",
 )
 
 
@@ -1517,6 +1542,9 @@ class RadioState:
             {"label": "", "type": "normal"} for _ in range(NUM_RF_USR_BTNS)
         ]
         self.rf_usr_btn_state = [False] * NUM_RF_USR_BTNS
+        # Per-button configure dialog persisted values.
+        # Dict keyed by 1-based button index (as str): {"name_1": value, ...}
+        self.rf_usr_btn_config_vals = {}
 
         # User-defined modulation buttons: list of up to NUM_USER_MODS labels
         # (max 4 chars each). Empty string means the slot is unused.
@@ -1735,6 +1763,8 @@ class RadioState:
                 "user_btn_list_sel": list(self.user_btn_list_sel),
                 "rf_usr_btns": [dict(b) for b in self.rf_usr_btns],
                 "rf_usr_btn_state": self.rf_usr_btn_state,
+                # Per-button configure dialog persisted values (see rf_usr_btn_config_set).
+                "rf_usr_btn_config_vals": dict(self.rf_usr_btn_config_vals),
                 "user_mod_labels": list(self.user_mod_labels),
                 "user_mod_types": list(self.user_mod_types),
                 # Spectrum display controls (SCALE and AVE)
@@ -1914,6 +1944,8 @@ class RadioState:
                             {
                                 "label": _rufb.get(f"label_{n}", ""),
                                 "type":  _rufb.get(f"mode_{n}",  "normal"),
+                                "config": _parse_rf_btn_config(
+                                    _rufb.get(f"config_{n}", "{}")),
                             }
                             for n in range(1, NUM_RF_USR_BTNS + 1)
                         ]
@@ -2194,6 +2226,14 @@ class RadioState:
                         else:
                             self.rf_usr_btn_state[idx] = not self.rf_usr_btn_state[idx]
                     # "normal" buttons are momentary - nothing to store
+            elif c == "rf_usr_btn_config_set":
+                # Store configure-dialog values for an RF user button.
+                # {"cmd":"rf_usr_btn_config_set","index":N,"values":{name:val,...}}
+                # Values are persisted per-device in the .gui_state.json file.
+                idx = int(cmd.get("index", 0))
+                vals = cmd.get("values", {})
+                if isinstance(vals, dict) and 1 <= idx <= NUM_RF_USR_BTNS:
+                    self.rf_usr_btn_config_vals[str(idx)] = dict(vals)
             elif c == "user_text":
                 # Text sent from a "text_input" user-mod chat panel.
                 # {"cmd": "user_text", "index": N, "text": "..."}
@@ -2228,6 +2268,7 @@ class RadioState:
                 "set_zoom", "user_button", "rf_usr_button",
                 "set_spec_ref", "set_spec_ave", "set_sample_rate",
                 "select_antenna", "set_selected_bw",
+                "rf_usr_btn_config_set",
             }
             if c in _STATE_MUTATING_CMDS:
                 self._autosave_gui_state()
@@ -2892,12 +2933,16 @@ def _parse_args():
     for n in range(1, NUM_RF_USR_BTNS + 1):
         _rlattr = f"rf_usr_btn_{n}"
         _rmattr = f"rf_usr_btn_mode_{n}"
-        _cfg_rf_label = _rufb.get(f"label_{n}", _DD["rf_usr_btns"][f"label_{n}"])
-        _cfg_rf_mode  = _rufb.get(f"mode_{n}",  _DD["rf_usr_btns"][f"mode_{n}"])
+        _rcattr = f"rf_usr_btn_config_{n}"
+        _cfg_rf_label  = _rufb.get(f"label_{n}",  _DD["rf_usr_btns"][f"label_{n}"])
+        _cfg_rf_mode   = _rufb.get(f"mode_{n}",   _DD["rf_usr_btns"][f"mode_{n}"])
+        _cfg_rf_config = _rufb.get(f"config_{n}", _DD["rf_usr_btns"][f"config_{n}"])
         if not hasattr(_raw, _rlattr):
             setattr(_raw, _rlattr, _cfg_rf_label)
         if not hasattr(_raw, _rmattr):
             setattr(_raw, _rmattr, _cfg_rf_mode)
+        if not hasattr(_raw, _rcattr):
+            setattr(_raw, _rcattr, _cfg_rf_config)
 
     # Devices: read from server config's [devices] (no CLI flags — TOML-only)
     for n in range(1, 21):
@@ -3001,13 +3046,42 @@ def _build_user_mod_types(args):
     return [getattr(args, f"user_mod_type_{n}", "normal") for n in range(1, NUM_USER_MODS + 1)]
 
 
+def _parse_rf_btn_config(raw):
+    """Parse a config_N value from the [rf_usr_btns] section.
+
+    Accepts either a JSON string (works with both tomllib and the simple parser)
+    or a pre-parsed dict (when tomllib returned an inline table directly).
+    Returns a dict of {name: spec_dict} or {} on any error / empty value.
+    """
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if not raw or raw == "{}":
+            return {}
+        try:
+            result = json.loads(raw)
+            return result if isinstance(result, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
 def _build_rf_usr_btns(args):
-    """Return a list of NUM_RF_USR_BTNS dicts for the RF user buttons."""
+    """Return a list of NUM_RF_USR_BTNS dicts for the RF user buttons.
+
+    Each entry is {"label": str, "type": str, "config": dict}.
+    "config" is parsed from the config_N JSON string in the [rf_usr_btns]
+    section of the device config and may be empty ({}).
+    """
     buttons = []
     for n in range(1, NUM_RF_USR_BTNS + 1):
+        config_str = getattr(args, f"rf_usr_btn_config_{n}", "{}") or "{}"
+        config_dict = _parse_rf_btn_config(config_str)
         buttons.append({
-            "label": getattr(args, f"rf_usr_btn_{n}", ""),
-            "type":  getattr(args, f"rf_usr_btn_mode_{n}", "normal"),
+            "label":  getattr(args, f"rf_usr_btn_{n}", ""),
+            "type":   getattr(args, f"rf_usr_btn_mode_{n}", "normal"),
+            "config": config_dict,
         })
     return buttons
 
