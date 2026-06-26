@@ -1046,4 +1046,182 @@ The reference server is structured so that the signal-generation layer is easy t
 
 The JSON protocol is intentionally simple: any language or framework that can open a TCP socket and write newline-terminated JSON can drive the GUI.
 
+## Hamlib map
+
+`cat_gui.py` uses a **custom JSON-over-TCP protocol** (newline-delimited JSON objects) that communicates with a proprietary Python backend (`cat_server.py`). Hamlib's `rigctld` uses a **text command protocol** (single-char or `\long_name value\n` over TCP port 4532). The two protocols are architecturally different in several key ways:
+
+### 1. Summary
+
+| Dimension | cat_gui.py Custom Protocol | Hamlib rigctld |
+|---|---|---|
+| **Wire format** | JSON objects, newline-delimited | Plain-text tokens, space-separated, `\n`-terminated |
+| **Transport** | TCP (configurable port) + UDP RTP audio | TCP (default 4532) only |
+| **Push model** | Server **pushes** spectrum/state continuously | Client **polls** for each `get_*` |
+| **Audio** | Integrated RTP/G.711 µ-law audio stream | No audio — radio-only |
+| **State sync** | `resp:ok` + `reload_state` push full state | Client reads each parameter individually |
+| **Mode tokens** | Server-defined arbitrary labels (up to 10 slots) | Fixed set: USB, LSB, CW, FM, AM, RTTY… |
+| **Memory** | JSON object with freq/mode/label | `rigmem` utility; CAT-command channel |
+
+### 2. Outbound Commands (`net.send`) → Hamlib Equivalents
+
+Commands sent **from the GUI to the server**.
+
+| # | cat_gui.py `cmd` | Parameters | Hamlib Equivalent | Hamlib Short/Long | Status |
+|---|---|---|---|---|---|
+| 1 | `hello` | — | *(handshake — no direct equivalent)* | `\dump_caps` (nearest: capability query) | ⚠️ **Different** — Hamlib has no session hello; `dump_caps` is closest |
+| 2 | `start` | — | *(no equivalent — SDR-specific start/stop streaming)* | — | ❌ **Missing in Hamlib** |
+| 3 | `stop` | — | *(no equivalent)* | — | ❌ **Missing in Hamlib** |
+| 4 | `set_lo_a_freq` | `hz` (int) | `set_freq` on VFOA | `F` / `\set_freq` | ⚠️ **Different** — Hamlib sets VFO freq; cat_gui uses "LO A" (SDR local oscillator concept) |
+| 5 | `set_lo_b_freq` | `hz` (int) | `set_freq` on VFOB | `F` / `\set_freq` (with VFO=VFOB) | ⚠️ **Different** — requires explicit VFO selection in Hamlib |
+| 6 | `set_lo` | `lo` ("A"\|"B") | `set_vfo` | `V` / `\set_vfo` | ✅ **Maps** — VFO A/B selection |
+| 7 | `set_tune_freq` | `hz` (int) | *(no direct equivalent — IF/tune offset concept)* | RIT/XIT `J`/`Z` (partial) | ⚠️ **Different** — Hamlib RIT/XIT is relative offset; tune_freq is absolute |
+| 8 | `set_mode` | `mode` (string) | `set_mode` | `M` / `\set_mode` | ⚠️ **Different** — Hamlib uses fixed token set; cat_gui uses server-defined arbitrary labels |
+| 9 | `set_filter` | `lo`, `hi` (Hz) | `set_mode` passband | `M` / `\set_mode` (2nd arg) | ⚠️ **Different** — Hamlib sets passband as single width integer; cat_gui uses lo/hi pair |
+| 10 | `set_ptt` | `enabled` (bool), `udp_port` (int) | `set_ptt` | `T` / `\set_ptt` | ⚠️ **Different** — Hamlib PTT values: 0=RX,1=TX,2=TX-mic,3=TX-data; cat_gui uses bool + RTP UDP port |
+| 11 | `set_split` | `enabled` (bool) | `set_split_vfo` | `S` / `\set_split_vfo` | ⚠️ **Different** — Hamlib also requires TX VFO token; cat_gui uses simple bool |
+| 12 | `set_volume` | `value` (float 0–100) | `set_level AF` | `L AF` / `\set_level AF` | ✅ **Maps** — AF level |
+| 13 | `set_rf_gain` | `value` (float dB) | `set_level RF` | `L RF` / `\set_level RF` | ✅ **Maps** — RF gain level |
+| 14 | `set_squelch` | `value` (float dBm) | `set_level SQL` | `L SQL` / `\set_level SQL` | ✅ **Maps** — Squelch level |
+| 15 | `set_agc_thresh` | `value` (float dB) | `set_level AGC` | `L AGC` / `\set_level AGC` | ⚠️ **Different** — Hamlib AGC is enum (OFF/SLOW/MEDIUM/FAST/AUTO); cat_gui uses dB threshold float |
+| 16 | `set_zoom` | `value` (int) | *(no equivalent — SDR spectrum zoom)* | — | ❌ **Missing in Hamlib** |
+| 17 | `set_selected_bw` | `value` (int Hz) | `set_mode` passband | `M` / `\set_mode` | ⚠️ **Different** — Hamlib merges mode+BW in one command |
+| 18 | `set_spec_ref` | `box`, `value` (dB) | *(no equivalent — display parameter)* | — | ❌ **Missing in Hamlib** |
+| 19 | `set_spec_ave` | `box`, `value` (int) | *(no equivalent — display parameter)* | — | ❌ **Missing in Hamlib** |
+| 20 | `ui_display` | `box`, `view` | *(no equivalent — GUI-layer command)* | — | ❌ **Missing in Hamlib** |
+| 21 | `transport` | `action` (rec/play/pause/stop/rw/ff/infinite) | *(no equivalent — media transport)* | — | ❌ **Missing in Hamlib** |
+| 22 | `get_devices` | — | *(no equivalent — device enumeration)* | `\dump_caps` (partial) | ❌ **Missing in Hamlib** |
+| 23 | `select_device` | `index` (int) | *(no equivalent — device switching)* | `-m model` CLI only | ❌ **Missing in Hamlib** (CLI flag, not runtime command) |
+| 24 | `get_sample_rates` | — | *(no equivalent — SDR-specific)* | — | ❌ **Missing in Hamlib** |
+| 25 | `set_sample_rate` | `value` (int Hz) | *(no equivalent — SDR-specific)* | — | ❌ **Missing in Hamlib** |
+| 26 | `get_antennas` | — | `get_ant` | `y` / `\get_ant` | ⚠️ **Different** — Hamlib returns antenna number; cat_gui requests a list of labeled antenna ports |
+| 27 | `select_antenna` | `index` (int, 1-based) | `set_ant` | `Y` / `\set_ant` | ✅ **Maps** — antenna selection by index |
+| 28 | `get_power_levels` | — | `get_level RFPOWER` | `l RFPOWER` / `\get_level RFPOWER` | ⚠️ **Different** — Hamlib returns a scalar; cat_gui requests a list of named power presets |
+| 29 | `set_power` | `index` (int) | `set_level RFPOWER` | `L RFPOWER` / `\set_level RFPOWER` | ⚠️ **Different** — Hamlib uses 0.0–1.0 float; cat_gui uses preset index |
+| 30 | `user_button` | `index`, optional `enabled` / `choice` | `set_func` | `U` / `\set_func` | ⚠️ **Different** — Hamlib has fixed function tokens; cat_gui supports arbitrary server-defined buttons |
+| 31 | `user_text` | `index`, `text` (string) | `send_morse` (b) — closest analog | `b` / `\send_morse` | ⚠️ **Different** — Hamlib sends Morse; cat_gui sends free-form text for digital mode text input |
+| 32 | `rf_usr_button` | `index`, optional `enabled` | `set_func` | `U` / `\set_func` | ⚠️ **Different** — same as `user_button` — Hamlib has no RF-domain custom button concept |
+| 33 | `rf_usr_btn_config_set` | `index`, `values` (dict) | *(no equivalent)* | — | ❌ **Missing in Hamlib** |
+| 34 | `get_memories` | `position` (int) | `get_mem` (channel memory read) | `\get_mem` | ⚠️ **Different** — Hamlib reads one channel at a time; cat_gui returns a list from a position |
+| 35 | `save_memory` | `position`, `freq`, `mode`, `label` | `set_mem` / `set_channel` | `\set_mem` / `\set_channel` | ⚠️ **Different** — Hamlib memory has no user label field in protocol |
+| 36 | `audio_hello` | `udp_port` (int) | *(no equivalent — RTP audio channel setup)* | — | ❌ **Missing in Hamlib** |
+
+### 3. Inbound Messages (Server → GUI) → Hamlib Equivalents
+
+Messages **received by the GUI** from the server and processed in `_handle()`.
+
+| # | cat_gui.py `type` | Key Payload Fields | Hamlib Equivalent | Status |
+|---|---|---|---|---|
+| 1 | `data` | `f_start`, `f_stop`, `spectrum[]`, `smeter_dbm`, `smeter_text`, `swr` | *(no equivalent — continuous SDR push)* | ❌ **No Hamlib analog** — Hamlib uses `get_level STRENGTH` polling; no spectrum push |
+| 2 | `af_local` | `af_spectrum[]`, `af_range` | *(no equivalent — locally computed AF FFT)* | ❌ **No Hamlib analog** |
+| 3 | `reload_state` | Full state dict (all parameters) | *(no equivalent — full state push)* | ❌ **No Hamlib analog** — Hamlib requires individual `get_*` polls |
+| 4 | `resp:ok` (via `"state"` key) | Merged state dict | `RPRT 0` (success acknowledgment only) | ⚠️ **Different** — Hamlib returns `RPRT 0`; cat_gui piggybacks full state on acknowledgment |
+| 5 | `audio_port` | `port` (UDP int), `sample_rate`, `frame_ms` | *(no equivalent)* | ❌ **Missing in Hamlib** |
+| 6 | `disconnected` | optional `reason` | `RPRT -1` (error response) | ⚠️ **Different** — Hamlib error is per-command; cat_gui disconnected is an async event |
+| 7 | `device_list` | `devices[]` | *(no equivalent)* | ❌ **Missing in Hamlib** |
+| 8 | `sample_rate_list` | `rates[]`, `current` | *(no equivalent)* | ❌ **Missing in Hamlib** |
+| 9 | `antenna_list` | `antennas[]`, `current`, `device_allowed_bands` | `get_ant` response (scalar only) | ⚠️ **Different** — Hamlib returns a single antenna number; cat_gui returns full labeled list with band restrictions |
+| 10 | `power_level_list` | `levels[]`, `current` | `get_level RFPOWER` (scalar) | ⚠️ **Different** — cat_gui delivers named presets list |
+| 11 | `memory_list` | `memories[]` | `get_mem` (one channel) | ⚠️ **Different** — Hamlib reads one channel; cat_gui sends a page of labeled entries |
+| 12 | `user_text` | `index`, `text` | *(no equivalent)* | ❌ **Missing in Hamlib** |
+
+### 4. State Variables → Hamlib Level/Func/Parameter Mapping
+
+Key-value pairs stored in `self.state` (populated from server-pushed JSON).
+
+| # | cat_gui.py State Key | Type | Description | Hamlib Equivalent | Hamlib Command | Status |
+|---|---|---|---|---|---|---|
+| 1 | `lo_freq` | int Hz | LO A (main VFO) frequency | Frequency VFOA | `f` / `\get_freq` | ✅ **Maps** |
+| 2 | `lo_b_freq` | int Hz | LO B (second VFO) frequency | Frequency VFOB | `f` (with VFO=VFOB) | ✅ **Maps** |
+| 3 | `tune_freq` | int Hz | IF/tune frequency (absolute) | RIT (`j`) or XIT (`z`) — relative only | ⚠️ **Different** — Hamlib RIT/XIT is offset; this is absolute |
+| 4 | `lo_active` | "A"\|"B" | Which LO/VFO is active | Current VFO | `v` / `\get_vfo` | ✅ **Maps** |
+| 5 | `mode` | string | Current modulation mode label | Mode token | `m` / `\get_mode` | ⚠️ **Different** — cat_gui mode is arbitrary server string; Hamlib uses fixed enum |
+| 6 | `filter_lo` / `filter_hi` | int Hz | IF passband lower/upper edges | Passband (single width int) | `m` / `\get_mode` (2nd value) | ⚠️ **Different** — Hamlib passband is a width; cat_gui uses absolute lo/hi pair |
+| 7 | `ptt` | bool | Push-to-talk state | PTT state | `t` / `\get_ptt` | ✅ **Maps** |
+| 8 | `split` | bool | Split TX/RX enabled | Split VFO | `s` / `\get_split_vfo` | ✅ **Maps** |
+| 9 | `volume` | float 0–100 | Audio output volume | AF level | `l AF` / `\get_level AF` | ✅ **Maps** |
+| 10 | `rf_gain` | float dB | RF gain | RF level | `l RF` / `\get_level RF` | ✅ **Maps** |
+| 11 | `squelch` | float dBm | Squelch threshold | SQL level | `l SQL` / `\get_level SQL` | ✅ **Maps** |
+| 12 | `agc_thresh` | float dB | AGC threshold | AGC level | `l AGC` / `\get_level AGC` | ⚠️ **Different** — Hamlib AGC is enum not threshold |
+| 13 | `sample_rate` | int Hz | SDR sample rate | *(no equivalent)* | — | ❌ **Missing in Hamlib** |
+| 14 | `zoom` | int | Spectrum zoom level | *(no equivalent)* | — | ❌ **Missing in Hamlib** |
+| 15 | `running` | bool | SDR streaming active | *(no equivalent)* | — | ❌ **Missing in Hamlib** |
+| 16 | `user_mod_labels` | list[str] | Server-defined mode button labels | Mode tokens | `m` / `\get_mode` | ⚠️ **Different** — fixed vs. dynamic |
+| 17 | `user_mod_types` | list[str] | Mode type (normal/text/text_input) | *(no equivalent)* | — | ❌ **Missing in Hamlib** |
+| 18 | `user_buttons` | list[dict] | Server-defined auxiliary buttons | `set_func` / `get_func` tokens | `U` / `u` | ⚠️ **Different** — Hamlib has fixed function set |
+| 19 | `user_btn_state` | list[bool] | Toggle state per user button | `get_func` | `u` / `\get_func` | ⚠️ **Partial** |
+| 20 | `user_btn_list_sel` | list[int] | List-type button selections | *(no equivalent)* | — | ❌ **Missing in Hamlib** |
+| 21 | `rf_usr_btns` | list[dict] | RF domain user buttons | `set_func` / `get_func` | `U` / `u` | ⚠️ **Different** — same as user_buttons |
+| 22 | `rf_usr_btn_state` | list[bool] | RF user button toggle states | `get_func` | `u` | ⚠️ **Partial** |
+| 23 | `rf_usr_btn_config_vals` | dict | Per-button config parameter values | *(no equivalent)* | — | ❌ **Missing in Hamlib** |
+| 24 | `antenna_index` | int (1-based) | Currently selected antenna | Antenna number | `y` / `\get_ant` | ✅ **Maps** |
+| 25 | `antenna_labels` | list[str] | Named antenna port labels | *(not in Hamlib protocol)* | — | ❌ **Missing in Hamlib** |
+| 26 | `antenna_allowed_bands` | list[list[str]] | Per-antenna band restrictions | *(no equivalent)* | — | ❌ **Missing in Hamlib** |
+| 27 | `allowed_bands` | list[str] | Active allowed amateur bands | *(no equivalent)* | — | ❌ **Missing in Hamlib** |
+| 28 | `power_index` | int | Selected TX power preset index | RFPOWER level (float 0–1) | `l RFPOWER` | ⚠️ **Different** — index vs. float |
+| 29 | `power_levels` | list | Named TX power presets | *(no equivalent as list)* | — | ❌ **Missing in Hamlib** |
+| 30 | `selected_bw` | int Hz | BW selector (step size) | Passband | `m` / `\get_mode` | ⚠️ **Partial** |
+| 31 | `bandwidth_map` | dict | BW preset map | *(no equivalent)* | — | ❌ **Missing in Hamlib** |
+| 32 | `active_device_index` | int | Currently active SDR device | *(no equivalent — SDR-specific)* | — | ❌ **Missing in Hamlib** |
+| 33 | `spec_ref_rf` / `spec_ref_af` | float dB | Spectrum reference level | *(no equivalent)* | — | ❌ **Missing in Hamlib** |
+| 34 | `spec_ave_rf` / `spec_ave_af` | int | Spectrum averager count | *(no equivalent)* | — | ❌ **Missing in Hamlib** |
+| 35 | `toolbar_view_rf` / `toolbar_view_af` | string | Display mode (Waterfall/Spectrum) | *(no equivalent)* | — | ❌ **Missing in Hamlib** |
+
+### 5. Hamlib Functions NOT Present in cat_gui.py
+
+Standard Hamlib/rigctld commands that have **no counterpart** in the cat_gui.py protocol.
+
+| # | Hamlib Command | Short | Description | Notes |
+|---|---|---|---|---|
+| 1 | `set_rit` / `get_rit` | `J` / `j` | Receiver Incremental Tuning (Hz offset) | cat_gui uses absolute `tune_freq`; RIT would require conversion |
+| 2 | `set_xit` / `get_xit` | `Z` / `z` | Transmitter Incremental Tuning | Same as RIT note |
+| 3 | `set_ts` / `get_ts` | `N` / `n` | Tuning step size in Hz | No step concept in cat_gui (uses custom BW step) |
+| 4 | `set_rptr_shift` / `get_rptr_shift` | `R` / `r` | Repeater shift (FM operations) | Not relevant for SDR-focused app |
+| 5 | `set_rptr_offs` / `get_rptr_offs` | `O` / `o` | Repeater offset in Hz | Same as above |
+| 6 | `set_ctcss_tone` / `get_ctcss_tone` | `C` / `c` | CTCSS tone (tenths of Hz) | FM sub-tone — not supported |
+| 7 | `set_dcs_code` / `get_dcs_code` | `D` / `d` | DCS code | Not supported |
+| 8 | `set_ctcss_sql` / `get_ctcss_sql` | `0x90` / `0x91` | CTCSS squelch tone | Not supported |
+| 9 | `set_func NB` / `get_func NB` | `U NB` / `u NB` | Noise Blanker on/off | cat_gui has no NB toggle in visible protocol (may be in user_button) |
+| 10 | `set_func COMP` | `U COMP` | Speech compressor | Not supported |
+| 11 | `set_func VOX` | `U VOX` | Voice-operated TX | Not supported |
+| 12 | `set_func TONE` / `TSQL` | `U TONE` | CTCSS tone squelch | Not supported |
+| 13 | `set_func LOCK` | `U LOCK` | VFO lock | cat_gui implements frequency lock client-side only (no server cmd) |
+| 14 | `set_func AFC` | `U AFC` | Automatic Frequency Control | May be in user_button; not in explicit protocol |
+| 15 | `set_func ANF` | `U ANF` | Automatic Notch Filter | May be in user_button |
+| 16 | `set_func NR` | `U NR` | Noise Reduction | May be in user_button |
+| 17 | `set_level PREAMP` | `L PREAMP` | Preamplifier level | Not in explicit protocol |
+| 18 | `set_level ATT` | `L ATT` | Attenuator setting | Not in explicit protocol |
+| 19 | `set_level MICGAIN` | `L MICGAIN` | Microphone gain | Not in explicit protocol |
+| 20 | `set_level KEYSPD` | `L KEYSPD` | CW keyer speed (WPM) | Not supported |
+| 21 | `set_level NOTCHF` | `L NOTCHF` | Manual notch frequency | May be in user_button/config |
+| 22 | `send_morse` | `b` | Send Morse code string | Not supported |
+| 23 | `get_dcd` | `0x8b` | Data Carrier Detect / squelch open | Not in explicit protocol |
+| 24 | `dump_caps` | `\dump_caps` | Dump all rig capabilities | Partially covered by `get_devices` + `reload_state` |
+| 25 | `set_lock_mode` | *(rigctld-only)* | Prevent mode changes from other clients | Not needed (single-client design) |
+
+### 6. Architecture Differences Summary
+
+```
+cat_gui.py custom protocol          Hamlib rigctld
+─────────────────────────────────   ──────────────────────────────────
+JSON {cmd, ...} → server            \command value\n → rigctld
+server pushes spectrum/state        client polls each parameter
+Integrated RTP UDP audio            No audio channel
+Session handshake (hello)           Stateless command/response
+Dynamic mode/button labels          Fixed mode/func token set
+SDR concepts (LO, zoom, sample_rate) Rig concepts (VFO, RIT, CTCSS)
+Device switching at runtime         Model selected at startup (-m)
+Band restriction (allowed_bands)    No band restriction in protocol
+Per-device persistent config        Backend config only at start (--set-conf)
+```
+
+### 7. Mapping Coverage Summary
+
+| Category | Total cat_gui items | ✅ Direct Map | ⚠️ Partial/Different | ❌ No Hamlib Equivalent |
+|---|---|---|---|---|
+| Outbound Commands | 36 | 4 (11%) | 16 (44%) | 16 (45%) |
+| Inbound Messages | 12 | 0 (0%) | 5 (42%) | 7 (58%) |
+| State Variables | 35 | 8 (23%) | 9 (26%) | 18 (51%) |
+| **Totals** | **83** | **12 (14%)** | **30 (36%)** | **41 (49%)** |
+
+
 > **`[bandwidth]` validation:** The server performs a **fatal check** (`sys.exit(1)`) at startup if any label defined in `[user_mods]` lacks a matching entry in the `[bandwidth]` section of the active device config. Always add a `[bandwidth]` entry for every custom modulation mode you define, or the server will refuse to start.
