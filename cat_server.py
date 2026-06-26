@@ -224,14 +224,25 @@ except ImportError:
     except ImportError:
         _tomllib = None
 
+_tomllib_warning = None
 if _tomllib is None:
-    print(
+    _tomllib_warning = (
         "[config] WARNING: tomllib/tomli not found — using minimal built-in TOML parser.\n"
         "[config]          Multi-line strings, TOML arrays (e.g. sample_rates = [192000, 250000]),\n"
         "[config]          and inline tables are NOT supported and will be misread silently.\n"
-        "[config]          Install tomli (pip install tomli) for full TOML support.",
-        flush=True,
+        "[config]          Install tomli (pip install tomli) for full TOML support."
     )
+
+# ── Debug flag ────────────────────────────────────────────────────────────────
+# Set to True by --debug; controls whether verbose log messages are printed.
+_DEBUG = False
+
+
+def dprint(*args, **kwargs):
+    """Print only when --debug is active."""
+    if _DEBUG:
+        print(*args, **kwargs)
+
 
 _SERVER_CONFIG_NAME = "cat_server.toml"   # transport + device list: [server], [audio], [devices]
 _DEVICE_CONFIG_NAME = "cat_device.toml"   # GUI behaviour for one device profile
@@ -401,7 +412,7 @@ def _load_toml(path):
             with open(path, "r", encoding="utf-8") as f:
                 return _parse_simple_toml(f.read())
     except Exception as e:
-        print(f"[config] WARNING: could not read {path}: {e}")
+        dprint(f"[config] WARNING: could not read {path}: {e}")
         return {}
 
 
@@ -515,13 +526,13 @@ def _ensure_bandwidth_section(config_path):
             fh.write(new_content)
 
         if not bw_raw:
-            print(f"[config] Added default [bandwidth] section to {config_path}")
+            dprint(f"[config] Added default [bandwidth] section to {config_path}")
         else:
-            print(f"[config] Corrected {config_path} [bandwidth]: added missing "
+            dprint(f"[config] Corrected {config_path} [bandwidth]: added missing "
                   f"modulation(s): {', '.join(sorted(missing))}")
 
     except Exception as exc:
-        print(f"[config] WARNING: could not update [bandwidth] in "
+        dprint(f"[config] WARNING: could not update [bandwidth] in "
               f"{config_path}: {exc} — using built-in defaults for this run")
 
     return bw_map
@@ -809,10 +820,10 @@ def _ensure_config(path, spec, kind="config"):
                     )
                 with open(example_path, "w", encoding="utf-8") as f:
                     f.write(_base_content)
-                print(f"[config] Created example {kind}: {example_path}")
+                dprint(f"[config] Created example {kind}: {example_path}")
             except Exception as e:
-                print(f"[config] WARNING: could not write example {kind}: {e}")
-        print(f"[config] {path} not found — using built-in defaults "
+                dprint(f"[config] WARNING: could not write example {kind}: {e}")
+        dprint(f"[config] {path} not found — using built-in defaults "
               f"(copy {example_path} to {path} to customise)")
         return dict(spec.defaults)
 
@@ -826,7 +837,7 @@ def _ensure_config(path, spec, kind="config"):
     # Only warn about truly unexpected sections (not the ones we intentionally manage).
     _warn_secs = [sec for sec in _extra_secs if sec not in _SILENTLY_PRESERVED]
     if _warn_secs:
-        print(f"[config] NOTE: {path} has section(s) not used by this file "
+        dprint(f"[config] NOTE: {path} has section(s) not used by this file "
               f"({kind}): {', '.join(_warn_secs)} — they are ignored here. "
               f"[server]/[audio]/[devices] belong in cat_server.toml; "
               f"[user_buttons]/[user_mods]/[rf_usr_btns]/[sdr]/[antenna] belong in "
@@ -839,10 +850,10 @@ def _ensure_config(path, spec, kind="config"):
                 # Pass extra_raw_sections so sections like [bandwidth] are not
                 # silently discarded when the device config is self-corrected.
                 f.write(_render_config(merged, spec, extra_raw_sections=_extra_secs))
-            print(f"[config] Corrected {path}: added missing parameter(s) with "
+            dprint(f"[config] Corrected {path}: added missing parameter(s) with "
                   f"default value(s) — {', '.join(added)}")
         except Exception as e:
-            print(f"[config] WARNING: {path} is missing parameter(s) "
+            dprint(f"[config] WARNING: {path} is missing parameter(s) "
                   f"({', '.join(added)}) but could not be corrected: {e} — "
                   f"using built-in defaults for this run")
     return merged
@@ -1238,7 +1249,7 @@ class AudioWavSource:
                         is_float = (audio_fmt == 3)
                 elif chunk_id == b"data":
                     if chunk_size > 200 * 1024 * 1024:   # warn over 200 MB
-                        print(f"[audio] WARNING: {path}: large audio file "
+                        dprint(f"[audio] WARNING: {path}: large audio file "
                               f"({chunk_size // 1024 // 1024} MB) — loading into RAM")
                     data = f.read(chunk_size)
                 # RIFF chunks are word (2-byte) aligned
@@ -1380,7 +1391,7 @@ def _load_gui_state(path):
     except FileNotFoundError:
         pass
     except Exception as e:
-        print(f"[gui_state] WARNING: could not read {path}: {e}")
+        dprint(f"[gui_state] WARNING: could not read {path}: {e}")
     return {}
 
 
@@ -1404,9 +1415,9 @@ def _save_gui_state(path, state):
             json.dump(state, f, indent=2)
         os.replace(tmp, abs_path)
         if is_new:
-            print(f"[gui_state] Created default GUI-state file: {abs_path}")
+            dprint(f"[gui_state] Created default GUI-state file: {abs_path}")
     except Exception as e:
-        print(f"[gui_state] WARNING: could not save {path}: {e}")
+        dprint(f"[gui_state] WARNING: could not save {path}: {e}")
 
 
 def _empty_memory_slots():
@@ -1430,7 +1441,7 @@ def _load_memories(path):
     except FileNotFoundError:
         raw = {}
     except Exception as e:
-        print(f"[memory] WARNING: could not read {path}: {e} — starting fresh")
+        dprint(f"[memory] WARNING: could not read {path}: {e} — starting fresh")
         raw = {}
 
     file_missing = not os.path.exists(path)
@@ -1463,7 +1474,7 @@ def _load_memories(path):
     if changed:
         _save_memories(path, mems)
         if file_missing:
-            print(f"[memory] Created default memory file: {path}")
+            dprint(f"[memory] Created default memory file: {path}")
     return mems
 
 
@@ -1481,7 +1492,7 @@ def _save_memories(path, memories):
             json.dump(memories, f, indent=2)
         os.replace(tmp, path)
     except Exception as e:
-        print(f"[memory] WARNING: could not save {path}: {e}")
+        dprint(f"[memory] WARNING: could not save {path}: {e}")
 
 
 
@@ -1653,7 +1664,7 @@ class RadioState:
         _saved = _load_gui_state(self._gui_state_file)
         if _saved:
             self._apply_gui_state(_saved)
-            print(f"[gui_state] restored state for {self.device_cfg_path!r}")
+            dprint(f"[gui_state] restored state for {self.device_cfg_path!r}")
         else:
             # No saved state yet — create the file now with current defaults
             # so subsequent saves (via _autosave_gui_state) always find it.
@@ -1703,7 +1714,7 @@ class RadioState:
             self.sample_rate = float(self.iq_source.sample_rate)
         elif self.sample_rate not in self.sample_rates:
             if self.sample_rates:
-                print(f"[gui_state] WARNING: restored sample_rate "
+                dprint(f"[gui_state] WARNING: restored sample_rate "
                       f"{self.sample_rate!r} not in configured "
                       f"sample_rates {self.sample_rates} — using "
                       f"{self.sample_rates[0]}")
@@ -1891,7 +1902,7 @@ class RadioState:
                 if 0 <= idx < len(self.devices):
                     dev = self.devices[idx]
                     cfg_path = dev.get("config", "").strip()
-                    print(f"[cat_server] device selected: {dev.get('label','?')} "
+                    dprint(f"[cat_server] device selected: {dev.get('label','?')} "
                           f"(index {idx + 1}, config {cfg_path!r})")
 
                     # PTT must always be off when switching device —
@@ -1910,10 +1921,10 @@ class RadioState:
                     if _switching_device:
                         _out_snap = self._capture_gui_state()
                         _save_gui_state(self._gui_state_file, _out_snap)
-                        print(f"[gui_state] saved state for {self.device_cfg_path!r}")
+                        dprint(f"[gui_state] saved state for {self.device_cfg_path!r}")
 
                     if not cfg_path:
-                        print(f"[cat_server] WARNING: device index {idx+1} "
+                        dprint(f"[cat_server] WARNING: device index {idx+1} "
                               f"({dev.get('label','?')!r}) has no config file configured "
                               f"— keeping current buttons/rates")
                     if cfg_path:
@@ -2048,9 +2059,9 @@ class RadioState:
                     _in_snap = _load_gui_state(self._gui_state_file)
                     if _in_snap:
                         self._apply_gui_state(_in_snap)
-                        print(f"[gui_state] restored state for {cfg_path!r}")
+                        dprint(f"[gui_state] restored state for {cfg_path!r}")
                     else:
-                        print(f"[gui_state] no saved state for {cfg_path!r} — creating with defaults")
+                        dprint(f"[gui_state] no saved state for {cfg_path!r} — creating with defaults")
                         _save_gui_state(self._gui_state_file, self._capture_gui_state())
 
                 # reload_state tells the GUI to resync all widgets from the
@@ -2087,13 +2098,13 @@ class RadioState:
                 _req_ant = int(cmd.get("index", 0))
                 if _req_ant == 0:
                     self.antenna_index = 0
-                    print("[cat_server] antenna deselected")
+                    dprint("[cat_server] antenna deselected")
                 elif 1 <= _req_ant <= 10 and self.antenna_labels[_req_ant - 1].strip():
                     self.antenna_index = _req_ant
-                    print(f"[cat_server] antenna selected: "
+                    dprint(f"[cat_server] antenna selected: "
                           f"{_req_ant} ({self.antenna_labels[_req_ant - 1]})")
                 else:
-                    print(f"[cat_server] WARNING: rejected select_antenna "
+                    dprint(f"[cat_server] WARNING: rejected select_antenna "
                           f"{_req_ant!r} — invalid or unconfigured slot")
             elif c == "get_power_levels":
                 # GUI's "Power" button was pressed. Reply with the power
@@ -2111,10 +2122,10 @@ class RadioState:
                     _req_pw = -1
                 if 0 <= _req_pw < len(self.power_levels):
                     self.power_index = _req_pw
-                    print(f"[cat_server] power selected: "
+                    dprint(f"[cat_server] power selected: "
                           f"{self.power_levels[_req_pw]} W (index {_req_pw})")
                 else:
-                    print(f"[cat_server] WARNING: rejected set_power "
+                    dprint(f"[cat_server] WARNING: rejected set_power "
                           f"{cmd.get('index')!r} — out of range")
             elif c == "set_selected_bw":
                 # {"cmd": "set_selected_bw", "value": "<Hz>"} — store the
@@ -2138,7 +2149,7 @@ class RadioState:
                 if _req_sr is not None and _req_sr in self.sample_rates:
                     self.sample_rate = float(_req_sr)
                 else:
-                    print(f"[cat_server] WARNING: rejected set_sample_rate "
+                    dprint(f"[cat_server] WARNING: rejected set_sample_rate "
                           f"{cmd.get('value')!r} — not in this device's "
                           f"configured sample_rates {self.sample_rates}")
             elif c == "ui_button":
@@ -2316,9 +2327,9 @@ class RadioState:
         c = cmd.get("cmd")
         extra = {k: v for k, v in cmd.items() if k != "cmd"}
         if extra:
-            print(f"[cat_server] <- {c} {extra}")
+            dprint(f"[cat_server] <- {c} {extra}")
         else:
-            print(f"[cat_server] <- {c}")
+            dprint(f"[cat_server] <- {c}")
 
     # --------------------------------------------------------- simulation ----
     def make_data_message(self):
@@ -2528,14 +2539,14 @@ class UDPAudioChannel:
             except OSError:
                 pass
             self._sock = None
-        print("[audio] UDP RTP channel closed")
+        dprint("[audio] UDP RTP channel closed")
 
     def set_client_addr(self, addr):
         """Called by ClientHandler when the GUI's UDP endpoint is known."""
         with self._addr_lock:
             self._cli_addr = addr
             self.radio.ptt_client_addr = addr
-        print(f"[audio] GUI UDP endpoint registered: {addr}")
+        dprint(f"[audio] GUI UDP endpoint registered: {addr}")
 
     # ── TX loop: server → GUI (PTT OFF) ──────────────────────────────────────
     def _tx_loop(self):
@@ -2753,7 +2764,13 @@ def _parse_args():
     _pre = argparse.ArgumentParser(add_help=False)
     _pre.add_argument('--config', default=None)
     _pre.add_argument('--device-config', default=None)
+    _pre.add_argument('--debug', action='store_true', default=False)
     _pre_args, _ = _pre.parse_known_args()
+
+    # Set the global debug flag early so config-load messages are gated correctly.
+    global _DEBUG
+    _DEBUG = _pre_args.debug
+
     _config_path = _pre_args.config or os.path.join(os.getcwd(), _SERVER_CONFIG_NAME)
 
     # ── Load / create the two TOML configs ────────────────────────────────────
@@ -2864,6 +2881,10 @@ def _parse_args():
                     help=f"UDP port for RTP audio (default: {_def_audio_port})")
     ap.add_argument("--no-audio", action="store_true", default=argparse.SUPPRESS,
                     help="Disable the RTP/UDP audio channel")
+    ap.add_argument("--debug", action="store_true", default=False,
+                    help="Enable verbose debug output (config loading, device "
+                         "switching, antenna/power/sample-rate changes, every "
+                         "received command, etc.)")
     ap.add_argument("--iq_wav", metavar="PATH", default=None,
                     help="Path to a wav file of IQ samples in SDRplay IQ wav "
                          "format (stereo I/Q PCM or float). When given, the "
@@ -3151,9 +3172,9 @@ def _create_example_files(device_cfg_path):
             empty_mems = {pos: _empty_memory_slots() for pos in MEMORY_POSITIONS}
             with open(mem_example, "w", encoding="utf-8") as f:
                 json.dump(empty_mems, f, indent=2)
-            print(f"[config] Created example memories file : {mem_example}")
+            dprint(f"[config] Created example memories file : {mem_example}")
         except Exception as e:
-            print(f"[config] WARNING: could not write {mem_example}: {e}")
+            dprint(f"[config] WARNING: could not write {mem_example}: {e}")
 
     # ── cat_device.gui_state.json.example ────────────────────────────────────
     gui_example = base + ".gui_state.json.example"
@@ -3162,9 +3183,9 @@ def _create_example_files(device_cfg_path):
             example_state = {k: "<persisted at runtime>" for k in _GUI_STATE_KEYS}
             with open(gui_example, "w", encoding="utf-8") as f:
                 json.dump(example_state, f, indent=2)
-            print(f"[config] Created example GUI-state file: {gui_example}")
+            dprint(f"[config] Created example GUI-state file: {gui_example}")
         except Exception as e:
-            print(f"[config] WARNING: could not write {gui_example}: {e}")
+            dprint(f"[config] WARNING: could not write {gui_example}: {e}")
 
 
 def main():
@@ -3174,7 +3195,11 @@ def main():
     bw_map = args.bandwidth_map   # {mode: [Hz, ...]} from [bandwidth] in cat_device.toml
 
     print(f"[cat_server] server config: {args.config}")
-    print(f"[cat_server] device config: {args.device_config}")
+
+    # Emit the deferred tomllib warning now that --debug is known.
+    if _tomllib_warning:
+        dprint(_tomllib_warning, flush=True)
+    dprint(f"[cat_server] device config: {args.device_config}")
 
     # ── Create .example companion files (once, for user reference only) ───────
     # These are never read by the server; they exist purely as documentation.
@@ -3242,11 +3267,11 @@ def main():
             print(f"[cat_server] ERROR: could not load --iq_wav {args.iq_wav!r}: {e}")
             sys.exit(1)
         cf = f"{iq_source.center_freq / 1e6:.6f} MHz" if iq_source.center_freq else "unknown (use GUI to set)"
-        print(f"[cat_server] IQ wav loaded: {args.iq_wav}")
-        print(f"[cat_server]   sample_rate={iq_source.sample_rate} Hz, "
+        dprint(f"[cat_server] IQ wav loaded: {args.iq_wav}")
+        dprint(f"[cat_server]   sample_rate={iq_source.sample_rate} Hz, "
               f"channels={iq_source.channels}, bits={iq_source.bits_per_sample}"
               f"{' float' if iq_source.is_float else ''}, center_freq={cf}")
-        print("[cat_server]   -> looping this file forever for spectrum/waterfall")
+        dprint("[cat_server]   -> looping this file forever for spectrum/waterfall")
 
     def _parse_power_levels(raw):
         """Parse a comma-separated power_levels string into a sorted list of floats."""
@@ -3305,7 +3330,7 @@ def main():
     # sync with.
     if radio.devices and not args.device_config_explicit:
         radio.apply({"cmd": "select_device", "index": 1})
-        print(f"[cat_server] startup device auto-selected: "
+        dprint(f"[cat_server] startup device auto-selected: "
               f"{radio.devices[0].get('label', '?')!r} "
               f"(config {radio.devices[0].get('config', '')!r})")
 
@@ -3317,11 +3342,11 @@ def main():
         except Exception as e:
             print(f"[cat_server] ERROR: could not load --audio_wav {args.audio_wav!r}: {e}")
             sys.exit(1)
-        print(f"[cat_server] audio wav loaded: {args.audio_wav}")
-        print(f"[cat_server]   source sample_rate={audio_source.source_sample_rate} Hz, "
+        dprint(f"[cat_server] audio wav loaded: {args.audio_wav}")
+        dprint(f"[cat_server]   source sample_rate={audio_source.source_sample_rate} Hz, "
               f"channels={audio_source.source_channels} "
               f"-> resampled to {AUDIO_SAMPLE_RATE} Hz mono")
-        print("[cat_server]   -> looping this file forever as the RX audio "
+        dprint("[cat_server]   -> looping this file forever as the RX audio "
               "stream sent to the GUI")
 
     # ── Start the UDP audio channel ──────────────────────────────────────────
