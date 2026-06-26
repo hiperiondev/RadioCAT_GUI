@@ -4,7 +4,7 @@
   "lo_b_freq": 14195000.0,
   "lo_active": "A",
   "zoom": 1,
-  "mode": "AM",
+  "mode": "RTTY",
   "filter_lo": 100,
   "filter_hi": 2800,
   "agc": "Med",
@@ -70,8 +70,8 @@
   "spec_ref_af": 0.0,
   "spec_ave_af": 1,
   "sample_rate": 192000.0,
-  "antenna_index": 0,
-  "power_index": 0,
+  "antenna_index": 2,
+  "power_index": 4,
   "selected_bw": "",
   "rf_usr_btn_config_vals": {
     "1": {
