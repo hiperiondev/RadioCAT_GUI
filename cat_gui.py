@@ -5633,6 +5633,29 @@ class App:
         frm = tk.Frame(dlg, padx=pad*2, pady=pad, bg=_dlg_bg)
         frm.pack(fill="both", expand=True)
 
+        # ── themed ttk.Combobox style (shared across all "list" rows) ─────────
+        _cfg_cb_style = "CfgDlg.TCombobox"
+        _cfg_cb_ttk   = ttk.Style()
+        try:
+            _cfg_cb_ttk.theme_use("clam")
+        except Exception:
+            pass
+        _cfg_cb_ttk.configure(_cfg_cb_style,
+            fieldbackground=C["btn_gray"],
+            background=C["btn_gray"],
+            foreground=C["text"],
+            selectbackground=C["btn_sel"],
+            selectforeground=C["btn_sel_fg"],
+            arrowcolor=C["btn_sel_fg"],
+            bordercolor=C["sep"],
+            lightcolor=C["btn_gray"],
+            darkcolor=C["btn_gray"],
+        )
+        _cfg_cb_ttk.map(_cfg_cb_style,
+            fieldbackground=[("readonly", C["btn_gray"])],
+            foreground=[("readonly", C["text"])],
+        )
+
         # ── build one row per config item ─────────────────────────────────────
         _vars = {}   # name → (wtype, tk_var, [optional extras])
 
@@ -5656,10 +5679,16 @@ class App:
                                    font=_gui_font(fs), width=5, anchor="e",
                                    bg=_dlg_bg, fg=_dlg_fg)
                 val_lbl.pack(side="right")
-                scl = ttk.Scale(cell, from_=lo, to=hi, variable=var,
-                                orient="horizontal", length=max(120, int(round(120*sc))),
-                                command=lambda v, vl=val_lbl: vl.config(
-                                    text=f"{float(v):.0f}"))
+                # Use tk.Scale (not ttk.Scale) so bg/fg/troughcolor match the theme
+                scl = tk.Scale(cell, from_=lo, to=hi, variable=var,
+                               orient="horizontal",
+                               length=max(120, int(round(120*sc))),
+                               bg=_dlg_bg, fg=_dlg_fg,
+                               troughcolor=C["panel_bg"],
+                               activebackground=C["btn_sel"],
+                               highlightthickness=0, showvalue=0,
+                               command=lambda v, vl=val_lbl: vl.config(
+                                   text=f"{float(v):.0f}"))
                 scl.pack(side="left", fill="x", expand=True)
 
             elif wtype == "list":
@@ -5676,6 +5705,7 @@ class App:
                 _vars[name] = ("list", var, val_map)
                 cb = ttk.Combobox(frm, textvariable=var, values=keys,
                                   state="readonly", width=16,
+                                  style=_cfg_cb_style,
                                   font=_gui_font(fs))
                 cb.grid(row=row, column=1, sticky="w", pady=pad//2)
 
@@ -5683,7 +5713,13 @@ class App:
                 init = bool(saved.get(name, False))
                 var = tk.BooleanVar(value=init)
                 _vars[name] = ("check", var)
-                chk = ttk.Checkbutton(frm, variable=var)
+                # Use tk.Checkbutton (not ttk) so colors match the dark theme
+                chk = tk.Checkbutton(frm, variable=var,
+                                     bg=_dlg_bg, fg=_dlg_fg,
+                                     selectcolor=C["panel_bg"],
+                                     activebackground=_dlg_bg,
+                                     activeforeground=C["btn_sel_fg"],
+                                     highlightthickness=0, bd=0)
                 chk.grid(row=row, column=1, sticky="w", pady=pad//2)
 
             elif wtype == "radio":
@@ -5696,15 +5732,24 @@ class App:
                 radio_frm = tk.Frame(frm, bg=_dlg_bg)
                 radio_frm.grid(row=row, column=1, sticky="w", pady=pad//2)
                 for opt in options:
-                    ttk.Radiobutton(radio_frm, text=str(opt),
-                                    variable=var, value=str(opt)
-                                    ).pack(side="left", padx=max(2, pad//2))
+                    # Use tk.Radiobutton (not ttk) so colors match the dark theme
+                    tk.Radiobutton(radio_frm, text=str(opt),
+                                   variable=var, value=str(opt),
+                                   bg=_dlg_bg, fg=_dlg_fg,
+                                   selectcolor=C["panel_bg"],
+                                   activebackground=_dlg_bg,
+                                   activeforeground=C["btn_sel_fg"],
+                                   font=_gui_font(fs),
+                                   highlightthickness=0, bd=0
+                                   ).pack(side="left", padx=max(2, pad//2))
 
         # ── OK / Cancel buttons ───────────────────────────────────────────────
         n_rows = len(config_dict)
-        sep = ttk.Separator(frm, orient="horizontal")
-        sep.grid(row=n_rows, column=0, columnspan=2,
-                 sticky="ew", pady=(pad, 0))
+        # Use a plain tk.Frame as separator (matches dark theme; ttk.Separator
+        # uses the system theme and would appear as a white/grey line)
+        tk.Frame(frm, bg=C["sep"], height=max(1, int(round(1*sc)))
+                 ).grid(row=n_rows, column=0, columnspan=2,
+                        sticky="ew", pady=(pad, 0))
 
         btn_frm = tk.Frame(frm, bg=_dlg_bg)
         btn_frm.grid(row=n_rows+1, column=0, columnspan=2, pady=pad)
@@ -5735,13 +5780,13 @@ class App:
             dlg.destroy()
 
         tk.Button(btn_frm, text="OK", command=_ok,
-                  width=8, font=_gui_font(fs),
+                  width=8, font=_gui_font(fs), relief="flat", bd=1,
                   bg=_dlg_btn, fg=C["btn_sel_fg"],
                   activebackground=C["btn_sel"], activeforeground=C["btn_sel_fg"]
                   ).pack(side="left", padx=pad)
         tk.Button(btn_frm, text="Cancel", command=dlg.destroy,
-                  width=8, font=_gui_font(fs),
-                  bg=_dlg_bg, fg=_dlg_fg,
+                  width=8, font=_gui_font(fs), relief="flat", bd=1,
+                  bg=_dlg_bg, fg=C["btn_red_fg"],
                   activebackground=C["btn_gray"], activeforeground=C["text"]
                   ).pack(side="left", padx=pad)
 

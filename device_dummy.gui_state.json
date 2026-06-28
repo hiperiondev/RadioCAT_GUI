@@ -69,7 +69,7 @@
   "spec_ave_rf": 2,
   "spec_ref_af": 0.0,
   "spec_ave_af": 1,
-  "sample_rate": 192000.0,
+  "sample_rate": 333333.0,
   "antenna_index": 2,
   "power_index": 4,
   "selected_bw": "",
