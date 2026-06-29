@@ -6,6 +6,9 @@ import argparse, array, cmath, collections, json, logging, math, os, queue, sock
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+# ── i18n: gettext-based translation support ───────────────────────────────────
+from i18n import setup as _i18n_setup, _ as _, ngettext as ngettext, pgettext as pgettext
+
 # ── Optional NumPy (used for FFT when available) ──────────────────────────────
 try:
     import numpy as _np
@@ -722,6 +725,30 @@ C = dict(
     toolbar_sp  = "#c8d8f0",   # "Spectrum" label
     sep         = "#1a3050",
 )
+
+# ── i18n: state-token / display-label separation ─────────────────────────────
+# These string constants are used as dict keys and protocol values — NEVER
+# translate them.  Display labels are derived at render time via _() so
+# that the internal state is always English regardless of locale.
+
+# Toolbar view state tokens
+_VIEW_WF = "Waterfall"
+_VIEW_SP = "Spectrum"
+
+# Human-readable toolbar view labels (translated at render time)
+def _view_label(key):
+    return {_VIEW_WF: _("Waterfall"), _VIEW_SP: _("Spectrum")}.get(key, key)
+
+# Memory position state tokens (used as dict keys / server protocol values)
+_MEM_POSITIONS = ("LO A", "LO B", "Tune")
+
+# Human-readable memory position labels (translated at render time)
+def _mem_pos_label(key):
+    return {
+        "LO A": pgettext("freq_display_label", "LO A"),
+        "LO B": pgettext("freq_display_label", "LO B"),
+        "Tune": pgettext("freq_display_label", "Tune"),
+    }.get(key, key)
 
 
 NUM_BINS = 900
@@ -1621,7 +1648,7 @@ class WFCanvas(tk.Canvas):
             sc  = getattr(self._app, '_sc', 1.0) if self._app else 1.0
             pad = max(4, int(round(5 * sc)))
             fs  = max(7, int(round(8 * sc)))
-            self.create_text(pad, pad, text="\u25cf TX", anchor="nw",
+            self.create_text(pad, pad, text=_("\u25cf TX"), anchor="nw",
                              fill="#ff3030", font=("TkFixedFont", fs, "bold"),
                              tags="wf_tx_badge")
 
@@ -1814,7 +1841,7 @@ class SpecCanvas(tk.Canvas):
             sc  = getattr(self.app, '_sc', 1.0)
             pad = max(4, int(round(5 * sc)))
             fs  = max(7, int(round(8 * sc)))
-            self.create_text(pad, pad, text="\u25cf TX", anchor="nw",
+            self.create_text(pad, pad, text=_("\u25cf TX"), anchor="nw",
                              fill="#ff3030", font=("TkFixedFont", fs, "bold"),
                              tags="spec_tx_badge")
 
@@ -2150,7 +2177,7 @@ class SMeter(tk.Canvas):
                 self.create_line(x1,y1,x2,y2,fill=col,width=1)
             # "SWR" label at the top-centre of the arc face
             self.create_text(cx, cy - R * 0.55,
-                             text="SWR", fill=C["text"],
+                             text=_("SWR:"), fill=C["text"],
                              font=_gui_font(label_fs, "bold"))
             # Needle driven by live SWR value (stays at floor when no SWR yet)
             swr_needle = self._swr if self._swr is not None else _SWR_LO
@@ -2196,7 +2223,7 @@ class SMeter(tk.Canvas):
         # "Signal:" tag on the left
         self.create_text(box_x0 + tag_w // 2,
                          (box_y0 + box_y1) // 2,
-                         text="Signal:",
+                         text=_("Signal:"),
                          fill=C["text"],
                          font=_gui_font(tag_fs, "bold"),
                          anchor="center")
@@ -2220,7 +2247,7 @@ class SMeter(tk.Canvas):
                          fill=C["sep"], width=1)
         self.create_text(box_x0 + tag_w // 2,
                          (rst_y0 + rst_y1) // 2,
-                         text="RST:",
+                         text=_("RST:"),
                          fill=C["text"],
                          font=_gui_font(tag_fs, "bold"),
                          anchor="center")
@@ -2268,7 +2295,7 @@ class SMeter(tk.Canvas):
                          fill=C["sep"], width=1)
         self.create_text(box_x0 + tag_w // 2,
                          (swr_y0 + swr_y1) // 2,
-                         text="SWR:",
+                         text=_("SWR:"),
                          fill=C["text"],
                          font=_gui_font(tag_fs, "bold"),
                          anchor="center")
@@ -2374,10 +2401,10 @@ class FreqDisp(tk.Frame):
             (self.on_change or self.app.on_freq_changed)(hz)
 
     def _edit(self,_=None):
-        top=tk.Toplevel(self); top.title("Set Frequency")
+        top=tk.Toplevel(self); top.title(_("Set Frequency"))
         top.configure(bg=C["panel_bg"]); top.transient(self.winfo_toplevel())
         top.grab_set()
-        tk.Label(top,text="Frequency (Hz):",bg=C["panel_bg"],
+        tk.Label(top,text=_("Frequency (Hz):"),bg=C["panel_bg"],
                  fg=C["text"]).pack(padx=12,pady=(12,4))
         var=tk.StringVar(value=str(self.value))
         ent=tk.Entry(top,textvariable=var,width=16,justify="right",
@@ -2395,7 +2422,7 @@ class FreqDisp(tk.Frame):
                 return
             self.set_value(v,notify=True); top.destroy()
         ent.bind("<Return>",apply)
-        tk.Button(top,text="Set",command=apply,bg=C["btn_gray"],
+        tk.Button(top,text=_("Set"),command=apply,bg=C["btn_gray"],
                   fg=C["text"]).pack(pady=(4,12))
 
 # ── toolbar strip (between RF waterfall and AF area) ─────────────────────────
@@ -2467,7 +2494,7 @@ def _toolbar(parent,rbw="23.4 Hz",avg="2",bg=None,sc=1.0,app=None,box_id="rf",in
             return None
         return getattr(app, "rf_spec" if box_id == "rf" else "af_spec", None)
 
-    lbl("SCALE", C["text_dim"])
+    lbl(_("SCALE"), C["text_dim"])
     _ref_lbl = tk.Label(bar, text=str(_ref_state["v"]), bg=C["btn_gray"],
                         fg=C["text"], font=_gui_font(_bfs), width=4, relief="flat",
                         anchor="center")
@@ -2494,14 +2521,14 @@ def _toolbar(parent,rbw="23.4 Hz",avg="2",bg=None,sc=1.0,app=None,box_id="rf",in
               font=_gui_font(_bfs), relief="flat", bd=0,
               padx=max(1,int(round(2*sc))), pady=0,
               command=lambda: _adj_ref(+5)).pack(side="left", padx=0)
-    lbl("dB", C["text_dim"])
+    lbl(_("dB"), C["text_dim"])
     sep()
 
     # ── AVE control: FFT averaging count 1–10 ────────────────────────────────
     # Sent to the server as set_spec_ave; the server applies it on the SDR side.
     _ave_state = {"v": max(1, min(10, int(spec_ave)))}
 
-    lbl("AVE", C["text_dim"])
+    lbl(_("AVE"), C["text_dim"])
     _ave_lbl = tk.Label(bar, text=str(_ave_state["v"]), bg=C["btn_gray"],
                         fg=C["text"], font=_gui_font(_bfs), width=2, relief="flat",
                         anchor="center")
@@ -2557,7 +2584,7 @@ def _toolbar(parent,rbw="23.4 Hz",avg="2",bg=None,sc=1.0,app=None,box_id="rf",in
     if box_id == "rf":
         _zoom_state = {"v": int(app.state.get("zoom", 1)) if app else 1}
 
-        lbl("Zoom", C["text_dim"])
+        lbl(_("Zoom"), C["text_dim"])
         _zoom_lbl = tk.Label(bar, text=f'{_zoom_state["v"]}x', bg=C["btn_gray"],
                              fg=C["text"], font=_gui_font(_bfs), width=3, relief="flat",
                              anchor="center")
@@ -2602,7 +2629,7 @@ def _toolbar(parent,rbw="23.4 Hz",avg="2",bg=None,sc=1.0,app=None,box_id="rf",in
     def _wf_canvas():
         return getattr(app, _wf_attr, None) if app else None
 
-    lbl("Speed", C["text_dim"])
+    lbl(_("Speed"), C["text_dim"])
     _speed_lbl = tk.Label(bar, text=str(_speed_state["v"]), bg=C["btn_gray"],
                           fg=C["text"], font=_gui_font(_bfs), width=2, relief="flat",
                           anchor="center")
@@ -2664,7 +2691,7 @@ def _fbtn(parent,text,fg=None,bg=None,command=None,sc=1.0,**kw):
 class App:
     def __init__(self,root):
         self.root=root
-        self.root.title("CAT GUI Interface")
+        self.root.title(_("CAT GUI Interface"))
         self.root.configure(bg=C["win_bg"])
 
         try:
@@ -2679,6 +2706,11 @@ class App:
         except tk.TclError: pass
 
         self.net=Net(self); self.q=queue.Queue()
+        # Cache of English-label → translated-label overrides for server-driven
+        # button labels (user_buttons, rf_usr_btns, user_mods).  Populated
+        # whenever a 'data' message arrives that includes an rf_btn_config_labels
+        # section, or loaded from locale-side TOML (future: §6 of i18n plan).
+        self._label_overrides: dict = {}
         self.rtp_audio = RTPAudioClient("", 0)   # configured when server sends audio_port
         self.rtp_audio._af_app = self  # lets it push real-time AF spectrum updates
         # PTT must stay disabled until the RTP socket has actually bound and
@@ -2705,8 +2737,8 @@ class App:
             mic_idx = _check(_ARGS.audio_mic,     "mic",     "max_input_channels")
             spk_idx = _check(_ARGS.audio_speaker, "speaker", "max_output_channels")
             self.rtp_audio.set_devices(mic_idx, spk_idx)
-            mic_name = by_idx[mic_idx]["name"] if mic_idx is not None else "System default"
-            spk_name = by_idx[spk_idx]["name"] if spk_idx is not None else "System default"
+            mic_name = by_idx[mic_idx]["name"] if mic_idx is not None else _("System default")
+            spk_name = by_idx[spk_idx]["name"] if spk_idx is not None else _("System default")
             print(f"[audio] CLI device selection — mic={mic_idx} ({mic_name})  "
                   f"speaker={spk_idx} ({spk_name})")
 
@@ -2965,7 +2997,7 @@ class App:
                           ox + sz - hi, oy + sz - hi,
                           fill="", outline=inner_outline,
                           width=max(1, int(round(2*sc))))
-            c.create_text(cw // 2, ch // 2, text="PTT",
+            c.create_text(cw // 2, ch // 2, text=_("PTT"),
                           fill=label_color,
                           font=_gui_font(fs_ptt, "bold"))
 
@@ -3008,7 +3040,7 @@ class App:
         ant_row.pack(fill="x", padx=max(2, int(round(4*sc))),
                      pady=(0, max(1, int(round(1*sc)))))
         fs_ant = max(6, int(round(8*sc)))
-        self._ant_btn = _fbtn(ant_row, "Antenna", sc=sc,
+        self._ant_btn = _fbtn(ant_row, _("Antenna"), sc=sc,
                               bg=C["btn_gray"], fg=C["btn_sel_fg"],
                               command=self._request_antenna_list)
         self._ant_btn.pack(side="left", padx=(0, max(1, int(round(2*sc)))))
@@ -3018,7 +3050,7 @@ class App:
         self._ant_lbl.pack(side="left", fill="x", expand=True,
                            padx=(max(2, int(round(2*sc))), 0))
         # Power TX selector — shown only when the device configures power_levels.
-        self._pwr_btn = _fbtn(ant_row, "Power", sc=sc,
+        self._pwr_btn = _fbtn(ant_row, _("Power"), sc=sc,
                               bg=C["btn_gray"], fg=C["btn_sel_fg"],
                               command=self._request_power_levels)
         self._pwr_btn.pack(side="right", padx=(max(1, int(round(2*sc))), 0))
@@ -3192,7 +3224,7 @@ class App:
         # Left side: LO A display
         self.lo_disp=FreqDisp(lo_row,self,label="LO A",
                               lo_select_cmd=lambda:_select_lo("A"))
-        self.lo_disp._label_text="LO A"
+        self.lo_disp._label_text=pgettext("freq_display_label","LO A")
         self._lo_a_disp=self.lo_disp
         self.lo_disp.pack(side="left",fill="x",expand=True,padx=max(1,int(round(2*sc))),pady=max(1,int(round(2*sc))))
         self.lo_disp.set_value(self.state["lo_freq"],notify=False)
@@ -3310,7 +3342,7 @@ class App:
                        padx=max(1,int(round(2*sc))),
                        pady=(0,max(0,int(round(1*sc)))))
         fs_split=max(6,int(round(7*sc)))
-        self._split_btn=tk.Button(split_row,text="SPLIT",anchor="center",
+        self._split_btn=tk.Button(split_row,text=_("SPLIT"),anchor="center",
                        bg=C["btn_gray"],fg=C["btn_sel_fg"],
                        activebackground=C["btn_sel"],activeforeground=C["btn_sel_fg"],
                        font=_gui_font(fs_split,"bold"),relief="flat",bd=0,highlightthickness=0,
@@ -3318,7 +3350,7 @@ class App:
                        command=lambda:self._toggle_split())
         self._split_btn.pack(side="left")
 
-        self._swap_btn=tk.Button(split_row,text="SWAP",anchor="center",
+        self._swap_btn=tk.Button(split_row,text=_("SWAP"),anchor="center",
                        bg=C["btn_gray"],fg=C["btn_sel_fg"],
                        activebackground=C["btn_sel"],activeforeground=C["btn_sel_fg"],
                        font=_gui_font(fs_split,"bold"),relief="flat",bd=0,highlightthickness=0,
@@ -3327,7 +3359,7 @@ class App:
         self._swap_btn.pack(side="left",padx=(max(2,int(round(3*sc))),0))
 
         self._freq_locked = False
-        self._lock_btn=tk.Button(split_row,text="LOCK",anchor="center",
+        self._lock_btn=tk.Button(split_row,text=_("LOCK"),anchor="center",
                        bg=C["btn_gray"],fg=C["btn_sel_fg"],
                        activebackground=C["btn_sel"],activeforeground=C["btn_sel_fg"],
                        font=_gui_font(fs_split,"bold"),relief="flat",bd=0,highlightthickness=0,
@@ -3405,7 +3437,7 @@ class App:
         self.lo_b_disp=FreqDisp(lo_b_row,self,label="LO B",
                                 on_change=self.on_lo_b_changed,
                                 lo_select_cmd=lambda:_select_lo("B"))
-        self.lo_b_disp._label_text="LO B"
+        self.lo_b_disp._label_text=pgettext("freq_display_label","LO B")
         self._lo_b_disp=self.lo_b_disp
         self.lo_b_disp.pack(side="left",fill="x",expand=True,padx=max(1,int(round(2*sc))),pady=max(1,int(round(2*sc))))
         self.lo_b_disp.set_value(self.state["lo_b_freq"],notify=False)
@@ -3427,7 +3459,7 @@ class App:
         tune_row.grid(row=3,column=0,sticky="ew")
         _mem_btn("Tune")
         self.tune_disp=FreqDisp(tune_row,self,label="Tune",on_change=self.on_tune_changed)
-        self.tune_disp._label_text="Tune"
+        self.tune_disp._label_text=pgettext("freq_display_label","Tune")
         self.tune_disp.pack(side="left",fill="x",expand=True,padx=max(1,int(round(2*sc))),pady=max(1,int(round(2*sc))))
         self.tune_disp.set_value(self.state["tune_freq"],notify=False)
 
@@ -3466,7 +3498,7 @@ class App:
                 pady=(max(2,int(round(3*sc))),max(1,int(round(1*sc)))))
         fs_sl=max(6,int(round(8*sc)))
         sl_len=max(100,int(round(180*sc)))
-        tk.Label(sv,text="Volume",bg=C["panel_bg"],fg=C["text_dim"],
+        tk.Label(sv,text=_("Volume"),bg=C["panel_bg"],fg=C["text_dim"],
                  font=_gui_font(fs_sl)).grid(row=0,column=0,sticky="w")
         self.vol_var=tk.DoubleVar(value=self.state["volume"])
         self._vol_lbl=tk.Label(sv,text=f'{self.state["volume"]:.0f}',
@@ -3481,7 +3513,7 @@ class App:
                  highlightthickness=0,showvalue=0,length=sl_len,
                  command=_vol_cmd
                  ).grid(row=0,column=1,sticky="ew",padx=max(2,int(round(4*sc))))
-        tk.Label(sv,text="AGC Thresh.",bg=C["panel_bg"],fg=C["text_dim"],
+        tk.Label(sv,text=_("AGC Thresh."),bg=C["panel_bg"],fg=C["text_dim"],
                  font=_gui_font(fs_sl)).grid(row=1,column=0,sticky="w")
         self.agct_var=tk.DoubleVar(value=self.state.get("agc_thresh",-100))
         self._agct_lbl=tk.Label(sv,text=f'{self.state.get("agc_thresh",-100):.0f}',
@@ -3496,7 +3528,7 @@ class App:
                  highlightthickness=0,showvalue=0,length=sl_len,
                  command=_agct_cmd
                  ).grid(row=1,column=1,sticky="ew",padx=max(2,int(round(4*sc))))
-        tk.Label(sv,text="RF Gain",bg=C["panel_bg"],fg=C["text_dim"],
+        tk.Label(sv,text=_("RF Gain"),bg=C["panel_bg"],fg=C["text_dim"],
                  font=_gui_font(fs_sl)).grid(row=2,column=0,sticky="w")
         self.rfg_var=tk.DoubleVar(value=self.state.get("rf_gain",20.0))
         self._rfg_lbl=tk.Label(sv,text=f'{self.state.get("rf_gain",20.0):.0f}',
@@ -3511,7 +3543,7 @@ class App:
                  highlightthickness=0,showvalue=0,length=sl_len,
                  command=_rfg_cmd
                  ).grid(row=2,column=1,sticky="ew",padx=max(2,int(round(4*sc))))
-        tk.Label(sv,text="Squelch",bg=C["panel_bg"],fg=C["text_dim"],
+        tk.Label(sv,text=_("Squelch"),bg=C["panel_bg"],fg=C["text_dim"],
                  font=_gui_font(fs_sl)).grid(row=3,column=0,sticky="w")
         self.sql_var=tk.DoubleVar(value=self.state.get("squelch",-130.0))
         self._sql_lbl=tk.Label(sv,text=f'{self.state.get("squelch",-130.0):.0f}',
@@ -3575,15 +3607,15 @@ class App:
         # ── SDR-Device / Soundcard / Bandwidth / Sample Rate ──────────────────
         r1=tk.Frame(lp,bg=C["panel_bg"])
         r1.pack(fill="x",padx=max(2,int(round(4*sc))),pady=(max(1,int(round(2*sc))),max(1,int(round(1*sc)))))
-        for t in ["Device","Sample Rate"]:
-            if t == "Device":
+        for _lbl, _key in [(_("Device"),"Device"),(_("Sample Rate"),"Sample Rate")]:
+            if _key == "Device":
                 _dcmd = self._request_device_list
             else:
                 _dcmd = self._request_sample_rates
-            _fbtn(r1,t,sc=sc,command=_dcmd
+            _fbtn(r1,_lbl,sc=sc,command=_dcmd
                   ).pack(side="left",padx=max(1,int(round(1*sc))),fill="x",expand=True)
         if not _ARGS.disable_soundcard_select:
-            _fbtn(r1,"Soundcard",sc=sc,
+            _fbtn(r1,_("Soundcard"),sc=sc,
                   command=self._open_soundcard_dialog
                   ).pack(side="left",padx=max(1,int(round(1*sc))),fill="x",expand=True)
 
@@ -3605,7 +3637,7 @@ class App:
         # ── Start ─────────────────────────────────────────────────────────────
         r3=tk.Frame(lp,bg=C["panel_bg"])
         r3.pack(fill="x",padx=max(2,int(round(4*sc))),pady=max(1,int(round(1*sc))))
-        self.start_btn=_fbtn(r3,"Start",sc=sc,command=self._toggle_run)
+        self.start_btn=_fbtn(r3,_("Start"),sc=sc,command=self._toggle_run)
         self.start_btn.pack(side="left",padx=max(1,int(round(1*sc))),fill="x",expand=True)
 
         # ── Date/time + connect controls (bottom of left panel) ──────────────
@@ -3628,25 +3660,25 @@ class App:
             # self.conn_status still need to exist because _toggle_connect /
             # _on_connect_result / _on_disconnected reference them, so they
             # are created here but simply never packed/shown.
-            self.conn_btn=tk.Button(cr,text="Connect",command=self._toggle_connect)
+            self.conn_btn=tk.Button(cr,text=_("Connect"),command=self._toggle_connect)
             self.conn_status=tk.Label(cr,text="●")
         else:
             cr.pack(fill="x",anchor="w")
             if not _cli_host:
                 # Show editable host/port fields only when not supplied via CLI
-                tk.Label(cr,text="Host:",bg=C["panel_bg"],fg=C["text_dim"],
+                tk.Label(cr,text=_("Host:"),bg=C["panel_bg"],fg=C["text_dim"],
                          font=_gui_font(fs_cr)).pack(side="left",padx=(0,max(1,int(round(2*sc)))))
                 tk.Entry(cr,textvariable=self.host_var,width=13,
                          bg=C["btn_gray"],fg=C["text"],insertbackground=C["text"],
                          relief="flat",font=_gui_font(fs_cr)
                          ).pack(side="left",padx=(0,max(2,int(round(4*sc)))))
-                tk.Label(cr,text="Port:",bg=C["panel_bg"],fg=C["text_dim"],
+                tk.Label(cr,text=_("Port:"),bg=C["panel_bg"],fg=C["text_dim"],
                          font=_gui_font(fs_cr)).pack(side="left",padx=(0,max(1,int(round(2*sc)))))
                 tk.Entry(cr,textvariable=self.port_var,width=6,
                          bg=C["btn_gray"],fg=C["text"],insertbackground=C["text"],
                          relief="flat",font=_gui_font(fs_cr)
                          ).pack(side="left",padx=(0,max(2,int(round(4*sc)))))
-            self.conn_btn=tk.Button(cr,text="Connect",
+            self.conn_btn=tk.Button(cr,text=_("Connect"),
                                     command=self._toggle_connect,
                                     bg="#0e2a10",fg=C["btn_grn_fg"],
                                     activebackground=C["btn_sel"],
@@ -4414,7 +4446,7 @@ class App:
     def _request_device_list(self):
         """Send get_devices to the server; reply opens the Device dialog."""
         if not self.net.connected:
-            messagebox.showinfo("Device", "Not connected to server.", parent=self.root)
+            messagebox.showinfo(pgettext("msgbox_title","Device"), _("Not connected to server."), parent=self.root)
             return
         self.net.send({"cmd": "get_devices"})
 
@@ -4450,20 +4482,20 @@ class App:
         _active_idx = self.state.get("active_device_index", 0)
 
         top = tk.Toplevel(self.root)
-        top.title("Select Device")
+        top.title(_("Select Device"))
         top.configure(bg=C["panel_bg"])
         top.transient(self.root)
         top.grab_set()
         top.resizable(False, False)
 
-        tk.Label(top, text="Select a device:", bg=C["panel_bg"], fg=C["btn_grn_fg"],
+        tk.Label(top, text=_("Select a device:"), bg=C["panel_bg"], fg=C["btn_grn_fg"],
                  font=_gui_font(fs_h, "bold")).pack(padx=pad, pady=(pad, 2), anchor="w")
 
         if not devices:
-            tk.Label(top, text="No devices configured on server.",
+            tk.Label(top, text=_("No devices configured on server."),
                      bg=C["panel_bg"], fg=C["text_dim"],
                      font=_gui_font(fs)).pack(padx=pad, pady=(2, pad))
-            tk.Button(top, text="Close", command=top.destroy,
+            tk.Button(top, text=_("Close"), command=top.destroy,
                       bg=C["btn_gray"], fg=C["btn_sel_fg"],
                       font=_gui_font(fs), relief="flat", bd=1,
                       padx=max(6, int(round(8*sc)))
@@ -4502,7 +4534,7 @@ class App:
             sep_line = tk.Frame(lst_fr, bg=C["sep"],
                                 height=max(1, int(round(1*sc))))
             sep_line.pack(fill="x", pady=(max(2, int(round(3*sc))), 0))
-            tk.Button(lst_fr, text="Cancel", command=top.destroy,
+            tk.Button(lst_fr, text=_("Cancel"), command=top.destroy,
                       bg=C["btn_gray"], fg=C["btn_red_fg"],
                       font=_gui_font(fs), relief="flat", bd=1,
                       padx=max(6, int(round(8*sc))),
@@ -4522,7 +4554,7 @@ class App:
         dialog. The choices come from the active device's per-device TOML
         file ([sdr].sample_rates) -- they are not hard-coded in the GUI."""
         if not self.net.connected:
-            messagebox.showinfo("Sample Rate", "Not connected to server.", parent=self.root)
+            messagebox.showinfo(pgettext("msgbox_title","Sample Rate"), _("Not connected to server."), parent=self.root)
             return
         self.net.send({"cmd": "get_sample_rates"})
 
@@ -4549,20 +4581,20 @@ class App:
         pad = max(4, int(round(6 * sc)))
 
         top = tk.Toplevel(self.root)
-        top.title("Select Sample Rate")
+        top.title(_("Select Sample Rate"))
         top.configure(bg=C["panel_bg"])
         top.transient(self.root)
         top.grab_set()
         top.resizable(False, False)
 
-        tk.Label(top, text="Select a sample rate:", bg=C["panel_bg"], fg=C["btn_grn_fg"],
+        tk.Label(top, text=_("Select a sample rate:"), bg=C["panel_bg"], fg=C["btn_grn_fg"],
                  font=_gui_font(fs_h, "bold")).pack(padx=pad, pady=(pad, 2), anchor="w")
 
         if not rates:
-            tk.Label(top, text="No sample rates configured for this device.",
+            tk.Label(top, text=_("No sample rates configured for this device."),
                      bg=C["panel_bg"], fg=C["text_dim"],
                      font=_gui_font(fs)).pack(padx=pad, pady=(2, pad))
-            tk.Button(top, text="Close", command=top.destroy,
+            tk.Button(top, text=_("Close"), command=top.destroy,
                       bg=C["btn_gray"], fg=C["btn_sel_fg"],
                       font=_gui_font(fs), relief="flat", bd=1,
                       padx=max(6, int(round(8*sc)))
@@ -4595,7 +4627,7 @@ class App:
             sep_line = tk.Frame(lst_fr, bg=C["sep"],
                                 height=max(1, int(round(1*sc))))
             sep_line.pack(fill="x", pady=(max(2, int(round(3*sc))), 0))
-            tk.Button(lst_fr, text="Cancel", command=top.destroy,
+            tk.Button(lst_fr, text=_("Cancel"), command=top.destroy,
                       bg=C["btn_gray"], fg=C["btn_red_fg"],
                       font=_gui_font(fs), relief="flat", bd=1,
                       padx=max(6, int(round(8*sc))),
@@ -4615,7 +4647,7 @@ class App:
         The antenna list comes from the active device's per-device TOML file
         ([sdr].antenna_label_N) -- nothing is hard-coded in the GUI."""
         if not self.net.connected:
-            messagebox.showinfo("Antenna", "Not connected to server.",
+            messagebox.showinfo(_("Antenna"), _("Not connected to server."),
                                 parent=self.root)
             return
         if self.state.get("ptt", False):
@@ -4633,25 +4665,24 @@ class App:
         pad = max(4, int(round(6 * sc)))
 
         top = tk.Toplevel(self.root)
-        top.title("Select Antenna")
+        top.title(_("Select Antenna"))
         top.configure(bg=C["panel_bg"])
         top.transient(self.root)
         top.grab_set()
         top.resizable(False, False)
 
-        tk.Label(top, text="Select antenna port:", bg=C["panel_bg"],
+        tk.Label(top, text=_("Select antenna port:"), bg=C["panel_bg"],
                  fg=C["btn_grn_fg"],
                  font=_gui_font(fs_h, "bold")).pack(padx=pad, pady=(pad, 2),
                                                     anchor="w")
 
         if not antennas:
             tk.Label(top,
-                     text="No antennas configured for this device.\n"
-                          "Add antenna_label_N entries to the device TOML.",
+                     text=_("No antennas configured for this device."),
                      bg=C["panel_bg"], fg=C["text_dim"],
                      font=_gui_font(fs), justify="left"
                      ).pack(padx=pad, pady=(2, pad))
-            tk.Button(top, text="Close", command=top.destroy,
+            tk.Button(top, text=_("Close"), command=top.destroy,
                       bg=C["btn_gray"], fg=C["btn_sel_fg"],
                       font=_gui_font(fs), relief="flat", bd=1,
                       padx=max(6, int(round(8*sc)))
@@ -4714,7 +4745,7 @@ class App:
             sep_line = tk.Frame(lst_fr, bg=C["sep"],
                                 height=max(1, int(round(1*sc))))
             sep_line.pack(fill="x", pady=(max(2, int(round(3*sc))), 0))
-            tk.Button(lst_fr, text="Cancel", command=top.destroy,
+            tk.Button(lst_fr, text=_("Cancel"), command=top.destroy,
                       bg=C["btn_gray"], fg=C["btn_red_fg"],
                       font=_gui_font(fs), relief="flat", bd=1,
                       padx=max(6, int(round(8*sc))),
@@ -4745,7 +4776,7 @@ class App:
     def _request_power_levels(self):
         """Send get_power_levels to the server; reply opens the Power dialog."""
         if not (self.net and self.net.connected):
-            messagebox.showinfo("Power", "Not connected to server.",
+            messagebox.showinfo(pgettext("msgbox_title","Power"), _("Not connected to server."),
                                 parent=self.root)
             return
         self.net.send({"cmd": "get_power_levels"})
@@ -4756,12 +4787,12 @@ class App:
         sc  = self._sc
         fs  = max(7, int(round(8 * sc)))
         top = tk.Toplevel(self.root)
-        top.title("TX Power")
+        top.title(_("TX Power"))
         top.configure(bg=C["panel_bg"])
         top.resizable(False, False)
         top.grab_set()
 
-        tk.Label(top, text="Select TX power level:", bg=C["panel_bg"],
+        tk.Label(top, text=_("Select TX power level:"), bg=C["panel_bg"],
                  fg=C["text"], font=_gui_font(fs)
                  ).pack(padx=max(8, int(round(12*sc))),
                         pady=(max(4, int(round(6*sc))), max(2, int(round(3*sc)))))
@@ -4772,8 +4803,7 @@ class App:
                     pady=(0, max(2, int(round(3*sc)))))
 
         if not levels:
-            tk.Label(lst_fr, text="No power levels configured for this device.\n"
-                               "Add power_levels to the [sdr] section of the device TOML.",
+            tk.Label(lst_fr, text=_("No power levels configured for this device."),
                      bg=C["panel_bg"], fg=C["text_dim"], font=_gui_font(fs),
                      justify="left"
                      ).pack(padx=max(4, int(round(6*sc))),
@@ -4801,7 +4831,7 @@ class App:
                           command=lambda i=pidx: _pick(i)
                           ).pack(fill="x", pady=(0, max(1, int(round(1*sc)))))
 
-        tk.Button(lst_fr, text="Cancel", command=top.destroy,
+        tk.Button(lst_fr, text=_("Cancel"), command=top.destroy,
                   bg=C["btn_gray"], fg=C["btn_red_fg"],
                   font=_gui_font(fs), relief="flat", bd=1,
                   padx=max(6, int(round(8*sc))),
@@ -4849,7 +4879,7 @@ class App:
         row_h = max(22, int(round(26 * sc)))
 
         top = tk.Toplevel(self.root)
-        top.title("Soundcard / Audio Device Selection")
+        top.title(_("Soundcard / Audio Device Selection"))
         top.configure(bg=C["panel_bg"])
         top.transient(self.root)
         top.grab_set()
@@ -4884,7 +4914,7 @@ class App:
             lb.pack(side="left", fill="both", expand=True)
 
             # Populate: first entry is always "System default"
-            entries = [{"index": None, "label": "(System default)"}]
+            entries = [{"index": None, "label": _("(System default)")}]
             for d in devices:
                 if d[filter_key] > 0:
                     ch = d[filter_key]
@@ -4937,7 +4967,7 @@ class App:
         # ── no pyaudio warning ────────────────────────────────────────────────
         if not devices:
             tk.Label(top,
-                     text="pyaudio not installed - no devices available. pip install pyaudio",
+                     text=_("pyaudio not installed — audio disabled. pip install pyaudio"),
                      bg=C["panel_bg"], fg=C["btn_red_fg"],
                      font=_gui_font(fs), justify="left"
                      ).pack(padx=pad, pady=(0, pad))
@@ -4951,9 +4981,9 @@ class App:
             out_idx = get_out()
             self.rtp_audio.set_devices(in_idx, out_idx)
             in_name  = next((d["name"] for d in devices if d["index"] == in_idx),
-                            "System default")
+                            _("System default"))
             out_name = next((d["name"] for d in devices if d["index"] == out_idx),
-                            "System default")
+                            _("System default"))
             self._sc_status_var.set(
                 f"✓  In: {in_name[:28]}   Out: {out_name[:28]}")
             print(f"[audio] devices set — input={in_idx} ({in_name})"
@@ -4963,13 +4993,13 @@ class App:
             _apply()
             top.destroy()
 
-        _fbtn(btn_fr, "Apply", sc=sc, command=_apply,
+        _fbtn(btn_fr, _("Apply"), sc=sc, command=_apply,
               bg=C["btn_gray"], fg=C["btn_sel_fg"]
               ).pack(side="left", padx=(0, max(2, int(round(4 * sc)))))
-        _fbtn(btn_fr, "OK", sc=sc, command=_ok,
+        _fbtn(btn_fr, _("OK"), sc=sc, command=_ok,
               bg=C["btn_grn"], fg=C["btn_grn_fg"]
               ).pack(side="left", padx=(0, max(2, int(round(4 * sc)))))
-        tk.Button(btn_fr, text="Cancel", command=top.destroy,
+        tk.Button(btn_fr, text=_("Cancel"), command=top.destroy,
                   bg=C["btn_gray"], fg=C["btn_red_fg"],
                   font=_gui_font(fs), relief="flat", bd=1
                   ).pack(side="left")
@@ -4992,8 +5022,8 @@ class App:
             host=self.host_var.get().strip()
             try: port=int(self.port_var.get().strip())
             except ValueError:
-                messagebox.showerror("Connect","Invalid port number"); return
-            self.conn_btn.config(text="Connecting…",state="disabled")
+                messagebox.showerror(_("Connect"),_("Invalid port number")); return
+            self.conn_btn.config(text=_("Connecting…"),state="disabled")
             self.root.update_idletasks()
             # Run the blocking socket.create_connection() in a background thread
             # so the GUI remains responsive during the 3-second timeout window.
@@ -5007,8 +5037,8 @@ class App:
     def _on_connect_result(self, ok, msg, host, port):
         """Called on the GUI thread after the background connect attempt finishes."""
         if not ok:
-            self.conn_btn.config(text="Connect", state="normal")
-            messagebox.showerror("Connect", f"Cannot connect to {host}:{port}\n{msg}")
+            self.conn_btn.config(text=_("Connect"), state="normal")
+            messagebox.showerror(_("Connect"), _("Cannot connect to {host}:{port}\n{detail}").format(host=host, port=port, detail=msg))
             return
         # PTT and SPLIT are always inactive on a fresh connection — these are
         # session-only transients that the server also resets on new connections.
@@ -5034,10 +5064,10 @@ class App:
         self._user_stopped = False
         self.state["running"] = True
         threading.Thread(target=_send_hello_burst, daemon=True).start()
-        self.conn_btn.config(text="Disconnect", state="normal",
+        self.conn_btn.config(text=_("Disconnect"), state="normal",
                              bg="#2a0e0e", fg=C["btn_red_fg"])
         self.conn_status.config(fg=C["btn_grn_fg"])
-        self.start_btn.config(text="Stop", bg="#6a1414", fg=C["btn_red_fg"])
+        self.start_btn.config(text=_("Stop"), bg="#6a1414", fg=C["btn_red_fg"])
 
     def _on_disconnected(self, reason=None):
         self.state["running"]=False
@@ -5053,12 +5083,12 @@ class App:
             self._draw_ptt_btn(False, False)
         if hasattr(self, '_ptt_canvas'):
             self._ptt_canvas.config(cursor="arrow")
-        self.conn_btn.config(text="Connect",state="normal",
+        self.conn_btn.config(text=_("Connect"),state="normal",
                              bg="#0e2a10",fg=C["btn_grn_fg"])
         self.conn_status.config(fg="#331111")
-        self.start_btn.config(text="Start",bg=C["btn_grn"],fg=C["btn_grn_fg"])
+        self.start_btn.config(text=_("Start"),bg=C["btn_grn"],fg=C["btn_grn_fg"])
         if reason:
-            messagebox.showerror("Disconnected", reason, parent=self.root)
+            messagebox.showerror(_("Disconnected"), reason, parent=self.root)
 
     def _set_mode(self,label,idx=None):
         """Select a modulation mode (exclusive across all 10 server-defined
@@ -5152,23 +5182,23 @@ class App:
         pad=max(4,int(round(6*sc)))
 
         top=tk.Toplevel(self.root)
-        top.title(label or f"Button {idx}")
+        top.title(label or _("Button {idx}").format(idx=idx))
         top.configure(bg=C["panel_bg"])
         top.transient(self.root)
         top.grab_set()
         top.resizable(False,False)
 
-        tk.Label(top,text=f"Select — {label}:" if label else "Select:",
+        tk.Label(top,text=_("Select — {label}:").format(label=label) if label else _("Select:"),
                  bg=C["panel_bg"],fg=C["btn_grn_fg"],
                  font=_gui_font(fs_h,"bold")).pack(padx=pad,pady=(pad,2),anchor="w")
 
         cur_sel=self._user_btn_list_sel(idx)
 
         if not items:
-            tk.Label(top,text="No list items configured for this button.",
+            tk.Label(top,text=_("No list items configured for this button."),
                      bg=C["panel_bg"],fg=C["text_dim"],
                      font=_gui_font(fs)).pack(padx=pad,pady=(2,pad))
-            tk.Button(top,text="Close",command=top.destroy,
+            tk.Button(top,text=_("Close"),command=top.destroy,
                       bg=C["btn_gray"],fg=C["btn_sel_fg"],
                       font=_gui_font(fs),relief="flat",bd=1,
                       padx=max(6,int(round(8*sc)))).pack(pady=(0,pad))
@@ -5209,7 +5239,7 @@ class App:
 
             sep=tk.Frame(lst_fr,bg=C["sep"],height=max(1,int(round(1*sc))))
             sep.pack(fill="x",pady=(max(2,int(round(3*sc))),0))
-            tk.Button(lst_fr,text="Cancel",command=top.destroy,
+            tk.Button(lst_fr,text=_("Cancel"),command=top.destroy,
                       bg=C["btn_gray"],fg=C["btn_red_fg"],
                       font=_gui_font(fs),relief="flat",bd=1,
                       padx=max(6,int(round(8*sc))),
@@ -5266,7 +5296,7 @@ class App:
         pad=max(4,int(round(6*sc)))
 
         top=tk.Toplevel(self.root)
-        top.title(f"Memory — {position}")
+        top.title(_("Memory — {position}").format(position=_mem_pos_label(position)))
         top.configure(bg=C["panel_bg"])
         top.transient(self.root)
         top.grab_set()
@@ -5295,12 +5325,12 @@ class App:
         lb.pack(side="left",fill="both",expand=True)
         scrollbar.pack(side="right",fill="y")
         self._mem_dialog_listbox=lb
-        lb.insert("end","Loading...")
+        lb.insert("end",_("Loading…"))
 
         # ── Editable label + frequency (read-only) of the current selection ──
         edit_fr=tk.Frame(top,bg=C["panel_bg"])
         edit_fr.pack(padx=pad,pady=(2,0),fill="x")
-        tk.Label(edit_fr,text="Edit label:",bg=C["panel_bg"],fg=C["text"],
+        tk.Label(edit_fr,text=_("Edit label:"),bg=C["panel_bg"],fg=C["text"],
                  font=_gui_font(fs)).pack(side="left")
         label_var=tk.StringVar(value="")
         self._mem_dialog_label_var=label_var
@@ -5315,8 +5345,7 @@ class App:
             v=label_var.get()
             if len(v)>10: label_var.set(v[:10])
         label_var.trace_add("write",_cap_label)
-        tk.Label(top,text="Select a slot, type a label, then Rename (label only) "
-                          "or Save (label + current frequency).",
+        tk.Label(top,text=_("Select a slot, type a label, then Rename (label only) or Save (label + current frequency)."),
                  bg=C["panel_bg"],fg=C["text_dim"],
                  font=_gui_font(max(6,fs-1)),wraplength=240,justify="left"
                  ).pack(padx=pad,pady=(2,4),anchor="w")
@@ -5342,11 +5371,11 @@ class App:
         def _load():
             idx=self._mem_dialog_selected
             if idx is None:
-                messagebox.showinfo("Memory","Select a memory slot first.",parent=top)
+                messagebox.showinfo(pgettext("msgbox_title","Memory"),_("Select a memory slot first."),parent=top)
                 return
             entry=self._mem_dialog_data[idx] if idx<len(self._mem_dialog_data) else None
             if not entry or (not entry.get("label") and not entry.get("freq")):
-                messagebox.showinfo("Memory","That memory slot is empty.",parent=top)
+                messagebox.showinfo(pgettext("msgbox_title","Memory"),_("That memory slot is empty."),parent=top)
                 return
             freq=entry.get("freq",0) or 0
             disp=self._memory_disp_for(position)
@@ -5376,7 +5405,7 @@ class App:
             current actual frequency)."""
             idx=self._mem_dialog_selected
             if idx is None:
-                messagebox.showinfo("Memory","Select a memory slot first.",parent=top)
+                messagebox.showinfo(pgettext("msgbox_title","Memory"),_("Select a memory slot first."),parent=top)
                 return
             entry=self._mem_dialog_data[idx] if idx<len(self._mem_dialog_data) else {"label":"","freq":0.0}
             label=label_var.get()[:10]
@@ -5388,7 +5417,7 @@ class App:
             label is in the box, into the selected slot."""
             idx=self._mem_dialog_selected
             if idx is None:
-                messagebox.showinfo("Memory","Select a memory slot first.",parent=top)
+                messagebox.showinfo(pgettext("msgbox_title","Memory"),_("Select a memory slot first."),parent=top)
                 return
             key=self._memory_state_key_for(position)
             freq=self.state.get(key,0) or 0
@@ -5398,19 +5427,19 @@ class App:
         lbl_ent.bind("<Return>",lambda e:_rename())
 
         bpad=max(6,int(round(8*sc)))
-        tk.Button(btn_fr,text="Load",command=_load,
+        tk.Button(btn_fr,text=_("Load"),command=_load,
                   bg=C["btn_grn"],fg=C["btn_grn_fg"],
                   font=_gui_font(fs,"bold"),relief="flat",bd=1,
                   padx=bpad).pack(side="left",fill="x",expand=True,padx=(0,2))
-        tk.Button(btn_fr,text="Rename",command=_rename,
+        tk.Button(btn_fr,text=_("Rename"),command=_rename,
                   bg=C["btn_gray"],fg=C["text"],
                   font=_gui_font(fs,"bold"),relief="flat",bd=1,
                   padx=bpad).pack(side="left",fill="x",expand=True,padx=2)
-        tk.Button(btn_fr,text="Save",command=_save,
+        tk.Button(btn_fr,text=_("Save"),command=_save,
                   bg=C["btn_sel"],fg=C["btn_sel_fg"],
                   font=_gui_font(fs,"bold"),relief="flat",bd=1,
                   padx=bpad).pack(side="left",fill="x",expand=True,padx=2)
-        tk.Button(btn_fr,text="Close",command=_on_close,
+        tk.Button(btn_fr,text=_("Close"),command=_on_close,
                   bg=C["btn_gray"],fg=C["text"],
                   font=_gui_font(fs),relief="flat",bd=1,
                   padx=bpad).pack(side="left",fill="x",expand=True,padx=(2,0))
@@ -5625,7 +5654,7 @@ class App:
         dlg = tk.Toplevel(self.root)
         dlg.configure(bg=_dlg_bg)
         btn_lbl = self._rf_usr_btn_label(idx) or f"Btn {idx}"
-        dlg.title(f"Configure: {btn_lbl}")
+        dlg.title(_("Configure: {name}").format(name=btn_lbl))
         dlg.resizable(False, False)
         dlg.update_idletasks()
         dlg.grab_set()
@@ -5661,8 +5690,9 @@ class App:
 
         for row, (name, spec) in enumerate(config_dict.items()):
             wtype = spec.get("type", "check")
-
-            lbl = tk.Label(frm, text=name, font=_gui_font(fs), anchor="w",
+            # Apply rf_btn_config label override if available (§6.3 of i18n plan)
+            display_name = self._label_overrides.get(name, name)
+            lbl = tk.Label(frm, text=display_name, font=_gui_font(fs), anchor="w",
                            bg=_dlg_bg, fg=_dlg_fg)
             lbl.grid(row=row, column=0, sticky="w", padx=(0, pad), pady=pad//2)
 
@@ -5779,12 +5809,12 @@ class App:
             self.state["rf_usr_btn_config_vals"] = _cv
             dlg.destroy()
 
-        tk.Button(btn_frm, text="OK", command=_ok,
+        tk.Button(btn_frm, text=_("OK"), command=_ok,
                   width=8, font=_gui_font(fs), relief="flat", bd=1,
                   bg=_dlg_btn, fg=C["btn_sel_fg"],
                   activebackground=C["btn_sel"], activeforeground=C["btn_sel_fg"]
                   ).pack(side="left", padx=pad)
-        tk.Button(btn_frm, text="Cancel", command=dlg.destroy,
+        tk.Button(btn_frm, text=_("Cancel"), command=dlg.destroy,
                   width=8, font=_gui_font(fs), relief="flat", bd=1,
                   bg=_dlg_bg, fg=C["btn_red_fg"],
                   activebackground=C["btn_gray"], activeforeground=C["text"]
@@ -5812,7 +5842,7 @@ class App:
                 self._draw_ptt_btn(False, False)
             if hasattr(self, '_ptt_canvas'):
                 self._ptt_canvas.config(cursor="arrow")
-            self.start_btn.config(text="Start",bg=C["btn_grn"],fg=C["btn_grn_fg"])
+            self.start_btn.config(text=_("Start"),bg=C["btn_grn"],fg=C["btn_grn_fg"])
         else:
             # Always start with PTT off when entering run mode.
             self.state["ptt"] = False
@@ -5826,7 +5856,7 @@ class App:
                 self._draw_ptt_btn(False, self._ptt_band_ok())
             if hasattr(self, '_ptt_canvas') and self._ptt_band_ok():
                 self._ptt_canvas.config(cursor="hand2")
-            self.start_btn.config(text="Stop",bg="#6a1414",fg=C["btn_red_fg"])
+            self.start_btn.config(text=_("Stop"),bg="#6a1414",fg=C["btn_red_fg"])
 
     def adj_zoom(self,d):
         z=int(self.state["zoom"])
@@ -6448,6 +6478,17 @@ class App:
             # The GUI is the authoritative source for both fields.
             incoming.pop("ptt", None)
             incoming.pop("running", None)
+            # ── lang: adopt the server's locale on first connect ──────────────
+            # The server advertises "lang" in every state dict.  We only act on
+            # it once (when _server_lang_applied is not yet set) so that a later
+            # reload_state during the same session doesn't re-run i18n setup and
+            # restart all widgets.  An empty string means "OS locale" (same as
+            # passing None to _i18n_setup).
+            if not getattr(self, '_server_lang_applied', False):
+                _srv_lang = incoming.get("lang")
+                if _srv_lang is not None:          # key present → server is new enough
+                    self._server_lang_applied = True
+                    _i18n_setup(_srv_lang or None)
             _old_sr = self.state.get("sample_rate")
             self.state.update(incoming)
             # The server always sends the device-level allowed_bands.  If a
@@ -6554,6 +6595,7 @@ def main():
     if _ARGS.audio_list:
         _print_audio_devices()
         return
+    _i18n_setup(None)   # OS locale until server advertises its lang on first connect
     root=tk.Tk()
     _load_custom_fonts(root)
     app=App(root)

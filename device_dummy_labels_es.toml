@@ -1,0 +1,70 @@
+# Traducciones al español para device_dummy.toml
+# Formato: "etiqueta_original" = "etiqueta_traducida"
+# Cada sección corresponde al grupo de botones del dispositivo.
+# Solo se traducen las etiquetas que aparecen en el archivo de dispositivo;
+# las etiquetas sin entrada aquí conservan su texto original en inglés.
+
+[user_buttons]
+# Botones de usuario (14 slots, máx. 7 caracteres visibles)
+"UsrBtn"  = "BtnUsr"
+"UsrBtn2" = "BtnUsr2"
+"UsrBtn3" = "BtnUsr3"
+"UsrBtn4" = "BtnUsr4"
+"UsrBtn5" = "BtnUsr5"
+"UsrBtn6" = "BtnUsr6"
+"UsrBtn7" = "BtnUsr7"
+"UsrBtn8" = "BtnUsr8"
+"UsrBtn9" = "BtnUsr9"
+"UsrBtnA" = "BtnUsrA"
+"UsrBtnB" = "BtnUsrB"
+"UsrBtnC" = "BtnUsrC"
+"UsrBtnD" = "BtnUsrD"
+"UsrBtnE" = "BtnUsrE"
+
+[user_mods]
+# Botones de modulación (máx. 4 caracteres visibles).
+# Los modos digitales/técnicos internacionales se mantienen igual.
+"AM"   = "AM"
+"FM"   = "FM"
+"LSB"  = "LSB"
+"USB"  = "USB"
+"CW"   = "CW"
+"APRS" = "APRS"
+"RTTY" = "RTTY"
+"FT8"  = "FT8"
+"FT2"  = "FT2"
+"J2CL" = "J2CL"
+
+[rf_usr_btns]
+# Botones RF de usuario (izquierda del selector de banda, máx. 7 caracteres)
+"BtnUsr1" = "BRF1"
+"BtnUsr2" = "BRF2"
+"BtnUsr3" = "BRF3"
+"BtnUsr4" = "BRF4"
+"BtnUsr5" = "BRF5"
+"BtnUsr6" = "BRF6"
+"BtnUsr7" = "BRF7"
+"BtnUsr8" = "BRF8"
+"BtnUsr9" = "BRF9"
+"BtnUsra" = "BRFa"
+"BtnUsrb" = "BRFb"
+
+[rf_btn_config]
+# Claves del diálogo de configuración larga-pulsación de BtnUsr1.
+# Estas cadenas se usan como etiquetas de fila dentro del diálogo de
+# configuración (rf_usr_btn_config_dialog); se traducen si el servidor
+# las emite en los rf_usr_btns config dicts.
+"BW"      = "Ancho"
+"Noise"   = "Ruido"
+"Mode"    = "Modo"
+"Profile" = "Perfil"
+# Valores de lista para el ítem "Profile"
+"Wide"    = "Ancho"
+"Narrow"  = "Estrecho"
+
+[antenna]
+# Etiquetas de puerto de antena (máx. ~20 caracteres recomendados)
+"End Fed"    = "Dipolo extremo"
+"Dipole 80m" = "Dipolo 80m"
+"Dipole 40m" = "Dipolo 40m"
+"Yagi 10m"   = "Yagi 10m"

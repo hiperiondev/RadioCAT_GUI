@@ -576,10 +576,17 @@ _SERVER_CONFIG_HEADER = (
 )
 _SERVER_CONFIG_SECTION_COMMENTS = {
     "devices":
-        '# Up to 20 SDR device profiles. label_N = display name shown in the GUI\n'
-        '# Device list; config_N = path to a cat_device.toml-like file ([user_buttons]/\n'
-        '# [user_mods]/[rf_usr_btns] only -- no nested [devices]) loaded on selection.\n'
-        '# Devices with empty labels are hidden. Fill slots in order: 1, 2, 3…',
+        '# Up to 20 SDR device profiles. label_N = display name shown in the GUI.\n'
+        '# config_N = path to a cat_device.toml-like file ([user_buttons]/[user_mods]/\n'
+        '# [rf_usr_btns] only -- no nested [devices]) loaded when that device is selected.\n'
+        '# Devices with empty labels are hidden. Fill slots in order: 1, 2, 3…\n'
+        '#\n'
+        '# TRANSLATIONS: each device config file MUST have its own separate translations\n'
+        '# file.  The file is named <device_base>_labels_<lang>.toml, derived from that\n'
+        '# device\'s config path -- NOT from a shared global file.  Example:\n'
+        '#   config_1 = "devices/g90.toml"     →  devices/g90_labels_es.toml\n'
+        '#   config_2 = "devices/ic7300.toml"  →  devices/ic7300_labels_es.toml\n'
+        '# One translations file per device; never share a single file across devices.',
 }
 
 _DEVICE_CONFIG_KEY_ORDER = {
@@ -602,7 +609,13 @@ _DEVICE_CONFIG_HEADER = (
     "# This file's structure is reused for every device profile: each entry\n"
     "# in cat_server.toml's [devices] section (config_N) should point to\n"
     "# another file shaped exactly like this one -- a 'cat_device.toml-like\n"
-    "# file' -- loaded wholesale when that device is selected in the GUI."
+    "# file' -- loaded wholesale when that device is selected in the GUI.\n"
+    "#\n"
+    "# TRANSLATIONS: each device config file must have its own SEPARATE\n"
+    "# translations file, named <this_file_base>_labels_<lang>.toml.\n"
+    "# Example: if this file is 'devices/g90.toml', its Spanish translations\n"
+    "# live in 'devices/g90_labels_es.toml'.  Never share one translations\n"
+    "# file across multiple device configs -- one file per device."
 )
 
 _DEVICE_CONFIG_SECTION_COMMENTS = {
@@ -1315,6 +1328,75 @@ def _crop_and_resample(full_db, num_bins, zoom):
     return np.interp(x_dst, x_src, seg)
 
 
+# ── i18n: device-side label override support (plan §6) ───────────────────────
+
+def _load_label_overrides(device_cfg_path: str, lang: str) -> dict:
+    """Load label override file for the given device config path and locale.
+
+    Every device config file has its OWN, SEPARATE translations file.  The
+    path is derived from the device config path, NOT from a shared global
+    file.  For example:
+
+        cat_device.toml          →  cat_device_labels_es.toml
+        devices/g90.toml         →  devices/g90_labels_es.toml
+        devices/ic7300.toml      →  devices/ic7300_labels_es.toml
+
+    Mixing multiple devices into one translations file is NOT supported: if
+    ``config_1 = "g90.toml"`` and ``config_2 = "ic7300.toml"`` are listed in
+    ``cat_server.toml``'s ``[devices]`` section, you must create TWO separate
+    translations files (``g90_labels_<lang>.toml`` and
+    ``ic7300_labels_<lang>.toml``).  Pointing both devices at the same config
+    file would also collapse their translations into one file, which is
+    incorrect — each device profile must have a dedicated config *and* a
+    dedicated translations file.
+
+    Lookup order:
+      1. ``<device_base>_labels_<lang>.toml``       (exact locale match)
+      2. ``<device_base>_labels_<base_lang>.toml``  (language without region)
+
+    Returns a flat dict mapping English label → translated label, or {} if no
+    override file is found or lang is empty.
+    """
+    if not lang or not device_cfg_path:
+        return {}
+    base = os.path.splitext(device_cfg_path)[0]
+    # Try exact locale ("pt_BR"), then base language ("pt")
+    tags = [lang]
+    if "_" in lang:
+        tags.append(lang.split("_")[0])
+    for tag in tags:
+        path = f"{base}_labels_{tag}.toml"
+        if not os.path.exists(path):
+            continue
+        try:
+            cfg = _load_toml(path)
+            overrides: dict = {}
+            for section in cfg.values():
+                if isinstance(section, dict):
+                    overrides.update(section)
+            return overrides
+        except Exception as e:
+            dprint(f"[i18n] WARNING: could not load label overrides from {path}: {e}")
+            continue
+    return {}
+
+
+def _apply_label_overrides(buttons: list, overrides: dict) -> list:
+    """Return a copy of a button list with labels translated via *overrides*.
+
+    Only the ``label`` key of each button dict is touched; all other fields
+    are passed through unchanged.  Buttons with no matching override keep
+    their original English label.
+    """
+    result = []
+    for btn in buttons:
+        b = dict(btn)
+        orig = b.get("label", "")
+        b["label"] = overrides.get(orig, orig)
+        result.append(b)
+    return result
+
+
 def _memory_file_for_device(device_cfg_path):
     """Return the path to the memory-storage file for a device.
 
@@ -1502,7 +1584,7 @@ class RadioState:
     def __init__(self, user_buttons=None, user_mod_labels=None, user_mod_types=None,
                  rf_usr_btns=None, iq_source=None, devices=None, device_cfg_path=None,
                  sample_rates=None, default_sample_rate=None, antenna_labels=None,
-                 power_levels=None, bandwidth_map=None):
+                 power_levels=None, bandwidth_map=None, lang=""):
         self.lock = threading.Lock()
         self.center_freq = 14_195_000.0
         self.sample_rate = 192_000.0
@@ -1647,6 +1729,9 @@ class RadioState:
         # Memories are looked up / persisted against this path, so each
         # device keeps its own separate set of 3x20 slots.
         self.device_cfg_path = device_cfg_path
+        # Locale tag for device label overrides (§6 of i18n plan).
+        # Empty string means no overrides are applied.
+        self.lang = lang
         # 1-based index of the active device in self.devices (0 = none/unknown).
         # Derived from device_cfg_path on startup; updated by select_device.
         self.active_device_index = next(
@@ -1745,6 +1830,8 @@ class RadioState:
     # ------------------------------------------------------------- state ----
     def as_dict(self):
         with self.lock:
+            # Load label overrides once per call; reused for all translated fields.
+            _overrides = _load_label_overrides(self.device_cfg_path, self.lang)
             return {
                 "center_freq": self.center_freq,
                 # GUI uses "lo_freq" as the key for LO A — provide both names
@@ -1774,14 +1861,21 @@ class RadioState:
                 "running": self.running,
                 "lo_active": self.lo_active,
                 "lo_b_freq": self.lo_b_freq,
-                "user_buttons": [dict(b) for b in self.user_buttons],
+                "user_buttons": _apply_label_overrides(
+                    [dict(b) for b in self.user_buttons],
+                    _overrides),
                 "user_btn_state": self.user_btn_state,
                 "user_btn_list_sel": list(self.user_btn_list_sel),
-                "rf_usr_btns": [dict(b) for b in self.rf_usr_btns],
+                "rf_usr_btns": _apply_label_overrides(
+                    [dict(b) for b in self.rf_usr_btns],
+                    _overrides),
                 "rf_usr_btn_state": self.rf_usr_btn_state,
                 # Per-button configure dialog persisted values (see rf_usr_btn_config_set).
                 "rf_usr_btn_config_vals": dict(self.rf_usr_btn_config_vals),
-                "user_mod_labels": list(self.user_mod_labels),
+                "user_mod_labels": [
+                    _overrides.get(lbl, lbl)
+                    for lbl in self.user_mod_labels
+                ],
                 "user_mod_types": list(self.user_mod_types),
                 # Spectrum display controls (SCALE and AVE)
                 "spec_ref_rf": self.spec_ref_rf,
@@ -1792,7 +1886,11 @@ class RadioState:
                 # Sent as a sorted list so JSON serialisation is deterministic.
                 "allowed_bands": sorted(self.allowed_bands),
                 # Antenna ports for this device and currently selected index.
-                "antenna_labels": list(self.antenna_labels),
+                # Labels are translated via the device's label-override file.
+                "antenna_labels": [
+                    _overrides.get(lbl, lbl)
+                    for lbl in self.antenna_labels
+                ],
                 "antenna_index":  self.antenna_index,
                 # Per-antenna band restrictions (list of 10 sorted lists).
                 # Empty list at index N means inherit device-level allowed_bands.
@@ -1812,6 +1910,10 @@ class RadioState:
                 # Persisted per-device; the GUI restores this into the BW combobox
                 # on startup and device switch.
                 "selected_bw": self.selected_bw,
+                # BCP-47 locale tag the server was started with (e.g. "es", "pt_BR").
+                # Empty string means "use OS locale".  Advertised so the GUI can
+                # adopt the same language without needing its own --lang flag.
+                "lang": self.lang,
             }
 
     # ----------------------------------------------------------- commands ----
@@ -2081,8 +2183,11 @@ class RadioState:
                 # plus the currently selected 1-based index (0 = none).
                 # Each entry also carries its per-antenna allowed_bands list
                 # (sorted; empty list = inherit device-level restriction).
+                # Labels are translated via the device's label-override file.
+                _ant_overrides = _load_label_overrides(self.device_cfg_path, self.lang)
                 ant_list = [
-                    {"index": i + 1, "label": lbl,
+                    {"index": i + 1,
+                     "label": _ant_overrides.get(lbl, lbl),
                      "allowed_bands": sorted(self.antenna_allowed_bands[i])}
                     for i, lbl in enumerate(self.antenna_labels)
                     if lbl.strip()
@@ -2836,7 +2941,7 @@ def _parse_args():
     # IMPORTANT: host and port positionals must appear before any flags on the
     # command line to be detected reliably (e.g. `cat_server.py 0.0.0.0 50101
     # --no-audio`).  Passing them after flags risks ambiguous tokenisation.
-    _value_flags = {'--config', '--device-config', '--audio-port', '--iq_wav', '--audio_wav'}
+    _value_flags = {'--config', '--device-config', '--audio-port', '--iq_wav', '--audio_wav', '--lang'}
     for _n in range(1, NUM_USER_BUTTONS + 1):
         _value_flags.add(f'--user-button-label-{_n}')
         _value_flags.add(f'--user-button-type-{_n}')
@@ -2885,6 +2990,13 @@ def _parse_args():
                     help="Enable verbose debug output (config loading, device "
                          "switching, antenna/power/sample-rate changes, every "
                          "received command, etc.)")
+    ap.add_argument("--lang", metavar="LOCALE", default="",
+                    help="Locale tag for device label overrides (e.g. es, de, pt_BR). "
+                         "Each device config file must have its OWN separate translations "
+                         "file named <device_base>_labels_<lang>.toml alongside it -- "
+                         "e.g. 'devices/g90_labels_es.toml' for 'devices/g90.toml'. "
+                         "One translations file per device; never share one file across "
+                         "multiple device configs.")
     ap.add_argument("--iq_wav", metavar="PATH", default=None,
                     help="Path to a wav file of IQ samples in SDRplay IQ wav "
                          "format (stereo I/Q PCM or float). When given, the "
@@ -2943,6 +3055,7 @@ def _parse_args():
     _raw.device_config_explicit = bool(_pre_args.device_config)
     _raw.audio_port = _raw.audio_port if hasattr(_raw, 'audio_port') else _def_audio_port
     _raw.no_audio   = _raw.no_audio   if hasattr(_raw, 'no_audio')   else _def_no_audio
+    _raw.lang       = _raw.lang if hasattr(_raw, 'lang') else ""
 
     # Host/port: use CLI value if explicitly given, else config/default
     if not _cli_host_given:
@@ -3296,7 +3409,8 @@ def main():
                        default_sample_rate=args.sdr_sample_rate,
                        antenna_labels=args.antenna_labels,
                        power_levels=_parse_power_levels(args.sdr_power_levels),
-                       bandwidth_map=bw_map)
+                       bandwidth_map=bw_map,
+                       lang=args.lang)
 
     # BUG FIX: device identity mismatch on startup.
     # ----------------------------------------------------------------------

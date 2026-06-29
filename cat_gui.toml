@@ -9,6 +9,7 @@ scale = 0  # HiDPI scale level, -5 to 5
 disable_scale = false  # hide the +/- scale controls (set an explicit scale above too)
 freq_font = ""  # path to TTF/OTF font for frequency digits  (empty = system default)
 gui_font = ""  # path to TTF/OTF font for all other GUI text (empty = system default)
+lang = ""  # BCP-47 locale tag: "es", "de", "ja", "pt_BR" (empty = OS locale)
 
 [connection]
 # Leave host empty and port 0 to show the GUI connection fields.

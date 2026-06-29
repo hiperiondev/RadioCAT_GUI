@@ -1,0 +1,258 @@
+# en translation for cat_gui
+# Copyright (C) 2025 cat_project contributors
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: cat_gui\n"
+"Language: en\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#. Main window
+msgid "CAT GUI Interface"
+msgstr "CAT GUI Interface"
+
+#. Toolbar view buttons
+msgid "Waterfall"
+msgstr "Waterfall"
+
+msgid "Spectrum"
+msgstr "Spectrum"
+
+msgid "Zoom"
+msgstr "Zoom"
+
+msgid "Speed"
+msgstr "Speed"
+
+msgid "SCALE"
+msgstr "SCALE"
+
+msgid "dB"
+msgstr "dB"
+
+msgid "AVE"
+msgstr "AVE"
+
+#. Frequency display rows
+msgctxt "freq_display_label"
+msgid "LO A"
+msgstr "LO A"
+
+msgctxt "freq_display_label"
+msgid "LO B"
+msgstr "LO B"
+
+msgctxt "freq_display_label"
+msgid "Tune"
+msgstr "Tune"
+
+#. S-meter
+msgid "Signal:"
+msgstr "Signal:"
+
+msgid "RST:"
+msgstr "RST:"
+
+msgid "SWR:"
+msgstr "SWR:"
+
+#. Control sliders
+msgid "Volume"
+msgstr "Volume"
+
+msgid "AGC Thresh."
+msgstr "AGC Thresh."
+
+msgid "RF Gain"
+msgstr "RF Gain"
+
+msgid "Squelch"
+msgstr "Squelch"
+
+#. Fixed hardware buttons
+msgid "PTT"
+msgstr "PTT"
+
+msgid "SPLIT"
+msgstr "SPLIT"
+
+msgid "SWAP"
+msgstr "SWAP"
+
+msgid "LOCK"
+msgstr "LOCK"
+
+msgid "Antenna"
+msgstr "Antenna"
+
+msgid "Power"
+msgstr "Power"
+
+msgid "Soundcard"
+msgstr "Soundcard"
+
+msgid "Start"
+msgstr "Start"
+
+msgid "Stop"
+msgstr "Stop"
+
+msgid "Connect"
+msgstr "Connect"
+
+msgid "Connecting…"
+msgstr "Connecting…"
+
+msgid "Disconnect"
+msgstr "Disconnect"
+
+#. Dialog actions
+msgid "Set"
+msgstr "Set"
+
+msgid "Apply"
+msgstr "Apply"
+
+msgid "OK"
+msgstr "OK"
+
+msgid "Cancel"
+msgstr "Cancel"
+
+msgid "Close"
+msgstr "Close"
+
+msgid "Load"
+msgstr "Load"
+
+msgid "Rename"
+msgstr "Rename"
+
+msgid "Save"
+msgstr "Save"
+
+#. Dialog titles
+msgid "Set Frequency"
+msgstr "Set Frequency"
+
+msgid "Select Device"
+msgstr "Select Device"
+
+msgid "Select Sample Rate"
+msgstr "Select Sample Rate"
+
+msgid "Select Antenna"
+msgstr "Select Antenna"
+
+msgid "TX Power"
+msgstr "TX Power"
+
+msgid "Soundcard / Audio Device Selection"
+msgstr "Soundcard / Audio Device Selection"
+
+msgid "Configure: {name}"
+msgstr "Configure: {name}"
+
+msgid "Memory — {position}"
+msgstr "Memory — {position}"
+
+msgid "Button {idx}"
+msgstr "Button {idx}"
+
+#. Dialog body text
+msgid "Frequency (Hz):"
+msgstr "Frequency (Hz):"
+
+msgid "Select a device:"
+msgstr "Select a device:"
+
+msgid "Select a sample rate:"
+msgstr "Select a sample rate:"
+
+msgid "Select antenna port:"
+msgstr "Select antenna port:"
+
+msgid "Select TX power level:"
+msgstr "Select TX power level:"
+
+msgid "Select — {label}:"
+msgstr "Select — {label}:"
+
+msgid "Edit label:"
+msgstr "Edit label:"
+
+msgid "System default"
+msgstr "System default"
+
+msgid "(System default)"
+msgstr "(System default)"
+
+msgid "Loading…"
+msgstr "Loading…"
+
+#. Empty-list placeholders
+msgid "No devices configured on server."
+msgstr "No devices configured on server."
+
+msgid "No sample rates configured for this device."
+msgstr "No sample rates configured for this device."
+
+msgid "No antennas configured for this device."
+msgstr "No antennas configured for this device."
+
+msgid "No power levels configured for this device."
+msgstr "No power levels configured for this device."
+
+msgid "No list items configured for this button."
+msgstr "No list items configured for this button."
+
+#. Memory dialog instructions
+msgid "Select a slot, type a label, then Rename (label only) or Save (label + current frequency)."
+msgstr "Select a slot, type a label, then Rename (label only) or Save (label + current frequency)."
+
+#. Messageboxes — titles
+msgctxt "msgbox_title"
+msgid "Device"
+msgstr "Device"
+
+msgctxt "msgbox_title"
+msgid "Sample Rate"
+msgstr "Sample Rate"
+
+msgctxt "msgbox_title"
+msgid "Power"
+msgstr "Power"
+
+msgctxt "msgbox_title"
+msgid "Memory"
+msgstr "Memory"
+
+#. Messageboxes — bodies
+msgid "Not connected to server."
+msgstr "Not connected to server."
+
+msgid "Invalid port number"
+msgstr "Invalid port number"
+
+msgid "Cannot connect to {host}:{port}\n{detail}"
+msgstr "Cannot connect to {host}:{port}\n{detail}"
+
+msgid "Select a memory slot first."
+msgstr "Select a memory slot first."
+
+msgid "That memory slot is empty."
+msgstr "That memory slot is empty."
+
+#. Connection row
+msgid "Host:"
+msgstr "Host:"
+
+msgid "Port:"
+msgstr "Port:"
+
+#. Canvas overlays
+msgid "● TX"
+msgstr "● TX"
