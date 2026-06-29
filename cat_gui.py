@@ -5728,12 +5728,21 @@ class App:
                            for v in values_list}
                 rev_map = {str(v.get("val","")): str(v.get("key",""))
                            for v in values_list}
+                # Translate display keys via label overrides; keep a reverse
+                # map from translated display label back to original key so
+                # val_map (key → server val) still works on OK.
+                disp_keys  = [self._label_overrides.get(k, k) for k in keys]
+                disp_to_key = {self._label_overrides.get(k, k): k for k in keys}
                 saved_val = str(saved.get(name,""))
-                # Show the key that corresponds to the saved server value
-                init_key  = rev_map.get(saved_val, keys[0] if keys else "")
-                var = tk.StringVar(value=init_key)
-                _vars[name] = ("list", var, val_map)
-                cb = ttk.Combobox(frm, textvariable=var, values=keys,
+                # Show the (translated) key that corresponds to the saved server value
+                init_key      = rev_map.get(saved_val, keys[0] if keys else "")
+                init_disp_key = self._label_overrides.get(init_key, init_key)
+                var = tk.StringVar(value=init_disp_key)
+                # val_map now keyed by translated display label for _ok() lookup
+                disp_val_map = {self._label_overrides.get(k, k): vv
+                                for k, vv in val_map.items()}
+                _vars[name] = ("list", var, disp_val_map)
+                cb = ttk.Combobox(frm, textvariable=var, values=disp_keys,
                                   state="readonly", width=16,
                                   style=_cfg_cb_style,
                                   font=_gui_font(fs))

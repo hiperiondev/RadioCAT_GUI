@@ -1898,6 +1898,16 @@ class RadioState:
                     name: _overrides.get(name, name)
                     for btn in self.rf_usr_btns
                     for name in (btn.get("config") or {})
+                } | {
+                    # Also include the display keys of every "list"-type item so
+                    # the GUI can translate them in the config dialog comboboxes.
+                    # e.g. "Wide" → "Ancho", "Narrow" → "Estrecho"
+                    str(item.get("key", "")): _overrides.get(str(item.get("key", "")), str(item.get("key", "")))
+                    for btn in self.rf_usr_btns
+                    for spec in (btn.get("config") or {}).values()
+                    if isinstance(spec, dict) and spec.get("type") == "list"
+                    for item in (spec.get("values") or [])
+                    if item.get("key", "")
                 },
             }
 
