@@ -4,255 +4,384 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: cat_gui\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-06-29 16:22-0300\n"
 "Language: es\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
-#. Main window
-msgid "CAT GUI Interface"
-msgstr "Interfaz CAT GUI"
-
-#. Toolbar view buttons
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:748
 msgid "Waterfall"
 msgstr "Cascada"
 
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:748
 msgid "Spectrum"
 msgstr "Espectro"
 
-msgid "Zoom"
-msgstr "Zoom"
-
-msgid "Speed"
-msgstr "Velocidad"
-
-msgid "SCALE"
-msgstr "ESCALA"
-
-msgid "dB"
-msgstr "dB"
-
-msgid "AVE"
-msgstr "PROM"
-
-#. Frequency display rows
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:756
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:3235
 msgctxt "freq_display_label"
 msgid "LO A"
 msgstr "LO A"
 
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:757
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:3448
 msgctxt "freq_display_label"
 msgid "LO B"
 msgstr "LO B"
 
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:758
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:3470
 msgctxt "freq_display_label"
 msgid "Tune"
 msgstr "Sintonía"
 
-#. S-meter
-msgid "Signal:"
-msgstr "Señal:"
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:1659
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:1852
+msgid "● TX"
+msgstr "● TX"
 
-msgid "RST:"
-msgstr "RST:"
-
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:2188
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:2306
 msgid "SWR:"
 msgstr "ROE:"
 
-#. Control sliders
-msgid "Volume"
-msgstr "Volumen"
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:2234
+msgid "Signal:"
+msgstr "Señal:"
 
-msgid "AGC Thresh."
-msgstr "Umbral AGC"
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:2258
+msgid "RST:"
+msgstr "RST:"
 
-msgid "RF Gain"
-msgstr "Ganancia RF"
-
-msgid "Squelch"
-msgstr "Silenciador"
-
-#. Fixed hardware buttons
-msgid "PTT"
-msgstr "PTT"
-
-msgid "SPLIT"
-msgstr "SPLIT"
-
-msgid "SWAP"
-msgstr "SWAP"
-
-msgid "LOCK"
-msgstr "BLOQ"
-
-msgid "Antenna"
-msgstr "Antena"
-
-msgid "Power"
-msgstr "Potencia"
-
-msgid "Soundcard"
-msgstr "T.Sonido"
-
-msgid "Start"
-msgstr "Iniciar"
-
-msgid "Stop"
-msgstr "Detener"
-
-msgid "Connect"
-msgstr "Conectar"
-
-msgid "Connecting…"
-msgstr "Conectando…"
-
-msgid "Disconnect"
-msgstr "Desconectar"
-
-#. Dialog actions
-msgid "Set"
-msgstr "Establecer"
-
-msgid "Apply"
-msgstr "Aplicar"
-
-msgid "OK"
-msgstr "Aceptar"
-
-msgid "Cancel"
-msgstr "Cancelar"
-
-msgid "Close"
-msgstr "Cerrar"
-
-msgid "Load"
-msgstr "Cargar"
-
-msgid "Rename"
-msgstr "Renombrar"
-
-msgid "Save"
-msgstr "Guardar"
-
-#. Dialog titles
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:2412
 msgid "Set Frequency"
 msgstr "Establecer frecuencia"
 
-msgid "Select Device"
-msgstr "Seleccionar dispositivo"
-
-msgid "Select Sample Rate"
-msgstr "Seleccionar tasa de muestreo"
-
-msgid "Select Antenna"
-msgstr "Seleccionar antena"
-
-msgid "TX Power"
-msgstr "Potencia TX"
-
-msgid "Soundcard / Audio Device Selection"
-msgstr "Selección de tarjeta de sonido"
-
-msgid "Configure: {name}"
-msgstr "Configurar: {name}"
-
-msgid "Memory — {position}"
-msgstr "Memoria — {position}"
-
-msgid "Button {idx}"
-msgstr "Botón {idx}"
-
-#. Dialog body text
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:2415
 msgid "Frequency (Hz):"
 msgstr "Frecuencia (Hz):"
 
-msgid "Select a device:"
-msgstr "Seleccionar dispositivo:"
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:2433
+msgid "Set"
+msgstr "Establecer"
 
-msgid "Select a sample rate:"
-msgstr "Seleccionar tasa de muestreo:"
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:2505
+msgid "SCALE"
+msgstr "ESCALA"
 
-msgid "Select antenna port:"
-msgstr "Seleccionar puerto de antena:"
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:2532
+msgid "dB"
+msgstr "dB"
 
-msgid "Select TX power level:"
-msgstr "Seleccionar nivel de potencia TX:"
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:2539
+msgid "AVE"
+msgstr "PROM"
 
-msgid "Select — {label}:"
-msgstr "Seleccionar — {label}:"
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:2595
+msgid "Zoom"
+msgstr "Zoom"
 
-msgid "Edit label:"
-msgstr "Editar etiqueta:"
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:2640
+msgid "Speed"
+msgstr "Velocidad"
 
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:2702
+msgid "CAT GUI Interface"
+msgstr "Interfaz CAT GUI"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:2748
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:2749
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4992
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4994
 msgid "System default"
 msgstr "Predeterminado del sistema"
 
-msgid "(System default)"
-msgstr "(Predeterminado del sistema)"
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:3008
+msgid "PTT"
+msgstr "PTT"
 
-msgid "Loading…"
-msgstr "Cargando…"
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:3051
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4658
+msgid "Antenna"
+msgstr "Antena"
 
-#. Empty-list placeholders
-msgid "No devices configured on server."
-msgstr "No hay dispositivos configurados en el servidor."
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:3061
+msgid "Power"
+msgstr "Potencia"
 
-msgid "No sample rates configured for this device."
-msgstr "No hay tasas de muestreo configuradas."
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:3353
+msgid "SPLIT"
+msgstr "SPLIT"
 
-msgid "No antennas configured for this device."
-msgstr "No hay antenas configuradas para este dispositivo."
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:3361
+msgid "SWAP"
+msgstr "SWAP"
 
-msgid "No power levels configured for this device."
-msgstr "No hay niveles de potencia configurados."
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:3370
+msgid "LOCK"
+msgstr "BLOQ"
 
-msgid "No list items configured for this button."
-msgstr "No hay elementos configurados para este botón."
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:3509
+msgid "Volume"
+msgstr "Volumen"
 
-#. Memory dialog instructions
-msgid "Select a slot, type a label, then Rename (label only) or Save (label + current frequency)."
-msgstr "Seleccione ranura, escriba etiqueta, luego Renombrar o Guardar."
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:3524
+msgid "AGC Thresh."
+msgstr "Umbral AGC"
 
-#. Messageboxes — titles
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:3539
+msgid "RF Gain"
+msgstr "Ganancia RF"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:3554
+msgid "Squelch"
+msgstr "Silenciador"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:3618
+msgid "Device"
+msgstr "Dispositivo"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:3618
+msgid "Sample Rate"
+msgstr "Frecuencia de Muestreo"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:3626
+msgid "Soundcard"
+msgstr "T.Sonido"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:3648
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5097
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5853
+msgid "Start"
+msgstr "Iniciar"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:3671
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:3689
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5033
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5048
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5049
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5094
+msgid "Connect"
+msgstr "Conectar"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:3677
+msgid "Host:"
+msgstr "Host:"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:3683
+msgid "Port:"
+msgstr "Puerto:"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4457
 msgctxt "msgbox_title"
 msgid "Device"
 msgstr "Dispositivo"
 
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4457
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4565
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4658
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4787
+msgid "Not connected to server."
+msgstr "No conectado al servidor."
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4493
+msgid "Select Device"
+msgstr "Seleccionar dispositivo"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4499
+msgid "Select a device:"
+msgstr "Seleccionar dispositivo:"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4503
+msgid "No devices configured on server."
+msgstr "No hay dispositivos configurados en el servidor."
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4506
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4605
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4693
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5209
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5450
+msgid "Close"
+msgstr "Cerrar"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4545
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4638
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4756
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4842
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5010
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5250
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5825
+msgid "Cancel"
+msgstr "Cancelar"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4565
 msgctxt "msgbox_title"
 msgid "Sample Rate"
 msgstr "Tasa de muestreo"
 
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4592
+msgid "Select Sample Rate"
+msgstr "Seleccionar tasa de muestreo"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4598
+msgid "Select a sample rate:"
+msgstr "Seleccionar tasa de muestreo:"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4602
+msgid "No sample rates configured for this device."
+msgstr "No hay tasas de muestreo configuradas."
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4676
+msgid "Select Antenna"
+msgstr "Seleccionar antena"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4682
+msgid "Select antenna port:"
+msgstr "Seleccionar puerto de antena:"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4689
+msgid "No antennas configured for this device."
+msgstr "No hay antenas configuradas para este dispositivo."
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4787
 msgctxt "msgbox_title"
 msgid "Power"
 msgstr "Potencia"
 
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4798
+msgid "TX Power"
+msgstr "Potencia TX"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4803
+msgid "Select TX power level:"
+msgstr "Seleccionar nivel de potencia TX:"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4814
+msgid "No power levels configured for this device."
+msgstr "No hay niveles de potencia configurados."
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4890
+msgid "Soundcard / Audio Device Selection"
+msgstr "Selección de tarjeta de sonido"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4925
+msgid "(System default)"
+msgstr "(Predeterminado del sistema)"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:4978
+msgid "pyaudio not installed — audio disabled. pip install pyaudio"
+msgstr ""
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5004
+msgid "Apply"
+msgstr "Aplicar"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5007
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5820
+msgid "OK"
+msgstr "Aceptar"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5033
+msgid "Invalid port number"
+msgstr "Número de puerto no válido"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5034
+msgid "Connecting…"
+msgstr "Conectando…"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5049
+#, python-brace-format
+msgid ""
+"Cannot connect to {host}:{port}\n"
+"{detail}"
+msgstr ""
+"No se puede conectar a {host}:{port}\n"
+"{detail}"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5075
+msgid "Disconnect"
+msgstr "Desconectar"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5078
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5867
+msgid "Stop"
+msgstr "Detener"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5099
+msgid "Disconnected"
+msgstr ""
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5193
+#, python-brace-format
+msgid "Button {idx}"
+msgstr "Botón {idx}"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5199
+#, python-brace-format
+msgid "Select — {label}:"
+msgstr "Seleccionar — {label}:"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5199
+msgid "Select:"
+msgstr ""
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5206
+msgid "No list items configured for this button."
+msgstr "No hay elementos configurados para este botón."
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5307
+#, python-brace-format
+msgid "Memory — {position}"
+msgstr "Memoria — {position}"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5336
+msgid "Loading…"
+msgstr "Cargando…"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5341
+msgid "Edit label:"
+msgstr "Editar etiqueta:"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5356
+msgid ""
+"Select a slot, type a label, then Rename (label only) or Save (label + "
+"current frequency)."
+msgstr "Seleccione ranura, escriba etiqueta, luego Renombrar o Guardar."
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5382
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5386
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5416
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5428
 msgctxt "msgbox_title"
 msgid "Memory"
 msgstr "Memoria"
 
-#. Messageboxes — bodies
-msgid "Not connected to server."
-msgstr "No conectado al servidor."
-
-msgid "Invalid port number"
-msgstr "Número de puerto no válido"
-
-msgid "Cannot connect to {host}:{port}\n{detail}"
-msgstr "No se puede conectar a {host}:{port}\n{detail}"
-
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5382
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5416
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5428
 msgid "Select a memory slot first."
 msgstr "Seleccione primero una ranura de memoria."
 
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5386
 msgid "That memory slot is empty."
 msgstr "Esa ranura de memoria está vacía."
 
-#. Connection row
-msgid "Host:"
-msgstr "Host:"
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5438
+msgid "Load"
+msgstr "Cargar"
 
-msgid "Port:"
-msgstr "Puerto:"
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5442
+msgid "Rename"
+msgstr "Renombrar"
 
-#. Canvas overlays
-msgid "● TX"
-msgstr "● TX"
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5446
+msgid "Save"
+msgstr "Guardar"
+
+#: /mnt/sda3/opt/Desarrollos/RadioGui/cat_gui.py:5665
+#, python-brace-format
+msgid "Configure: {name}"
+msgstr "Configurar: {name}"
