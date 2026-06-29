@@ -15,9 +15,9 @@ no_audio = false
 # Device list; config_N = path to a TOML config file loaded on selection.
 # Devices with empty labels are hidden. Fill slots in order: 1, 2, 3…
 label_1 = "Xiegu G90"
-config_1 = "device_xiegu_g90.toml"
+config_1 = "devices/device_xiegu_g90.toml"
 label_2 = "Dummy"
-config_2 = "device_dummy.toml"
+config_2 = "devices/device_dummy.toml"
 label_3 = ""
 config_3 = ""
 label_4 = ""
