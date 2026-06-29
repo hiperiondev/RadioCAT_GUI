@@ -803,41 +803,7 @@ def _ensure_config(path, spec, kind="config"):
     _SILENTLY_PRESERVED = {"bandwidth"}
 
     if not os.path.exists(path):
-        # On first run, only create the .example companion file for the
-        # operator's reference.  The actual config file is intentionally NOT
-        # auto-created so the operator must provide their own (or rename the
-        # example).  Built-in defaults are used for this run.
-        example_path = path + ".example"
-        if not os.path.exists(example_path):
-            try:
-                # For device config examples, append the default [bandwidth]
-                # section (with comments) so the operator sees all available
-                # keys in one file.
-                _base_content = _render_config(spec.defaults, spec)
-                if spec is DEVICE_CONFIG_SPEC:
-                    _bw_lines = [
-                        "",
-                        "[bandwidth]",
-                        "# Available filter bandwidths (Hz) for each modulation mode.",
-                        "# The GUI bandwidth selector is populated from the entry whose",
-                        "# name matches the currently active modulation mode.",
-                        "# Add an entry here for every modulation label used in",
-                        "# [user_mods] device configs.  Values are comma-separated Hz.",
-                    ]
-                    for _mod, _vals in _BANDWIDTH_DEFAULTS.items():
-                        _val_str = ",".join(str(v) for v in _vals)
-                        _bw_lines.append(f'%s = "%s"' % (_mod, _val_str))
-                    _base_content = (
-                        _base_content.rstrip("\n") + "\n"
-                        + "\n".join(_bw_lines) + "\n"
-                    )
-                with open(example_path, "w", encoding="utf-8") as f:
-                    f.write(_base_content)
-                dprint(f"[config] Created example {kind}: {example_path}")
-            except Exception as e:
-                dprint(f"[config] WARNING: could not write example {kind}: {e}")
-        dprint(f"[config] {path} not found — using built-in defaults "
-              f"(copy {example_path} to {path} to customise)")
+        dprint(f"[config] {path} not found — using built-in defaults")
         return dict(spec.defaults)
 
 
@@ -3261,46 +3227,6 @@ def _build_devices(args):
     return devices
 
 
-def _create_example_files(device_cfg_path):
-    """Create .example companion files next to the device config on first run.
-
-    Two files are created (if they do not already exist):
-      <base>.memories.json.example -- empty memory bank (3 positions × 20 slots)
-      <base>.gui_state.json.example -- empty GUI-state dict with key descriptions
-
-    The <base>.toml.example (and cat_server.toml.example) files are handled by
-    _ensure_config when the respective config files are absent, so they are not
-    duplicated here.
-
-    These files are written once for the user's reference and are NEVER read
-    by the server; they exist purely as documentation / starting-point copies
-    that the operator can inspect or rename and customise.
-    """
-    base, _ext = os.path.splitext(device_cfg_path)
-
-    # ── cat_device.memories.json.example ─────────────────────────────────────
-    mem_example = base + ".memories.json.example"
-    if not os.path.exists(mem_example):
-        try:
-            empty_mems = {pos: _empty_memory_slots() for pos in MEMORY_POSITIONS}
-            with open(mem_example, "w", encoding="utf-8") as f:
-                json.dump(empty_mems, f, indent=2)
-            dprint(f"[config] Created example memories file : {mem_example}")
-        except Exception as e:
-            dprint(f"[config] WARNING: could not write {mem_example}: {e}")
-
-    # ── cat_device.gui_state.json.example ────────────────────────────────────
-    gui_example = base + ".gui_state.json.example"
-    if not os.path.exists(gui_example):
-        try:
-            example_state = {k: "<persisted at runtime>" for k in _GUI_STATE_KEYS}
-            with open(gui_example, "w", encoding="utf-8") as f:
-                json.dump(example_state, f, indent=2)
-            dprint(f"[config] Created example GUI-state file: {gui_example}")
-        except Exception as e:
-            dprint(f"[config] WARNING: could not write {gui_example}: {e}")
-
-
 def main():
     args = _parse_args()
     host = args.host
@@ -3313,10 +3239,6 @@ def main():
     if _tomllib_warning:
         dprint(_tomllib_warning, flush=True)
     dprint(f"[cat_server] device config: {args.device_config}")
-
-    # ── Create .example companion files (once, for user reference only) ───────
-    # These are never read by the server; they exist purely as documentation.
-    _create_example_files(args.device_config)
 
     # ── [bandwidth] validation ────────────────────────────────────────────────
     # Every non-empty [user_mods] label in a device config must have a
