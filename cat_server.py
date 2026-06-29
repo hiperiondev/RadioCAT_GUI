@@ -365,6 +365,14 @@ def _parse_simple_toml(text):
         if '=' in line:
             k, _, v = line.partition('=')
             k = k.strip(); v = v.strip()
+            # Quoted keys: strip surrounding double-quotes so that
+            # "BW" = "Ancho" yields key 'BW', not '"BW"'.
+            # This matches TOML spec where quoted keys are equivalent to
+            # bare keys with the same string value.
+            if k.startswith('"') and k.endswith('"') and len(k) >= 2:
+                k = k[1:-1].replace('\\"', '"').replace('\\\\', '\\')
+            elif k.startswith("'") and k.endswith("'") and len(k) >= 2:
+                k = k[1:-1]  # single-quoted key: raw string
             if v.startswith('"') and v.endswith('"'):
                 section[k] = v[1:-1].replace('\\"', '"').replace('\\\\', '\\')
             elif v.startswith("'") and v.endswith("'"):
@@ -1880,6 +1888,17 @@ class RadioState:
                 # Empty string means "use OS locale".  Advertised so the GUI can
                 # adopt the same language without needing its own --lang flag.
                 "lang": self.lang,
+                # Translated labels for RF user button config dialog item names.
+                # Maps raw config key (e.g. "BW", "Noise") → translated display
+                # label using the same device label-override file as button labels.
+                # Collected from all non-empty config dicts across all rf_usr_btns.
+                # The GUI populates _label_overrides from this on every state update
+                # so long-press config windows show translated parameter names.
+                "rf_usr_btn_config_labels": {
+                    name: _overrides.get(name, name)
+                    for btn in self.rf_usr_btns
+                    for name in (btn.get("config") or {})
+                },
             }
 
     # ----------------------------------------------------------- commands ----

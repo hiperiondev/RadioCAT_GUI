@@ -6319,6 +6319,12 @@ class App:
             # self.state, suppressing round-trip sends so we don't echo the
             # server's own values back to it.
             #
+            # rf_usr_btn_config_labels is handled in the 'state' branch
+            # (the resp:ok that always precedes reload_state).  That branch
+            # pops the key from incoming before state.update(), so it is
+            # never stored in self.state.  _label_overrides is therefore
+            # already current here; we must NOT overwrite it.
+            #
             # Restore the device label from the server's active_device_index
             # so the display is correct on startup and after reconnect, not
             # only after the operator manually picks a device in the dialog.
@@ -6478,6 +6484,16 @@ class App:
             # The GUI is the authoritative source for both fields.
             incoming.pop("ptt", None)
             incoming.pop("running", None)
+            # ── rf_usr_btn_config_labels: translated names for config dialog ────
+            # The server sends a flat {raw_name: translated_name} dict built from
+            # the active device's label-override file (same file that translates
+            # button labels).  We absorb it into _label_overrides here and strip
+            # it from incoming so it never pollutes self.state.  The config dialog
+            # reads _label_overrides via _label_overrides.get(name, name) so item
+            # names like "BW", "Noise", "Mode", "Profile" are shown translated.
+            _cfg_lbl = incoming.pop("rf_usr_btn_config_labels", None)
+            if isinstance(_cfg_lbl, dict):
+                self._label_overrides.update(_cfg_lbl)
             # ── lang: adopt the server's locale on first connect ──────────────
             # The server advertises "lang" in every state dict.  We only act on
             # it once (when _server_lang_applied is not yet set) so that a later
