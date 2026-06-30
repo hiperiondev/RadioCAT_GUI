@@ -23,6 +23,7 @@ A Python client-server system for controlling a Software Defined Radio (SDR) tra
   - [cat\_server.toml — Transport & Device List](#cat_servertoml--transport--device-list)
   - [cat\_device.toml — Device Profile](#cat_devicetoml--device-profile)
   - [Per-Device State & Memory Files](#per-device-state--memory-files)
+  - [Localization](#localization)
 - [Command-Line Reference](#command-line-reference)
   - [cat\_gui.py](#cat_guipy-cli-flags)
   - [cat\_server.py](#cat_serverpy-cli-flags)
@@ -568,6 +569,17 @@ These are generated automatically next to each device's config file:
 
 State is saved when the operator switches away from a device and restored when they switch back. Memory slots are written immediately whenever a slot is saved from the GUI.
 
+### Localization
+
+`cat_server.py` supports translating device-defined button/menu labels via the `--lang LOCALE` flag (e.g. `--lang es`, `--lang de`, `--lang pt_BR`). Each device config file needs its own, separate translations file, named `<device_base>_labels_<lang>.toml`, placed alongside it:
+
+```
+devices/g90.toml            ← device config
+devices/g90_labels_es.toml  ← Spanish label overrides for g90.toml
+```
+
+Translation files are never shared across multiple device configs — one file per device. Lookup falls back from an exact locale match (e.g. `pt_BR`) to the base language (e.g. `pt`) if no exact-match file is found. If no matching file exists for the requested locale, the server runs with the original (untranslated) labels.
+
 ---
 
 ## Command-Line Reference
@@ -611,22 +623,36 @@ Band Restriction:
                          that list are always rejected). Without this flag,
                          allowed_bands only grays out band buttons; keyboard and
                          mouse-wheel frequency entry are unrestricted.
+
+Layout:
+  --disable-upper-box    Hide the upper-left toggle button that opens the
+                         upper spec/waterfall panel.
 ```
 
 ### cat\_server.py CLI Flags
 
 ```
-python cat_server.py [OPTIONS]
+python cat_server.py [HOST] [PORT] [OPTIONS]
 
 Transport:
-  --host HOST            TCP listen address (default: 0.0.0.0)
-  --port PORT            TCP listen port (default: 50101)
+  HOST                    TCP listen address, positional (default: 0.0.0.0)
+  PORT                    TCP listen port, positional (default: 50101)
   --audio-port PORT      UDP RTP audio port (default: 5004)
   --no-audio             Disable the UDP audio channel entirely
 
 Config files:
   --config PATH          Load cat_server.toml from PATH instead of ./cat_server.toml
   --device-config PATH   Load cat_device.toml from PATH instead of ./cat_device.toml
+
+Localization:
+  --lang LOCALE          Locale tag for device label overrides (e.g. es, de, pt_BR).
+                         Each device config file must have its own translations file
+                         named <device_base>_labels_<lang>.toml alongside it, e.g.
+                         devices/g90_labels_es.toml for devices/g90.toml. One
+                         translations file per device; never share one file across
+                         multiple device configs. Falls back from an exact locale
+                         match (e.g. pt_BR) to the base language (e.g. pt) if no
+                         exact match is found.
 
 IQ & Audio:
   --iq_wav PATH          WAV file of IQ samples to use for the RF spectrum/waterfall
@@ -648,6 +674,8 @@ RF user buttons:
   --rf_usr_btn_mode_N M  "normal" or "push" for RF user button N
 ```
 
+Note: `HOST` and `PORT` are positional arguments, not flags — e.g. `python cat_server.py 192.168.1.50 50101 --no-audio`, not `--host 192.168.1.50 --port 50101`.
+
 > **Priority:** CLI flags always beat the TOML config file, which beats built-in defaults. Button/mod slot flags must be specified sequentially (1, 2, 3 …) with no gaps; the server will error if a slot is skipped.
 
 ---
@@ -660,43 +688,45 @@ All messages are UTF-8, newline-terminated JSON objects (`\n`). One object per l
 
 Every command receives an immediate `{"resp": "ok"}` reply. Commands marked ★ also return a full state dict in the same reply: `{"resp": "ok", "state": {...full radio state...}}`.
 
+> **Note:** the server implements every command in this section. The bundled `cat_gui.py` client, however, currently only sends the commands marked with a ✦. Commands without a ✦ (`set_freq`, `set_agc`, `set_nb`, `set_nbrf`, `set_nbif`, `set_nr`, `set_afc`, `set_anf`, `set_notch`, `set_mute`) are accepted by the server and update real state, but have no corresponding control in the bundled GUI yet — they're available for alternative/custom clients.
+
 #### Startup
 
 | Command | Fields | Notes |
 |---------|--------|-------|
-| `hello` ★ | — | Sent on connect; triggers a `reload_state` push and returns full state |
+| `hello` ★✦ | — | Sent on connect; triggers a `reload_state` push and returns full state |
 
 #### Frequency
 
 | Command | Fields | Notes |
 |---------|--------|-------|
 | `set_freq` | `hz: int` | Set LO A (main receive) frequency |
-| `set_lo_a_freq` | `hz: int` | Alias for `set_freq` |
-| `set_lo_b_freq` | `hz: int` | Set LO B (split TX) frequency |
-| `set_tune_freq` | `hz: int` | Set Tune (BFO/IF offset) frequency |
-| `set_lo` | `lo: "A"\|"B"` | Select active LO |
+| `set_lo_a_freq` ✦ | `hz: int` | Set LO A (main receive) frequency — this is what the bundled GUI actually sends; `set_freq` and `set_lo_a_freq` are handled identically by the server |
+| `set_lo_b_freq` ✦ | `hz: int` | Set LO B (split TX) frequency |
+| `set_tune_freq` ✦ | `hz: int` | Set Tune (BFO/IF offset) frequency |
+| `set_lo` ✦ | `lo: "A"\|"B"` | Select active LO |
 
 #### Mode & DSP
 
 | Command | Fields | Notes |
 |---------|--------|-------|
-| `set_mode` | `mode: str` | e.g. `"USB"`, `"LSB"`, `"AM"`, `"FM"`, `"CW"` |
-| `set_agc` | `mode: str` | `"off"`, `"slow"`, `"medium"`, `"fast"` |
-| `set_agc_thresh` | `value: float` | AGC threshold in dBm (−140 to −20) |
-| `set_filter` | `lo: int, hi: int` | IF passband edges in Hz (e.g. `lo=100, hi=2800`) |
-| `set_zoom` | `value: int` | Zoom factor (≥ 1) |
-| `set_rf_gain` | `value: float` | RF gain in dB (0–60) |
-| `set_volume` | `value: float` | Audio volume (0–100) |
-| `set_squelch` | `value: float` | Squelch level in dBm (−140 to 0) |
-| `set_nb` | `enabled: bool` | Noise blanker (audio/IF) |
-| `set_nbrf` | `enabled: bool` | Noise blanker (RF) |
-| `set_nbif` | `enabled: bool` | Noise blanker (IF) |
-| `set_nr` | `enabled: bool` | Noise reduction |
-| `set_afc` | `enabled: bool` | Automatic frequency control |
-| `set_anf` | `enabled: bool` | Automatic notch filter |
-| `set_notch` | `enabled: bool` | Manual notch filter |
-| `set_mute` | `enabled: bool` | Audio mute |
-| `set_selected_bw` | `value: int` | Set the active bandwidth from the current mode's `bandwidth_map` list (Hz) |
+| `set_mode` ✦ | `mode: str` | e.g. `"USB"`, `"LSB"`, `"AM"`, `"FM"`, `"CW"` |
+| `set_agc` | `mode: str` | `"off"`, `"slow"`, `"medium"`, `"fast"` — server-only, no GUI control yet |
+| `set_agc_thresh` ✦ | `value: float` | AGC threshold in dBm (−140 to −20) |
+| `set_filter` ✦ | `lo: int, hi: int` | IF passband edges in Hz (e.g. `lo=100, hi=2800`) |
+| `set_zoom` ✦ | `value: int` | Zoom factor (≥ 1) |
+| `set_rf_gain` ✦ | `value: float` | RF gain in dB (0–60) |
+| `set_volume` ✦ | `value: float` | Audio volume (0–100) |
+| `set_squelch` ✦ | `value: float` | Squelch level in dBm (−140 to 0) |
+| `set_nb` | `enabled: bool` | Noise blanker (audio/IF) — server-only, no GUI control yet |
+| `set_nbrf` | `enabled: bool` | Noise blanker (RF) — server-only, no GUI control yet |
+| `set_nbif` | `enabled: bool` | Noise blanker (IF) — server-only, no GUI control yet |
+| `set_nr` | `enabled: bool` | Noise reduction — server-only, no GUI control yet |
+| `set_afc` | `enabled: bool` | Automatic frequency control — server-only, no GUI control yet |
+| `set_anf` | `enabled: bool` | Automatic notch filter — server-only, no GUI control yet |
+| `set_notch` | `enabled: bool` | Manual notch filter — server-only, no GUI control yet |
+| `set_mute` | `enabled: bool` | Audio mute — server-only, no GUI control yet |
+| `set_selected_bw` ✦ | `value: int` | Set the active bandwidth from the current mode's `bandwidth_map` list (Hz) |
 
 #### Spectrum Display
 
@@ -799,7 +829,7 @@ The GUI uses `f_start`/`f_stop` to position the RF spectrum/waterfall frequency 
 
 #### State Dictionary
 
-The full state dict (sent in `resp:ok` for `hello` / `select_device`, and incrementally in `data` frames) contains:
+The full state dict (sent in `resp:ok` for `hello` / `select_device`, and incrementally in `data` frames) reflects every attribute tracked by `RadioState` on the server:
 
 ```
 center_freq, tune_freq, lo_b_freq, lo_active
@@ -818,6 +848,8 @@ bandwidth_map, selected_bw
 power_levels, power_index
 active_device_index
 ```
+
+**Note — server state vs. GUI-exposed state:** the dict above is the *full* server-side state (everything `RadioState.apply()` accepts and tracks). The bundled `cat_gui.py` only reads/displays a subset of it; in particular it stores the main receive frequency under the key `lo_freq` rather than `center_freq` (the two refer to the same value — the server's `center_freq` is what the GUI calls `lo_freq`), and it does not currently expose UI controls for `agc`, `nb`, `nr`, `nbrf`, `nbif`, `afc`, `anf`, `notch`, or `mute` — those fields arrive in every state push but nothing in the GUI reads or displays them. They are part of the protocol and can be driven by a custom/alternative client (or a future GUI update) using the corresponding `set_agc`, `set_nb`, `set_nr`, `set_nbrf`, `set_nbif`, `set_afc`, `set_anf`, `set_notch`, and `set_mute` commands documented above, all of which the server already implements. See [State Variables → Hamlib Mapping](#4-state-variables--hamlib-levelfuncparameter-mapping) for the smaller set of state keys the GUI itself actually tracks.
 
 Key notes:
 - `rf_usr_btn_config_vals` — dict keyed by 1-based button index (as string); value is a `{name: value}` dict of the last values submitted via `rf_usr_btn_config_set`. Persisted to `.gui_state.json`.
