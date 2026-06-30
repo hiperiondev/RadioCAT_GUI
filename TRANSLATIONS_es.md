@@ -1,17 +1,5 @@
 # Proyecto CAT — Guía de Traducción
 
-> **Nota:** Esta versión ha sido corregida conforme al comportamiento real de
-> `cat_gui.py` y `cat_server.py`. Correcciones clave respecto al borrador
-> original: la resolución de idioma (la GUI no tiene su propio indicador
-> `--lang` y hereda el locale del servidor al que se conecta), los archivos
-> de sobrescritura de etiquetas de dispositivo (un archivo **por perfil de
-> dispositivo**, no un único archivo compartido por idioma), la función
-> `ngettext` (importada pero actualmente sin uso), un límite adicional de
-> 10 caracteres para las etiquetas de las posiciones de memoria, y una nota
-> sobre que las secciones de sobrescritura TOML se aplanan al momento de la
-> búsqueda (el mismo texto de etiqueta en dos secciones provocará un
-> conflicto).
-
 Este documento explica el sistema de traducción de dos capas que usa el
 proyecto CAT, cómo interactúan ambas capas en tiempo de ejecución, y el
 proceso paso a paso para añadir un nuevo idioma o extender uno existente.
