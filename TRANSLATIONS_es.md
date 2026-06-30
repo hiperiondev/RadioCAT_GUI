@@ -561,9 +561,6 @@ de sobrescritura.
 |---|---|---|---|
 | `en` | Inglés | `locale/en/LC_MESSAGES/cat_gui.po` | (no se necesita — los perfiles de dispositivo ya usan etiquetas en inglés) |
 | `es` | Español | `locale/es/LC_MESSAGES/cat_gui.po` | `<nombre_base_dispositivo>_labels_es.toml` por dispositivo |
-| `de` | Alemán | `locale/de/LC_MESSAGES/cat_gui.po` | `<nombre_base_dispositivo>_labels_de.toml` por dispositivo |
-| `fr` | Francés | `locale/fr/LC_MESSAGES/cat_gui.po` | `<nombre_base_dispositivo>_labels_fr.toml` por dispositivo |
-| `ja` | Japonés | `locale/ja/LC_MESSAGES/cat_gui.po` | `<nombre_base_dispositivo>_labels_ja.toml` por dispositivo |
 
 Para añadir otro idioma, sigue el §4 y añade una fila a esta tabla. Ten en
 cuenta que la capa gettext `.po`/`.mo` (un archivo por idioma, a nivel de
