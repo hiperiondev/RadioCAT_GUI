@@ -527,9 +527,6 @@ at the same override file.
 |---|---|---|---|
 | `en` | English | `locale/en/LC_MESSAGES/cat_gui.po` | (none needed — device profiles already use English labels) |
 | `es` | Spanish | `locale/es/LC_MESSAGES/cat_gui.po` | `<device_basename>_labels_es.toml` per device |
-| `de` | German | `locale/de/LC_MESSAGES/cat_gui.po` | `<device_basename>_labels_de.toml` per device |
-| `fr` | French | `locale/fr/LC_MESSAGES/cat_gui.po` | `<device_basename>_labels_fr.toml` per device |
-| `ja` | Japanese | `locale/ja/LC_MESSAGES/cat_gui.po` | `<device_basename>_labels_ja.toml` per device |
 
 To add another language, follow §4 and add a row to this table. Note that
 the gettext `.po`/`.mo` layer (one file per language, project-wide) and the
