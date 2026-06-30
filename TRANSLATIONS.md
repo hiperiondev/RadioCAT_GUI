@@ -1,15 +1,5 @@
 # CAT Project — Translation Guide
 
-> **Note:** This version has been corrected against the actual behavior of
-> `cat_gui.py` and `cat_server.py`. Key fixes vs. the original draft:
-> language resolution (the GUI has no `--lang` flag of its own and inherits
-> locale from the connected server), device label override files (one file
-> **per device profile**, not a single shared file per language), the
-> `ngettext` function (imported but currently unused), an additional
-> 10-character limit for memory-slot labels, and a note that TOML override
-> sections are flattened at lookup time (same label text in two sections
-> will collide).
-
 This document explains the two-layer translation system used by the CAT project,
 how both layers interact at runtime, and the step-by-step process for adding a
 new language or extending an existing one.
