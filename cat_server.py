@@ -1708,9 +1708,23 @@ class RadioState:
         self.lang = lang
         # 1-based index of the active device in self.devices (0 = none/unknown).
         # Derived from device_cfg_path on startup; updated by select_device.
+        #
+        # Compare normalized absolute paths rather than raw strings: the same
+        # file can be spelled differently between --device-config on the CLI
+        # and the [devices] config_N entries in the server TOML (relative vs
+        # absolute, a "./" prefix, a different launch cwd, ...). A raw string
+        # mismatch here leaves active_device_index at 0, which in turn makes
+        # the GUI skip restoring the "Device: <name>" label on the date/time
+        # row -- the exact same device would show its label on one launch and
+        # not on another, purely depending on how the path text happened to
+        # be written that time.
+        def _norm_dev_path(p):
+            p = (p or "").strip()
+            return os.path.normpath(os.path.abspath(p)) if p else ""
+        _norm_active_cfg = _norm_dev_path(device_cfg_path)
         self.active_device_index = next(
             (i + 1 for i, d in enumerate(self.devices)
-             if d.get("config", "").strip() == (device_cfg_path or "")),
+             if _norm_active_cfg and _norm_dev_path(d.get("config", "")) == _norm_active_cfg),
             0
         )
         self.memory_file = _memory_file_for_device(self.device_cfg_path)
@@ -3083,6 +3097,13 @@ def _parse_args():
             setattr(_raw, _mattr, _cfg_mod_label)
         if not hasattr(_raw, _tattr2):
             setattr(_raw, _tattr2, _cfg_mod_type)
+        # Normalize: a whitespace-only label is really an empty slot. Strip
+        # it now (from either CLI or config) so every downstream check
+        # (length, "type requires label", sequential fill, bandwidth-map
+        # validation) rejects/treats it as empty instead of letting it slip
+        # through as "filled" while the GUI renders it blank and hides the
+        # button anyway.
+        setattr(_raw, _mattr, str(getattr(_raw, _mattr)).strip())
 
     # RF user buttons: CLI beats config, config beats built-in default
     for n in range(1, NUM_RF_USR_BTNS + 1):
@@ -3143,14 +3164,15 @@ def _parse_args():
         if not label and mode != "normal":
             ap.error(f"--rf_usr_btn_mode_{n} requires --rf_usr_btn_{n} to also "
                      f"be set (a mode cannot be set on an empty slot)")
-    # Each user_mod_type_N belongs to its own user_mod_N — an empty label
-    # slot cannot carry a non-default type.
+    # A user_mod_type_N is only meaningful when its own user_mod_N has a
+    # label — an empty slot is simply hidden by the GUI regardless of type,
+    # so there's nothing to enforce. Reset the type to "normal" instead of
+    # treating this as a fatal error.
     for n in range(1, NUM_USER_MODS + 1):
-        label = getattr(_raw, f"user_mod_{n}")
-        mtype = getattr(_raw, f"user_mod_type_{n}")
-        if not label and mtype != "normal":
-            ap.error(f"--user_mod_type_{n} requires --user_mod_{n} to also "
-                     f"be set (a type cannot be set on an empty slot)")
+        _mattr = f"user_mod_{n}"
+        _tattr2 = f"user_mod_type_{n}"
+        if not getattr(_raw, _mattr) and getattr(_raw, _tattr2) != "normal":
+            setattr(_raw, _tattr2, "normal")
 
     # Sequential checks: no gaps allowed — must fill 1, 2, 3… in order
     _btn_empty = False

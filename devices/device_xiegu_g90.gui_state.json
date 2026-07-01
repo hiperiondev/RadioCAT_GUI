@@ -1,7 +1,7 @@
 {
   "center_freq": 7100000.0,
   "tune_freq": 14205000.0,
-  "lo_b_freq": 3700000.0,
+  "lo_b_freq": 28500000.0,
   "lo_active": "B",
   "zoom": 1,
   "mode": "RTTY",
@@ -10,7 +10,7 @@
   "agc": "Med",
   "agc_thresh": -100.0,
   "rf_gain": 20.0,
-  "volume": 80.0,
+  "volume": 64.0,
   "squelch": -130.0,
   "nb": false,
   "nr": false,
@@ -50,7 +50,7 @@
     false
   ],
   "user_btn_list_sel": [
-    2,
+    1,
     -1,
     -1,
     -1,

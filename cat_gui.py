@@ -2817,6 +2817,27 @@ class App:
         r.geometry(f"{init_w}x{init_h}")
         r.minsize(min(scaled('min_w',sc), screen_w), min(scaled('min_h',sc), screen_h))
 
+        # ── bottom row: left control panel + right AF ─────────────────────────
+        # Created (and packed) *before* `top` even though it is built out
+        # further down and visually sits at the bottom of the window. Tk's
+        # pack geometry manager grants cavity space in the order slaves were
+        # packed, not by side or by how "important" a widget is: whichever
+        # slave is packed first gets its full requested size satisfied first
+        # whenever the master is too short for everyone's combined request,
+        # and later-packed slaves are starved instead. `bot` holds the
+        # always-must-be-visible clock/date/device row, while `top` (the
+        # waterfall/spectrum area) is explicitly designed to shrink via
+        # _apply_top_heights() when space is tight. Packing `bot` first
+        # (side="bottom") guarantees it never loses that contest to `top`
+        # while `top.pack(side="top", ...)` below keeps it visually on top.
+        # Without this ordering, a too-small initial window (the per-scale
+        # geometry estimate applied before real content is measured) starves
+        # `bot` instead of `top`, clipping the clock/date/device row until
+        # something -- e.g. toggling the HiDPI scale -- forces a full rebuild.
+        bot=tk.Frame(r,bg=C["win_bg"])
+        bot.pack(side="bottom",fill="both",expand=False)
+        self._bot=bot
+
         # ── top: RF waterfall + spectrum strip ────────────────────────────────
         top=tk.Frame(r,bg=C["win_bg"])
         top.pack(side="top",fill="both",expand=True)
@@ -2877,11 +2898,10 @@ class App:
                                 spec_ref=self.state.get("spec_ref_rf",0),
                                 spec_ave=self.state.get("spec_ave_rf",2))
 
-        # ── bottom row: left control panel + right AF ─────────────────────────
-        bot=tk.Frame(r,bg=C["win_bg"])
-        bot.pack(side="top",fill="both",expand=False)
-        self._bot=bot
-
+        # (bot frame itself was created and packed at the top of this method,
+        # see the block above `top`'s construction, so that Tk's pack cavity
+        # allocation guarantees it space before `top` -- build its contents
+        # now that `top` and everything inside it exists.)
         self._build_left(bot)
         self._build_right(bot)
 
@@ -4033,6 +4053,26 @@ class App:
         min_h    = tb_h + bot_h + 4
         min_w    = max(scaled('min_w', sc), bot_w)
         self.root.minsize(min_w, max(60, min_h))
+        # minsize() only constrains *future* resizes -- it never enlarges a
+        # window that is already smaller than the minimum. The very first
+        # geometry() call (in _build) sizes the window from the static
+        # per-scale table, which is only an estimate; the true content
+        # height (font metrics, DPI, translated label lengths, ...) is only
+        # known once widgets are actually built and measured here. If that
+        # real height comes out taller than the estimate, the bottom-most
+        # row (the clock/device line) ends up clipped below the window's
+        # visible area and stays that way until something calls geometry()
+        # again -- e.g. changing scale, which is why toggling scale
+        # "fixes" it. Grow the window immediately whenever we discover it's
+        # currently below the minimum, so the clock/device row is never
+        # silently clipped at startup.
+        self.root.update_idletasks()
+        cur_w = self.root.winfo_width()
+        cur_h = self.root.winfo_height()
+        if cur_w < min_w or cur_h < min_h:
+            new_w = max(cur_w, min_w)
+            new_h = max(cur_h, max(60, min_h))
+            self.root.geometry(f"{new_w}x{new_h}")
         return min_w, min_h
 
     def _sync_bot_height(self):
@@ -4361,16 +4401,18 @@ class App:
                 self._bw_var.set("")
         # User-defined buttons: refresh label and (for push-push type) the
         # pressed/released highlight. A button with no label configured on
-        # the server (empty string) is shown disabled/greyed-out and cannot
-        # be pressed.
+        # the server (empty string) is hidden entirely -- grid_remove() takes
+        # it out of the layout (remembering its row/column/sticky options),
+        # and grid() below restores it once the server supplies a label.
         for idx,b in self.user_btns.items():
             cfg=self._user_btn_cfg(idx)
             base_label=cfg.get("label","").strip()
+            if not base_label:
+                b.grid_remove()
+                continue
+            b.grid()
             label=self._user_btn_label(idx)
             b.config(text=label)
-            if not base_label:
-                b.config(state="disabled",bg=C["panel_mid"],fg=C["text_dim"])
-                continue
             btype=cfg.get("type","normal")
             if btype=="push":
                 on=self._user_btn_state(idx)
@@ -6343,8 +6385,12 @@ class App:
                 # The reply (_open_device_dialog) will also update the label
                 # when it sees _pending_device_label_restore is set.
                 self._pending_device_label_restore = _adi
-                if getattr(self.net, 'connected', False):
-                    self.net.send({"cmd": "get_devices"})
+                if not self.net.send({"cmd": "get_devices"}):
+                    # Send failed (e.g. a disconnect raced this reload_state).
+                    # Clear the pending flag rather than leaving it dangling —
+                    # a later reload_state (on the next successful reconnect)
+                    # will set it again and retry.
+                    self._pending_device_label_restore = 0
             #
             # PTT is always forced OFF on connect and device change — it is a
             # session-only transient and must never be inherited from a
@@ -6622,6 +6668,19 @@ def main():
         return
     _i18n_setup(None)   # OS locale until server advertises its lang on first connect
     root=tk.Tk()
+    # Keep the window hidden while it's built and measured. If shown
+    # immediately, the deferred after(100)/after(120) geometry fixes in
+    # App._build() (meant to enlarge the window if the true content height
+    # exceeds the static per-scale estimate -- see _update_minsize) race
+    # against the window manager's own initial-placement handling: a
+    # geometry() call fired from a timer just after the window first
+    # appears is frequently ignored by the WM. The practical symptom is
+    # that the bottom-most row (clock/date/device) is clipped off at
+    # startup, and only reappears once something -- e.g. toggling the
+    # HiDPI scale -- calls geometry() synchronously on an already-mapped,
+    # WM-settled window. Building withdrawn and only deiconifying once the
+    # real size is known sidesteps the race entirely.
+    root.withdraw()
     _load_custom_fonts(root)
     app=App(root)
     # Show initial scale level in the overlay label
@@ -6635,6 +6694,18 @@ def main():
     if _ARGS.resolution and not _ARGS.full_screen:
         _rw, _rh = _ARGS.resolution
         root.geometry(f"{_rw}x{_rh}")
+
+    # Force the deferred layout passes to run now, synchronously, while the
+    # window is still withdrawn -- Tk computes requested/measured widget
+    # sizes via update_idletasks() regardless of mapped state, so this is
+    # safe. Only then reveal the window, already sized correctly, so the
+    # clock/date/device row is never visibly clipped at startup.
+    if not (_ARGS.resolution and not _ARGS.full_screen):
+        root.update_idletasks()
+        app._sync_bot_height()
+        root.update_idletasks()
+        app._update_minsize()
+    root.deiconify()
 
     # Apply --aspect-ratio W:H flag (ignored when --full-screen is also set).
     # Applied via after() so the layout (including _sync_bot_height and

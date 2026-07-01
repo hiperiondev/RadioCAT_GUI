@@ -1,4 +1,4 @@
-# CAT Device configuration
+# CAT Device configuration -- Xiegu G90
 # Describes ONE device profile's GUI buttons: user-defined buttons,
 # user-defined modulation buttons, RF user buttons, and the selectable
 # SDR sample rates. No [devices] section here -- the list of selectable
@@ -10,6 +10,78 @@
 # in cat_server.toml's [devices] section (config_N) should point to
 # another file shaped exactly like this one -- a 'cat_device.toml-like
 # file' -- loaded wholesale when that device is selected in the GUI.
+#
+# Mapping rationale (G90 firmware v1.7x/v1.8x, CI-V over 19200 baud):
+#   - [user_buttons]: quick momentary/toggle/list actions, mirroring the
+#     G90's front-panel short-press functions (no parameters). This row
+#     is a hard 14-slot limit in the GUI and every slot is already
+#     assigned to a real G90 short-press function -- nothing left to add.
+#   - [rf_usr_btns]: same physical row as the band buttons. A SHORT press
+#     fires the button's primary action; a LONG press (~1s) opens a
+#     config window (slide/list/check/radio) for functions that carry a
+#     numeric level or mode on the G90. TX power is intentionally NOT
+#     mapped to an rf_usr_btn -- it uses the GUI's dedicated Power
+#     selector, driven by [sdr] power_levels below.
+#
+# REVISION 3 -- follow-up functionality audit against the official G90/S
+# manuals (v4.32-v4.34), the KE8WO cheat sheets (v1.71 through v1.79b03),
+# and the G90 sight-impaired panel-layout guide (fw 1.74). Added two
+# further previously-unmapped G90 features and documented one structural
+# gap that can't be closed without user input:
+#   - CW Volume : sidetone VOLUME (0-15), distinct from the CW Pitch
+#                (sidetone frequency) already mapped -- front panel:
+#                KEY then POW, adjust with Volume control.
+#   - FFT Scale : spectrum/waterfall reference-level setting (Auto, or
+#                2-10). Lives in the SAME FUNC+LOCK submenu as FFT
+#                Averaging -- first LOCK press = Scale, second press =
+#                Averaging -- so it's added into the FFTAVG button
+#                alongside averaging rather than as a separate button.
+#                NOTE: on firmware >=1.79b03 this value is reportedly
+#                fixed at "Auto" and no longer user-changeable; kept
+#                here since older/mainstream firmware still allows it.
+#   - KNOWN LIMITATION (structural, not fixed here): the G90's native
+#     mode cycle is LSB-L-D-USB-U-D-CW-CWR-NFM-AM. Three of those modes
+#     -- CWR (CW reverse) and the two data modes LSB-Data (L-D) and
+#     USB-Data (U-D), added in firmware 1.79b02 -- have no [user_mods]
+#     button. The user_mods row is a hard 10-slot cap and all 10 slots
+#     are already assigned (AM/FM/LSB/USB/CW/APRS/RTTY/FT8/FT2/J2CL), so
+#     adding these would require removing an existing custom button --
+#     a choice left to the operator rather than made silently here. If
+#     you want them exposed, the most likely candidates to free up are
+#     FT2 or J2CL (less commonly used than FT8/RTTY/APRS).
+#
+# REVISION 2 -- functionality audit against the official G90/S manual
+# (v4.2.1/v4.32) and the KE8WO cheat sheets (v1.71/v1.75). Added
+# previously-unmapped G90 features:
+#   - FILTER : DSP receive filter center frequency + bandwidth
+#              (front panel: FUNC+CMP for low edge, FUNC+NB for high edge)
+#   - SQL    : squelch level (multi-function knob long-press menu)
+#   - FFTAVG : FFT averaging count 1-10 (FUNC+LOCK)
+#   - RIT    : receiver incremental tuning on/off + offset (long-press
+#              of the main tuning knob)
+#   - CWKEY  : extended with CW Pitch (sidetone), QSK on/off, QSK delay,
+#              dot:dash ratio, and CW decoder toggle (all live under the
+#              front-panel KEY button's settings, previously only speed
+#              and keyer mode were exposed)
+#   - VOX    : extended with Anti-VOX (hand-mic speaker noise-trip
+#              suppression, part of the front-panel VOX menu)
+#   - SWRTHR : extended with SWR scan step size 1-5 kHz (used by the
+#              long-press POW antenna SWR sweep)
+#   - SYSTEM : extended with AUX IN/OUT volume (System Menu items 5/6),
+#              Band Stack Mode (HAM Band/Full Band, System Menu item 8),
+#              and ON/OFF power-up beep (System Menu item 9)
+#
+# KNOWN LIMITATION: Call Sign entry (System Menu item, shown briefly on
+# boot) is a free-text field on the radio. The current config_N schema
+# only supports slide/list/check/radio widget types -- there is no text
+# entry type -- so Call Sign cannot be exposed via a config window
+# without extending that schema in cat_gui.py. Not mapped here.
+#
+# Some menu option lists (esp. mic F1/F2 assignable functions, and exact
+# CW QSK delay / dot:dash ratio ranges) come from third-party G90 cheat
+# sheets rather than a single authoritative manual table -- double check
+# against your firmware's System Menu and adjust the "values"/"options"/
+# "range" entries below if your unit differs.
 
 [user_buttons]
 # label: max 7 characters
@@ -17,48 +89,48 @@
 #       "list" (opens a selection list; choice persists on the button)
 # list_N: comma-separated items shown in the list dialog when type is "list"
 #         (max 20 characters per item; unused when type != "list")
-label_1 = "UsrLst1"
+label_1 = "PREATT"
 type_1 = "list"
-list_1 = "item 1, item 2, item3"
-label_2 = "UsrBtn2"
-type_2 = "normal"
+list_1 = "Normal, Preamp, Atten"
+label_2 = "NB"
+type_2 = "push"
 list_2 = ""
-label_3 = "UsrBtn3"
-type_3 = "normal"
+label_3 = "COMP"
+type_3 = "push"
 list_3 = ""
-label_4 = "UsrBtn4"
-type_4 = "normal"
+label_4 = "VOX"
+type_4 = "push"
 list_4 = ""
-label_5 = "UsrBtn5"
-type_5 = "normal"
+label_5 = "SPLIT"
+type_5 = "push"
 list_5 = ""
-label_6 = "UsrBtn6"
-type_6 = "normal"
+label_6 = "LOCK"
+type_6 = "push"
 list_6 = ""
-label_7 = "UsrBtn7"
+label_7 = "ATU"
 type_7 = "normal"
 list_7 = ""
-label_8 = "UsrBtn8"
+label_8 = "VFOSWP"
 type_8 = "normal"
 list_8 = ""
-label_9 = "UsrBtn9"
+label_9 = "A=B"
 type_9 = "normal"
 list_9 = ""
-label_10 = "UsrBtnA"
-type_10 = "normal"
+label_10 = "MEM"
+type_10 = "push"
 list_10 = ""
-label_11 = "UsrBtnB"
+label_11 = "MW"
 type_11 = "normal"
 list_11 = ""
-label_12 = "UsrBtnC"
+label_12 = "SCAN"
 type_12 = "normal"
 list_12 = ""
-label_13 = "UsrBtnD"
+label_13 = "DISP"
 type_13 = "normal"
 list_13 = ""
-label_14 = "UsrBtnE"
-type_14 = "normal"
-list_14 = ""
+label_14 = "INPUT"
+type_14 = "list"
+list_14 = "Mic, Line"
 
 [user_mods]
 # label: max 4 characters; user-defined modulation button labels shown in the
@@ -68,6 +140,12 @@ list_14 = ""
 #       or "text_input" (same split, but the text panel itself is split into
 #       an upper read-only area and a bottom 3-line editable input box that
 #       sends text to the server on Enter, like an RTTY chat).
+#
+# KNOWN LIMITATION: all 10 slots below are already assigned. The G90's
+# native mode cycle also includes CWR (CW reverse) and two data modes,
+# LSB-Data (L-D) and USB-Data (U-D), added in firmware 1.79b02 -- none of
+# these three have a button here. See REVISION 3 note at top of file for
+# details; freeing FT2 or J2CL is the likely path if you want them added.
 label_1 = "AM"
 type_1 = "normal"
 label_2 = "FM"
@@ -78,54 +156,128 @@ label_4 = "USB"
 type_4 = "normal"
 label_5 = "CW"
 type_5 = "normal"
-label_6 = "APRS"
-type_6 = "text"
-label_7 = "RTTY"
-type_7 = "text_input"
-label_8 = "FT8"
-type_8 = "normal"
-label_9 = "FT2"
-type_9 = "normal"
-label_10 = "J2CL"
-type_10 = "normal"
+label_6 = ""
+type_6 = ""
+label_7 = ""
+type_7 = ""
+label_8 = ""
+type_8 = ""
+label_9 = ""
+type_9 = ""
+label_10 = ""
+type_10 = ""
 
 [rf_usr_btns]
 # RF user buttons: shown left of the band buttons in the GUI frequency area.
 # label: max 7 characters; mode: "normal" (momentary) or "push" (toggle).
+# config_N: JSON object mapping item name -> spec dict, shown in a popup
+# window on LONG press (~1s hold). Supported spec "type" values:
+#   slide  -> {"type":"slide","range":[lo,hi]}
+#   list   -> {"type":"list","values":[{"key":"Disp","val":"server_val"}, ...]}
+#   check  -> {"type":"check"}
+#   radio  -> {"type":"radio","options":["Opt1","Opt2",...]}
 # Buttons with empty labels are hidden in the GUI.
-label_1 = "BtnUsr1"
+
+# RF Gain (front panel: long-press AGC, 0-100%, default 50)
+label_1 = "RFGAIN"
 mode_1 = "normal"
-config_1 = "{}"
-label_2 = "BtnUsr2"
+config_1 = '{"RF Gain": {"type": "slide", "range": [0, 100]}}'
+
+# Mic Gain (System menu: 0-20, default ~10)
+label_2 = "MICGAIN"
 mode_2 = "normal"
-config_2 = "{}"
-label_3 = "BtnUsr3"
+config_2 = '{"Mic Gain": {"type": "slide", "range": [0, 20]}}'
+
+# SWR alarm threshold (1.8-3.6) -- lives under the front-panel POW button
+# sequence on the radio. TX power itself is NOT mapped here; it's set via
+# the GUI's own Power selector, which reads [sdr] power_levels below.
+# SWR Scan Step: step size used by the long-press POW antenna SWR sweep
+# (scans the antenna's SWR-vs-frequency plot without the tuner in circuit).
+label_3 = "SWRTHR"
 mode_3 = "normal"
-config_3 = "{}"
-label_4 = "BtnUsr4"
+config_3 = '{"SWR Threshold": {"type": "slide", "range": [1.8, 3.6]}, "SWR Scan Step (kHz)": {"type": "slide", "range": [1, 5]}}'
+
+# AGC mode: Auto / Fast / Slow / Off
+label_4 = "AGC"
 mode_4 = "normal"
-config_4 = "{}"
-label_5 = "BtnUsr5"
+config_4 = '{"AGC Mode": {"type": "list", "values": [{"key": "Auto", "val": "auto"}, {"key": "Fast", "val": "fast"}, {"key": "Slow", "val": "slow"}, {"key": "Off", "val": "off"}]}}'
+
+# Noise Blanker: enable + level
+label_5 = "NB"
 mode_5 = "normal"
-config_5 = "{}"
-label_6 = "BtnUsr6"
+config_5 = '{"Noise Blanker": {"type": "check"}, "NB Level": {"type": "slide", "range": [0, 10]}}'
+
+# Speech Compressor: enable + level
+label_6 = "COMP"
 mode_6 = "normal"
-config_6 = "{}"
-label_7 = "BtnUsr7"
+config_6 = '{"Compressor": {"type": "check"}, "Comp Level": {"type": "slide", "range": [0, 10]}}'
+
+# VOX: enable + gain + delay (hang time) + Anti-VOX (hand-mic speaker
+# noise-trip suppression, part of the same front-panel VOX menu)
+label_7 = "VOX"
 mode_7 = "normal"
-config_7 = "{}"
-label_8 = "BtnUsr8"
+config_7 = '{"VOX": {"type": "check"}, "VOX Gain": {"type": "slide", "range": [0, 100]}, "VOX Delay": {"type": "slide", "range": [0, 20]}, "Anti-VOX": {"type": "slide", "range": [0, 100]}}'
+
+# Preamp/Attenuator front-end setting
+label_8 = "PREATT"
 mode_8 = "normal"
-config_8 = "{}"
-label_9 = "BtnUsr9"
+config_8 = '{"Setting": {"type": "radio", "options": ["Normal", "Preamp", "Attenuator"]}}'
+
+# CW keyer speed (WPM) + keyer mode, plus the rest of the KEY button's
+# settings: sidetone pitch, sidetone VOLUME (0-15, distinct from pitch --
+# front panel: KEY then POW, set with the Volume control), QSK on/off +
+# delay, dot:dash ratio, and the CW auto-decoder toggle (long-press KEY
+# on the radio).
+label_9 = "CWKEY"
 mode_9 = "normal"
-config_9 = "{}"
-label_10 = "BtnUsra"
+config_9 = '{"Speed (WPM)": {"type": "slide", "range": [5, 40]}, "Keyer Mode": {"type": "radio", "options": ["Straight", "Iambic A", "Iambic B"]}, "CW Pitch": {"type": "slide", "range": [300, 1000]}, "CW Volume": {"type": "slide", "range": [0, 15]}, "QSK": {"type": "check"}, "QSK Delay": {"type": "slide", "range": [0, 10]}, "Dot:Dash Ratio": {"type": "slide", "range": [2.5, 3.5]}, "CW Decoder": {"type": "check"}}'
+
+# Hand mic programmable button assignments (System Menu items 6-8 on the
+# G90: Handle Up/Down, Handle F1, Handle F2)
+label_10 = "MICFUNC"
 mode_10 = "normal"
-config_10 = "{}"
-label_11 = "BtnUsrb"
+config_10 = '{"Up/Down": {"type": "list", "values": [{"key": "Freq CH +/-", "val": "freq"}, {"key": "Band +/-", "val": "band"}, {"key": "Volume +/-", "val": "volume"}]}, "F1 Function": {"type": "list", "values": [{"key": "PRE/ATT", "val": "preatt"}, {"key": "Split", "val": "split"}, {"key": "NB", "val": "nb"}, {"key": "Compressor", "val": "comp"}]}, "F2 Function": {"type": "list", "values": [{"key": "PRE/ATT", "val": "preatt"}, {"key": "Split", "val": "split"}, {"key": "NB", "val": "nb"}, {"key": "Compressor", "val": "comp"}]}}'
+
+# Display brightness (5 levels) + reference clock fine tuning, plus the
+# remaining System Menu items: ACC port AUX IN/OUT volume (items 5/6),
+# Band Stack Mode (item 8: HAM Band restricts stacking to ham allocations,
+# Full Band allows the whole receive range), and power-up ON/OFF beep
+# (item 9). Call Sign (free-text) is NOT included -- see file header note.
+label_11 = "SYSTEM"
 mode_11 = "normal"
-config_11 = "{}"
+config_11 = '{"Display Brightness": {"type": "slide", "range": [1, 5]}, "RCLK Tune": {"type": "slide", "range": [-100, 100]}, "AUX IN Volume": {"type": "slide", "range": [0, 100]}, "AUX OUT Volume": {"type": "slide", "range": [0, 100]}, "Band Stack Mode": {"type": "list", "values": [{"key": "HAM Band", "val": "ham"}, {"key": "Full Band", "val": "full"}]}, "ON/OFF Beep": {"type": "check"}}'
+
+# DSP receive filter: center frequency and bandwidth of the variable
+# digital filter (front panel: FUNC+CMP adjusts the low edge, FUNC+NB
+# adjusts the high edge; equivalently a short press of the multi-function
+# knob steps through Center then Width). Ranges are generous since the
+# usable window shifts with mode/bandwidth -- the radio clamps internally.
+label_12 = "FILTER"
+mode_12 = "normal"
+config_12 = '{"Filter Center": {"type": "slide", "range": [100, 3000]}, "Filter Width": {"type": "slide", "range": [50, 3000]}}'
+
+# Squelch level (multi-function knob long-press menu -> Squelch Level)
+label_13 = "SQL"
+mode_13 = "normal"
+config_13 = '{"Squelch Level": {"type": "slide", "range": [0, 9]}}'
+
+# FFT averaging count (FUNC then LOCK), smooths the waterfall/spectrum,
+# plus FFT Scale, the spectrum/waterfall reference-level setting that
+# lives in the same FUNC+LOCK submenu (first LOCK press = Scale, second
+# press = Averaging). Auto is the default; 2-10 raise the noise floor
+# reference (10 = lowest sensitivity). NOTE: reported fixed at "Auto"
+# (not adjustable) on firmware >=1.79b03 -- included for older/mainstream
+# firmware where it remains user-settable.
+label_14 = "FFTAVG"
+mode_14 = "normal"
+config_14 = '{"FFT Averaging": {"type": "slide", "range": [1, 10]}, "FFT Scale": {"type": "list", "values": [{"key": "Auto", "val": "auto"}, {"key": "2", "val": "2"}, {"key": "3", "val": "3"}, {"key": "4", "val": "4"}, {"key": "5", "val": "5"}, {"key": "6", "val": "6"}, {"key": "7", "val": "7"}, {"key": "8", "val": "8"}, {"key": "9", "val": "9"}, {"key": "10", "val": "10"}]}}'
+
+# Receiver Incremental Tuning: enable + offset (long-press of the main
+# tuning knob on the radio). Offset range is an estimate -- adjust if
+# your firmware reports a different limit.
+label_15 = "RIT"
+mode_15 = "normal"
+config_15 = '{"RIT": {"type": "check"}, "RIT Offset (Hz)": {"type": "slide", "range": [-3000, 3000]}}'
 
 [sdr]
 # sample_rate: SDR hardware sample rate (Hz) applied when this device
