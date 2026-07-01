@@ -4,7 +4,7 @@
   "lo_b_freq": 28500000.0,
   "lo_active": "B",
   "zoom": 1,
-  "mode": "RTTY",
+  "mode": "AM",
   "filter_lo": 100,
   "filter_hi": 2800,
   "agc": "Med",
@@ -50,7 +50,7 @@
     false
   ],
   "user_btn_list_sel": [
-    1,
+    0,
     -1,
     -1,
     -1,

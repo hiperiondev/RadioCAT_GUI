@@ -3,27 +3,6 @@
 # Cada sección corresponde al grupo de botones del dispositivo.
 # Solo se traducen las etiquetas que aparecen en el archivo de dispositivo;
 # las etiquetas sin entrada aquí conservan su texto original en inglés.
-#
-# NOTA: este archivo se actualizó junto con device_xiegu_g90.toml (revisión 2:
-# auditoría de funcionalidad frente al manual oficial del G90/S y las hojas
-# de referencia KE8WO). Se agregaron traducciones para los 4 botones RF
-# nuevos (FILTER, SQL, FFTAVG, RIT) y para los ítems añadidos a las
-# ventanas de configuración de VOX, CWKEY, SWRTHR y SYSTEM. Las claves de
-# abajo coinciden exactamente con los label_N, list_N e ítems de config_N
-# del archivo de dispositivo actual.
-#
-# NOTA (revisión 3): se agregaron traducciones para dos ítems nuevos
-# encontrados en la segunda auditoría: "CW Volume" (volumen del tono
-# lateral CW, dentro de CWKEY) y "FFT Scale" (nivel de referencia del
-# espectro/cascada, dentro de FFTAVG, con sus valores de lista Auto/2-10).
-# Las claves numéricas ("2".."10") no requieren traducción y no se
-# agregaron entradas para ellas.
-#
-# LIMITACIÓN CONOCIDA (heredada): la función "Call Sign" (indicativo, texto
-# libre mostrado al encender el equipo) no está mapeada en device_xiegu_g90.toml
-# porque el esquema de config_N no admite un tipo de entrada de texto libre
-# (solo slide/list/check/radio). No requiere traducción hasta que se
-# implemente.
 
 [user_buttons]
 # Botones de usuario (14 slots, máx. 7 caracteres visibles en el botón)
@@ -31,8 +10,6 @@
 "NB"     = "RUIDO"
 "COMP"   = "COMP"
 "VOX"    = "VOX"
-"SPLIT"  = "SPLIT"
-"LOCK"   = "BLOQ"
 "ATU"    = "ATU"
 "VFOSWP" = "VFOA/B"
 "A=B"    = "A=B"
@@ -59,11 +36,10 @@
 "LSB"  = "LSB"
 "USB"  = "USB"
 "CW"   = "CW"
-"APRS" = "APRS"
-"RTTY" = "RTTY"
-"FT8"  = "FT8"
-"FT2"  = "FT2"
-"J2CL" = "J2CL"
+"CWR"  = "CWR"
+"L-D"  = "L-D"
+"U-D"  = "U-D"
+"CWM"  = "CWM"
 
 [rf_usr_btns]
 # Botones RF de usuario (izquierda del selector de banda, máx. 7 caracteres).
@@ -81,10 +57,6 @@
 "CWKEY"   = "MANIP"
 "MICFUNC" = "FUNMIC"
 "SYSTEM"  = "SISTEM"
-"FILTER"  = "FILTRO"
-"SQL"     = "SILEN"
-"FFTAVG"  = "FFTAVG"
-"RIT"     = "RIT"
 
 [rf_btn_config]
 # Traducciones para los cuadros de configuración (pulsación larga) de los
@@ -113,6 +85,7 @@
 "QSK Delay"            = "Retardo QSK"
 "Dot:Dash Ratio"       = "Relación Punto:Raya"
 "CW Decoder"           = "Decodificador CW"
+"CW Trainer"           = "Entrenador CW"
 "Up/Down"              = "Subir/Bajar"
 "F1 Function"          = "Función F1"
 "F2 Function"          = "Función F2"
@@ -127,6 +100,7 @@
 "Squelch Level"        = "Nivel de Silenciador"
 "FFT Averaging"        = "Promediado FFT"
 "FFT Scale"            = "Escala FFT"
+"RIT"                  = "RIT"
 "RIT Offset (Hz)"      = "Desvío RIT (Hz)"
 
 # Claves ("key") de los ítems tipo "list" mostrados en los desplegables:
@@ -142,14 +116,6 @@
 "NB"            = "NB"
 "HAM Band"      = "Banda Radioaficionado"
 "Full Band"     = "Banda Completa"
-
-# LIMITACIÓN CONOCIDA: las opciones de los controles tipo "radio" (las de
-# "Setting": Normal/Preamp/Attenuator, y "Keyer Mode": Straight/Iambic A/
-# Iambic B) no pasan actualmente por el mecanismo de _label_overrides en
-# cat_gui.py (solo se traduce el nombre del ítem, no sus opciones de
-# radio), por lo que añadir entradas aquí para "Attenuator", "Straight",
-# "Iambic A" o "Iambic B" no tendría efecto hasta que se extienda ese
-# soporte en el cliente.
 
 [antenna]
 # Etiquetas de puerto de antena (máx. ~20 caracteres recomendados)

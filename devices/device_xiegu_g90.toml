@@ -6,82 +6,14 @@
 # CLI flags override these values at runtime without modifying this file.
 # Use --device-config PATH to load a file from a non-default location.
 #
-# This file's structure is reused for every device profile: each entry
-# in cat_server.toml's [devices] section (config_N) should point to
-# another file shaped exactly like this one -- a 'cat_device.toml-like
-# file' -- loaded wholesale when that device is selected in the GUI.
-#
-# Mapping rationale (G90 firmware v1.7x/v1.8x, CI-V over 19200 baud):
-#   - [user_buttons]: quick momentary/toggle/list actions, mirroring the
-#     G90's front-panel short-press functions (no parameters). This row
-#     is a hard 14-slot limit in the GUI and every slot is already
-#     assigned to a real G90 short-press function -- nothing left to add.
-#   - [rf_usr_btns]: same physical row as the band buttons. A SHORT press
-#     fires the button's primary action; a LONG press (~1s) opens a
-#     config window (slide/list/check/radio) for functions that carry a
-#     numeric level or mode on the G90. TX power is intentionally NOT
-#     mapped to an rf_usr_btn -- it uses the GUI's dedicated Power
-#     selector, driven by [sdr] power_levels below.
-#
-# REVISION 3 -- follow-up functionality audit against the official G90/S
-# manuals (v4.32-v4.34), the KE8WO cheat sheets (v1.71 through v1.79b03),
-# and the G90 sight-impaired panel-layout guide (fw 1.74). Added two
-# further previously-unmapped G90 features and documented one structural
-# gap that can't be closed without user input:
-#   - CW Volume : sidetone VOLUME (0-15), distinct from the CW Pitch
-#                (sidetone frequency) already mapped -- front panel:
-#                KEY then POW, adjust with Volume control.
-#   - FFT Scale : spectrum/waterfall reference-level setting (Auto, or
-#                2-10). Lives in the SAME FUNC+LOCK submenu as FFT
-#                Averaging -- first LOCK press = Scale, second press =
-#                Averaging -- so it's added into the FFTAVG button
-#                alongside averaging rather than as a separate button.
-#                NOTE: on firmware >=1.79b03 this value is reportedly
-#                fixed at "Auto" and no longer user-changeable; kept
-#                here since older/mainstream firmware still allows it.
-#   - KNOWN LIMITATION (structural, not fixed here): the G90's native
-#     mode cycle is LSB-L-D-USB-U-D-CW-CWR-NFM-AM. Three of those modes
-#     -- CWR (CW reverse) and the two data modes LSB-Data (L-D) and
-#     USB-Data (U-D), added in firmware 1.79b02 -- have no [user_mods]
-#     button. The user_mods row is a hard 10-slot cap and all 10 slots
-#     are already assigned (AM/FM/LSB/USB/CW/APRS/RTTY/FT8/FT2/J2CL), so
-#     adding these would require removing an existing custom button --
-#     a choice left to the operator rather than made silently here. If
-#     you want them exposed, the most likely candidates to free up are
-#     FT2 or J2CL (less commonly used than FT8/RTTY/APRS).
-#
-# REVISION 2 -- functionality audit against the official G90/S manual
-# (v4.2.1/v4.32) and the KE8WO cheat sheets (v1.71/v1.75). Added
-# previously-unmapped G90 features:
-#   - FILTER : DSP receive filter center frequency + bandwidth
-#              (front panel: FUNC+CMP for low edge, FUNC+NB for high edge)
-#   - SQL    : squelch level (multi-function knob long-press menu)
-#   - FFTAVG : FFT averaging count 1-10 (FUNC+LOCK)
-#   - RIT    : receiver incremental tuning on/off + offset (long-press
-#              of the main tuning knob)
-#   - CWKEY  : extended with CW Pitch (sidetone), QSK on/off, QSK delay,
-#              dot:dash ratio, and CW decoder toggle (all live under the
-#              front-panel KEY button's settings, previously only speed
-#              and keyer mode were exposed)
-#   - VOX    : extended with Anti-VOX (hand-mic speaker noise-trip
-#              suppression, part of the front-panel VOX menu)
-#   - SWRTHR : extended with SWR scan step size 1-5 kHz (used by the
-#              long-press POW antenna SWR sweep)
-#   - SYSTEM : extended with AUX IN/OUT volume (System Menu items 5/6),
-#              Band Stack Mode (HAM Band/Full Band, System Menu item 8),
-#              and ON/OFF power-up beep (System Menu item 9)
-#
-# KNOWN LIMITATION: Call Sign entry (System Menu item, shown briefly on
-# boot) is a free-text field on the radio. The current config_N schema
-# only supports slide/list/check/radio widget types -- there is no text
-# entry type -- so Call Sign cannot be exposed via a config window
-# without extending that schema in cat_gui.py. Not mapped here.
-#
-# Some menu option lists (esp. mic F1/F2 assignable functions, and exact
-# CW QSK delay / dot:dash ratio ranges) come from third-party G90 cheat
-# sheets rather than a single authoritative manual table -- double check
-# against your firmware's System Menu and adjust the "values"/"options"/
-# "range" entries below if your unit differs.
+# File header note: Call Sign (the free-text boot-screen identifier the G90
+# lets an operator store in its System Menu) is intentionally NOT exposed
+# anywhere below. The rf_usr_btns config popup only supports four widget
+# types -- slide, list, check, radio (see the [rf_usr_btns] comment block) --
+# none of which is a free-text field, so this GUI has no way to edit or
+# display it without a code change. If a future GUI version adds a text-
+# input widget type to rf_usr_btns config popups, Call Sign should be added
+# as that new type under the SYSTEM button (label_11/config_11).
 
 [user_buttons]
 # label: max 7 characters
@@ -101,12 +33,12 @@ list_3 = ""
 label_4 = "VOX"
 type_4 = "push"
 list_4 = ""
-label_5 = "SPLIT"
-type_5 = "push"
+label_5 = "DISP"
+type_5 = "normal"
 list_5 = ""
-label_6 = "LOCK"
-type_6 = "push"
-list_6 = ""
+label_6 = "INPUT"
+type_6 = "list"
+list_6 = "Mic, Line"
 label_7 = "ATU"
 type_7 = "normal"
 list_7 = ""
@@ -125,12 +57,12 @@ list_11 = ""
 label_12 = "SCAN"
 type_12 = "normal"
 list_12 = ""
-label_13 = "DISP"
-type_13 = "normal"
+label_13 = ""
+type_13 = ""
 list_13 = ""
-label_14 = "INPUT"
-type_14 = "list"
-list_14 = "Mic, Line"
+label_14 = ""
+type_14 = ""
+list_14 = ""
 
 [user_mods]
 # label: max 4 characters; user-defined modulation button labels shown in the
@@ -141,11 +73,14 @@ list_14 = "Mic, Line"
 #       an upper read-only area and a bottom 3-line editable input box that
 #       sends text to the server on Enter, like an RTTY chat).
 #
-# KNOWN LIMITATION: all 10 slots below are already assigned. The G90's
-# native mode cycle also includes CWR (CW reverse) and two data modes,
-# LSB-Data (L-D) and USB-Data (U-D), added in firmware 1.79b02 -- none of
-# these three have a button here. See REVISION 3 note at top of file for
-# details; freeing FT2 or J2CL is the likely path if you want them added.
+# The G90's native mode cycle is: CW, CWR, AM, NFM, LSB, L-D, USB, U-D
+# (8 modes total). CWR (CW reverse sideband) and the two data modes,
+# LSB-Data (L-D) and USB-Data (U-D) -- added in firmware 1.79b02 -- are
+# audio-routing variants of CW/LSB/USB with no on-radio text decode, so
+# they use type "normal" like their parent mode. Slot 9 is used for the
+# G90's CW message-memory feature (System function: 4 preset telegraphy
+# texts stored for automatic calling in CW mode -- see label_9 below).
+# Slot 10 remains free (no further distinct native mode/feature to map).
 label_1 = "AM"
 type_1 = "normal"
 label_2 = "FM"
@@ -156,14 +91,18 @@ label_4 = "USB"
 type_4 = "normal"
 label_5 = "CW"
 type_5 = "normal"
-label_6 = ""
-type_6 = ""
-label_7 = ""
-type_7 = ""
-label_8 = ""
-type_8 = ""
-label_9 = ""
-type_9 = ""
+label_6 = "CWR"
+type_6 = "normal"
+label_7 = "L-D"
+type_7 = "normal"
+label_8 = "U-D"
+type_8 = "normal"
+# CW message memory: same CW demodulator/filter as label_5 ("CW"), but
+# opens the read/write text-chat panel (type "text_input") so the operator
+# can compose and store the radio's 4 preset CW call texts and trigger
+# automatic playback, mirroring the G90's MW/MC-button CW-message feature.
+label_9 = "CWM"
+type_9 = "text_input"
 label_10 = ""
 type_10 = ""
 
@@ -197,15 +136,24 @@ label_3 = "SWRTHR"
 mode_3 = "normal"
 config_3 = '{"SWR Threshold": {"type": "slide", "range": [1.8, 3.6]}, "SWR Scan Step (kHz)": {"type": "slide", "range": [1, 5]}}'
 
-# AGC mode: Auto / Fast / Slow / Off
+# AGC mode: Auto / Fast / Slow / Off, plus Squelch Level. Squelch is set
+# via the same multi-function-knob menu system as AGC on the real radio
+# (MFK short press -> SQL item), so it's grouped here rather than given
+# its own slot -- see REVISION 4 note at top of file.
 label_4 = "AGC"
 mode_4 = "normal"
-config_4 = '{"AGC Mode": {"type": "list", "values": [{"key": "Auto", "val": "auto"}, {"key": "Fast", "val": "fast"}, {"key": "Slow", "val": "slow"}, {"key": "Off", "val": "off"}]}}'
+config_4 = '{"AGC Mode": {"type": "list", "values": [{"key": "Auto", "val": "auto"}, {"key": "Fast", "val": "fast"}, {"key": "Slow", "val": "slow"}, {"key": "Off", "val": "off"}]}, "Squelch Level": {"type": "slide", "range": [0, 9]}}'
 
-# Noise Blanker: enable + level
+# Noise Blanker: enable + level, plus the DSP receive filter (center
+# frequency + bandwidth of the variable digital filter). Grouped here
+# because the front panel's FUNC+NB combo directly adjusts the filter's
+# high edge -- the physical NB button is already part of how Filter is
+# set on the real radio (FUNC+CMP adjusts the low edge). Ranges are
+# generous since the usable window shifts with mode/bandwidth -- the
+# radio clamps internally. See REVISION 4 note at top of file.
 label_5 = "NB"
 mode_5 = "normal"
-config_5 = '{"Noise Blanker": {"type": "check"}, "NB Level": {"type": "slide", "range": [0, 10]}}'
+config_5 = '{"Noise Blanker": {"type": "check"}, "NB Level": {"type": "slide", "range": [0, 10]}, "Filter Center": {"type": "slide", "range": [100, 3000]}, "Filter Width": {"type": "slide", "range": [50, 3000]}}'
 
 # Speech Compressor: enable + level
 label_6 = "COMP"
@@ -227,10 +175,12 @@ config_8 = '{"Setting": {"type": "radio", "options": ["Normal", "Preamp", "Atten
 # settings: sidetone pitch, sidetone VOLUME (0-15, distinct from pitch --
 # front panel: KEY then POW, set with the Volume control), QSK on/off +
 # delay, dot:dash ratio, and the CW auto-decoder toggle (long-press KEY
-# on the radio).
+# on the radio). CW Trainer mirrors the KEY-button practice mode: with it
+# enabled the radio still keys and produces the sidetone locally but never
+# transmits RF, for silent off-air code practice.
 label_9 = "CWKEY"
 mode_9 = "normal"
-config_9 = '{"Speed (WPM)": {"type": "slide", "range": [5, 40]}, "Keyer Mode": {"type": "radio", "options": ["Straight", "Iambic A", "Iambic B"]}, "CW Pitch": {"type": "slide", "range": [300, 1000]}, "CW Volume": {"type": "slide", "range": [0, 15]}, "QSK": {"type": "check"}, "QSK Delay": {"type": "slide", "range": [0, 10]}, "Dot:Dash Ratio": {"type": "slide", "range": [2.5, 3.5]}, "CW Decoder": {"type": "check"}}'
+config_9 = '{"Speed (WPM)": {"type": "slide", "range": [5, 40]}, "Keyer Mode": {"type": "radio", "options": ["Straight", "Iambic A", "Iambic B"]}, "CW Pitch": {"type": "slide", "range": [300, 1000]}, "CW Volume": {"type": "slide", "range": [0, 15]}, "QSK": {"type": "check"}, "QSK Delay": {"type": "slide", "range": [0, 10]}, "Dot:Dash Ratio": {"type": "slide", "range": [2.5, 3.5]}, "CW Decoder": {"type": "check"}, "CW Trainer": {"type": "check"}}'
 
 # Hand mic programmable button assignments (System Menu items 6-8 on the
 # G90: Handle Up/Down, Handle F1, Handle F2)
@@ -238,46 +188,27 @@ label_10 = "MICFUNC"
 mode_10 = "normal"
 config_10 = '{"Up/Down": {"type": "list", "values": [{"key": "Freq CH +/-", "val": "freq"}, {"key": "Band +/-", "val": "band"}, {"key": "Volume +/-", "val": "volume"}]}, "F1 Function": {"type": "list", "values": [{"key": "PRE/ATT", "val": "preatt"}, {"key": "Split", "val": "split"}, {"key": "NB", "val": "nb"}, {"key": "Compressor", "val": "comp"}]}, "F2 Function": {"type": "list", "values": [{"key": "PRE/ATT", "val": "preatt"}, {"key": "Split", "val": "split"}, {"key": "NB", "val": "nb"}, {"key": "Compressor", "val": "comp"}]}}'
 
-# Display brightness (5 levels) + reference clock fine tuning, plus the
-# remaining System Menu items: ACC port AUX IN/OUT volume (items 5/6),
-# Band Stack Mode (item 8: HAM Band restricts stacking to ham allocations,
-# Full Band allows the whole receive range), and power-up ON/OFF beep
-# (item 9). Call Sign (free-text) is NOT included -- see file header note.
+# Display brightness (5 levels) + reference clock fine tuning, the
+# remaining System Menu items (ACC port AUX IN/OUT volume -- items 5/6,
+# Band Stack Mode -- item 8: HAM Band restricts stacking to ham
+# allocations, Full Band allows the whole receive range, and power-up
+# ON/OFF beep -- item 9), plus two settings with no dedicated physical
+# button of their own, grouped here as general display/operating
+# refinements (see REVISION 4 note at top of file):
+#   - FFT Averaging (FUNC+LOCK, 1-10, smooths the waterfall/spectrum) and
+#     FFT Scale, the spectrum/waterfall reference-level setting living in
+#     the same FUNC+LOCK submenu (first LOCK press = Scale, second press
+#     = Averaging). Auto is the default; 2-10 raise the noise floor
+#     reference (10 = lowest sensitivity). NOTE: reported fixed at "Auto"
+#     (not adjustable) on firmware >=1.79b03 -- included for older/
+#     mainstream firmware where it remains user-settable.
+#   - RIT (Receiver Incremental Tuning): enable + offset, set via a
+#     long-press of the main tuning knob on the radio. Offset range is
+#     an estimate -- adjust if your firmware reports a different limit.
+# Call Sign (free-text) is NOT included -- see file header note.
 label_11 = "SYSTEM"
 mode_11 = "normal"
-config_11 = '{"Display Brightness": {"type": "slide", "range": [1, 5]}, "RCLK Tune": {"type": "slide", "range": [-100, 100]}, "AUX IN Volume": {"type": "slide", "range": [0, 100]}, "AUX OUT Volume": {"type": "slide", "range": [0, 100]}, "Band Stack Mode": {"type": "list", "values": [{"key": "HAM Band", "val": "ham"}, {"key": "Full Band", "val": "full"}]}, "ON/OFF Beep": {"type": "check"}}'
-
-# DSP receive filter: center frequency and bandwidth of the variable
-# digital filter (front panel: FUNC+CMP adjusts the low edge, FUNC+NB
-# adjusts the high edge; equivalently a short press of the multi-function
-# knob steps through Center then Width). Ranges are generous since the
-# usable window shifts with mode/bandwidth -- the radio clamps internally.
-label_12 = "FILTER"
-mode_12 = "normal"
-config_12 = '{"Filter Center": {"type": "slide", "range": [100, 3000]}, "Filter Width": {"type": "slide", "range": [50, 3000]}}'
-
-# Squelch level (multi-function knob long-press menu -> Squelch Level)
-label_13 = "SQL"
-mode_13 = "normal"
-config_13 = '{"Squelch Level": {"type": "slide", "range": [0, 9]}}'
-
-# FFT averaging count (FUNC then LOCK), smooths the waterfall/spectrum,
-# plus FFT Scale, the spectrum/waterfall reference-level setting that
-# lives in the same FUNC+LOCK submenu (first LOCK press = Scale, second
-# press = Averaging). Auto is the default; 2-10 raise the noise floor
-# reference (10 = lowest sensitivity). NOTE: reported fixed at "Auto"
-# (not adjustable) on firmware >=1.79b03 -- included for older/mainstream
-# firmware where it remains user-settable.
-label_14 = "FFTAVG"
-mode_14 = "normal"
-config_14 = '{"FFT Averaging": {"type": "slide", "range": [1, 10]}, "FFT Scale": {"type": "list", "values": [{"key": "Auto", "val": "auto"}, {"key": "2", "val": "2"}, {"key": "3", "val": "3"}, {"key": "4", "val": "4"}, {"key": "5", "val": "5"}, {"key": "6", "val": "6"}, {"key": "7", "val": "7"}, {"key": "8", "val": "8"}, {"key": "9", "val": "9"}, {"key": "10", "val": "10"}]}}'
-
-# Receiver Incremental Tuning: enable + offset (long-press of the main
-# tuning knob on the radio). Offset range is an estimate -- adjust if
-# your firmware reports a different limit.
-label_15 = "RIT"
-mode_15 = "normal"
-config_15 = '{"RIT": {"type": "check"}, "RIT Offset (Hz)": {"type": "slide", "range": [-3000, 3000]}}'
+config_11 = '{"Display Brightness": {"type": "slide", "range": [1, 5]}, "RCLK Tune": {"type": "slide", "range": [-100, 100]}, "AUX IN Volume": {"type": "slide", "range": [0, 100]}, "AUX OUT Volume": {"type": "slide", "range": [0, 100]}, "Band Stack Mode": {"type": "list", "values": [{"key": "HAM Band", "val": "ham"}, {"key": "Full Band", "val": "full"}]}, "ON/OFF Beep": {"type": "check"}, "FFT Averaging": {"type": "slide", "range": [1, 10]}, "FFT Scale": {"type": "list", "values": [{"key": "Auto", "val": "auto"}, {"key": "2", "val": "2"}, {"key": "3", "val": "3"}, {"key": "4", "val": "4"}, {"key": "5", "val": "5"}, {"key": "6", "val": "6"}, {"key": "7", "val": "7"}, {"key": "8", "val": "8"}, {"key": "9", "val": "9"}, {"key": "10", "val": "10"}]}, "RIT": {"type": "check"}, "RIT Offset (Hz)": {"type": "slide", "range": [-3000, 3000]}}'
 
 [sdr]
 # sample_rate: SDR hardware sample rate (Hz) applied when this device
@@ -327,11 +258,20 @@ allowed_bands_9 = ""
 allowed_bands_10 = ""
 
 [bandwidth]
+# CWR, L-D, and U-D share the same DSP filter/demodulator as their parent
+# mode (CW, LSB, USB respectively) -- only the sideband/BFO offset used for
+# TX differs -- so each mirrors its parent's filter width options.
 AM = "3000,6000,9000,10000"
 FM = "12500,25000"
 LSB = "2700,3600"
 USB = "2700,3600"
 CW = "250,500,1000,2000"
+CWR = "250,500,1000,2000"
+# CWM (CW message-memory slot, label_9 above) shares CW's demodulator and
+# filter, so it mirrors CW's filter width options.
+CWM = "250,500,1000,2000"
+L-D = "2700,3600"
+U-D = "2700,3600"
 APRS = "12500"
 RTTY = "12500"
 FT8 = "12500"

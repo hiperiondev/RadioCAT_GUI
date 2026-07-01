@@ -33,11 +33,6 @@ FM   = "FM"
 LSB  = "LSB"
 USB  = "USB"
 CW   = "CW"
-APRS = "APRS"
-RTTY = "RTTY"
-FT8  = "FT8"
-FT2  = "FT2"
-J2CL = "J2CL"
 
 [rf_usr_btns]
 # Botones RF de usuario (izquierda del selector de banda, máx. 7 caracteres)
